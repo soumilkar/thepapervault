@@ -41,6 +41,17 @@ function AuthedLayout() {
         </div>
       </header>
       <main className="mx-auto max-w-6xl px-6 py-10"><Outlet /></main>
+      <footer className="mt-16 border-t border-border/60 bg-card/40">
+        <div className="mx-auto max-w-6xl px-6 py-8 text-center">
+          <p className="font-hand text-xl text-sepia">have an idea to make Inkwell better?</p>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Send your thoughts, suggestions, or feature ideas to{" "}
+            <a href="mailto:soumil.karma@gmail.com" className="text-primary underline-offset-2 hover:underline">
+              soumil.karma@gmail.com
+            </a>
+          </p>
+        </div>
+      </footer>
     </div>
   );
 }

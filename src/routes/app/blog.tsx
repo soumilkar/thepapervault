@@ -90,26 +90,39 @@ function BlogPage() {
 
       <div className="space-y-4">
         {posts.data?.length === 0 && <p className="text-muted-foreground">No blog posts yet.</p>}
-        {posts.data?.map((p) => (
-          <article key={p.id} className="paper-card p-6">
-            <header className="flex items-baseline justify-between">
-              <h3 className="font-serif text-2xl text-primary">{p.title}</h3>
-              <div className="flex items-center gap-3">
-                <span className="font-hand text-sepia">{new Date(p.created_at).toLocaleDateString()}</span>
-                <button onClick={() => remove.mutate(p.id)} className="text-muted-foreground hover:text-destructive">
-                  <Trash2 className="size-4" />
-                </button>
-              </div>
-            </header>
-            {p.tags && p.tags.length > 0 && (
-              <div className="mt-2 flex flex-wrap gap-2">
-                {p.tags.map((t) => <span key={t} className="rounded-full bg-secondary px-2 py-0.5 text-xs text-secondary-foreground">#{t}</span>)}
-              </div>
-            )}
-            <p className="mt-3 whitespace-pre-wrap leading-relaxed">{p.content}</p>
-          </article>
-        ))}
+        {posts.data?.map((p) => <BlogCard key={p.id} post={p} onDelete={() => remove.mutate(p.id)} />)}
       </div>
     </div>
+  );
+}
+
+function BlogCard({ post: p, onDelete }: { post: any; onDelete: () => void }) {
+  const [open, setOpen] = useState(false);
+  const preview = p.content.length > 220 ? p.content.slice(0, 220).trimEnd() + "…" : p.content;
+  return (
+    <article className="paper-card p-6">
+      <header className="flex items-baseline justify-between">
+        <button onClick={() => setOpen((o) => !o)} className="text-left font-serif text-2xl text-primary hover:underline underline-offset-4">
+          {p.title}
+        </button>
+        <div className="flex items-center gap-3">
+          <span className="font-hand text-sepia">{new Date(p.created_at).toLocaleDateString()}</span>
+          <button onClick={onDelete} className="text-muted-foreground hover:text-destructive">
+            <Trash2 className="size-4" />
+          </button>
+        </div>
+      </header>
+      {p.tags && p.tags.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-2">
+          {p.tags.map((t: string) => <span key={t} className="rounded-full bg-secondary px-2 py-0.5 text-xs text-secondary-foreground">#{t}</span>)}
+        </div>
+      )}
+      <p className="mt-3 whitespace-pre-wrap leading-relaxed">{open ? p.content : preview}</p>
+      {p.content.length > 220 && (
+        <button onClick={() => setOpen((o) => !o)} className="mt-2 text-sm text-accent hover:text-primary">
+          {open ? "Show less" : "Read more"}
+        </button>
+      )}
+    </article>
   );
 }

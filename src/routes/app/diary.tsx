@@ -174,31 +174,52 @@ function DiaryPage() {
       <div className="space-y-4">
         {entries.data?.length === 0 && <p className="text-muted-foreground">Your diary is a blank page. Start above.</p>}
         {entries.data?.map((e) => (
-          <article key={e.id} className="paper-card p-6">
-            <header className="flex items-baseline justify-between">
-              <h3 className="font-serif text-xl text-primary">{e.title || "Untitled"}</h3>
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={() => setVis.mutate({ id: e.id, v: e.visibility === "public_anon" ? "private" : "public_anon" })}
-                  title={e.visibility === "public_anon" ? "Shared anonymously — click to make private" : "Private — click to share anonymously"}
-                  className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-xs ${e.visibility === "public_anon" ? "bg-accent/15 text-accent" : "bg-secondary text-muted-foreground"}`}
-                >
-                  {e.visibility === "public_anon" ? <><Eye className="size-3" /> Public</> : <><EyeOff className="size-3" /> Private</>}
-                </button>
-                <span className="font-hand text-sepia">{new Date(e.entry_date).toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" })}</span>
-                <button onClick={() => remove.mutate(e.id)} className="text-muted-foreground hover:text-destructive">
-                  <Trash2 className="size-4" />
-                </button>
-              </div>
-            </header>
-            {e.mood && <p className="mt-1 text-sm text-accent">Feeling: {e.mood}</p>}
-            <p className="mt-3 whitespace-pre-wrap leading-relaxed">{e.content}</p>
-            {e.image_url && (
-              <img src={e.image_url} alt="" className="mt-4 max-h-96 rounded-md border border-border" loading="lazy" />
-            )}
-          </article>
+          <DiaryCard
+            key={e.id}
+            entry={e}
+            onDelete={() => remove.mutate(e.id)}
+            onToggleVis={() => setVis.mutate({ id: e.id, v: e.visibility === "public_anon" ? "private" : "public_anon" })}
+          />
         ))}
       </div>
     </div>
+  );
+}
+
+function DiaryCard({ entry: e, onDelete, onToggleVis }: { entry: any; onDelete: () => void; onToggleVis: () => void }) {
+  const [open, setOpen] = useState(false);
+  const long = e.content.length > 220 || !!e.image_url;
+  const preview = e.content.length > 220 ? e.content.slice(0, 220).trimEnd() + "…" : e.content;
+  return (
+    <article className="paper-card p-6">
+      <header className="flex items-baseline justify-between">
+        <button onClick={() => setOpen((o) => !o)} className="text-left font-serif text-xl text-primary hover:underline underline-offset-4">
+          {e.title || "Untitled"}
+        </button>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={onToggleVis}
+            title={e.visibility === "public_anon" ? "Shared anonymously — click to make private" : "Private — click to share anonymously"}
+            className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-xs ${e.visibility === "public_anon" ? "bg-accent/15 text-accent" : "bg-secondary text-muted-foreground"}`}
+          >
+            {e.visibility === "public_anon" ? <><Eye className="size-3" /> Public</> : <><EyeOff className="size-3" /> Private</>}
+          </button>
+          <span className="font-hand text-sepia">{new Date(e.entry_date).toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" })}</span>
+          <button onClick={onDelete} className="text-muted-foreground hover:text-destructive">
+            <Trash2 className="size-4" />
+          </button>
+        </div>
+      </header>
+      {e.mood && <p className="mt-1 text-sm text-accent">Feeling: {e.mood}</p>}
+      <p className="mt-3 whitespace-pre-wrap leading-relaxed">{open ? e.content : preview}</p>
+      {open && e.image_url && (
+        <img src={e.image_url} alt="" className="mt-4 max-h-96 rounded-md border border-border" loading="lazy" />
+      )}
+      {long && (
+        <button onClick={() => setOpen((o) => !o)} className="mt-2 text-sm text-accent hover:text-primary">
+          {open ? "Show less" : "Read more"}
+        </button>
+      )}
+    </article>
   );
 }
