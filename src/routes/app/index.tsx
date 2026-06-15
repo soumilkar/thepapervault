@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { BookOpen, Image as ImageIcon, PenLine, Sparkles } from "lucide-react";
 
-export const Route = createFileRoute("/_authenticated/")({
+export const Route = createFileRoute("/app/")({
   component: Dashboard,
 });
 

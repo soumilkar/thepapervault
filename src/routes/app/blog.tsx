@@ -5,7 +5,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { Trash2 } from "lucide-react";
 
-export const Route = createFileRoute("/_authenticated/blog")({
+export const Route = createFileRoute("/app/blog")({
   component: BlogPage,
 });
 
