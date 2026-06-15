@@ -15,6 +15,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as AppIndexRouteImport } from './routes/app/index'
 import { Route as AppGalleryRouteImport } from './routes/app/gallery'
 import { Route as AppDiaryRouteImport } from './routes/app/diary'
+import { Route as AppChatRouteImport } from './routes/app/chat'
 import { Route as AppBlogRouteImport } from './routes/app/blog'
 
 const AuthRoute = AuthRouteImport.update({
@@ -47,6 +48,11 @@ const AppDiaryRoute = AppDiaryRouteImport.update({
   path: '/diary',
   getParentRoute: () => AppRouteRoute,
 } as any)
+const AppChatRoute = AppChatRouteImport.update({
+  id: '/chat',
+  path: '/chat',
+  getParentRoute: () => AppRouteRoute,
+} as any)
 const AppBlogRoute = AppBlogRouteImport.update({
   id: '/blog',
   path: '/blog',
@@ -58,6 +64,7 @@ export interface FileRoutesByFullPath {
   '/app': typeof AppRouteRouteWithChildren
   '/auth': typeof AuthRoute
   '/app/blog': typeof AppBlogRoute
+  '/app/chat': typeof AppChatRoute
   '/app/diary': typeof AppDiaryRoute
   '/app/gallery': typeof AppGalleryRoute
   '/app/': typeof AppIndexRoute
@@ -66,6 +73,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/auth': typeof AuthRoute
   '/app/blog': typeof AppBlogRoute
+  '/app/chat': typeof AppChatRoute
   '/app/diary': typeof AppDiaryRoute
   '/app/gallery': typeof AppGalleryRoute
   '/app': typeof AppIndexRoute
@@ -76,6 +84,7 @@ export interface FileRoutesById {
   '/app': typeof AppRouteRouteWithChildren
   '/auth': typeof AuthRoute
   '/app/blog': typeof AppBlogRoute
+  '/app/chat': typeof AppChatRoute
   '/app/diary': typeof AppDiaryRoute
   '/app/gallery': typeof AppGalleryRoute
   '/app/': typeof AppIndexRoute
@@ -87,17 +96,26 @@ export interface FileRouteTypes {
     | '/app'
     | '/auth'
     | '/app/blog'
+    | '/app/chat'
     | '/app/diary'
     | '/app/gallery'
     | '/app/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/auth' | '/app/blog' | '/app/diary' | '/app/gallery' | '/app'
+  to:
+    | '/'
+    | '/auth'
+    | '/app/blog'
+    | '/app/chat'
+    | '/app/diary'
+    | '/app/gallery'
+    | '/app'
   id:
     | '__root__'
     | '/'
     | '/app'
     | '/auth'
     | '/app/blog'
+    | '/app/chat'
     | '/app/diary'
     | '/app/gallery'
     | '/app/'
@@ -153,6 +171,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppDiaryRouteImport
       parentRoute: typeof AppRouteRoute
     }
+    '/app/chat': {
+      id: '/app/chat'
+      path: '/chat'
+      fullPath: '/app/chat'
+      preLoaderRoute: typeof AppChatRouteImport
+      parentRoute: typeof AppRouteRoute
+    }
     '/app/blog': {
       id: '/app/blog'
       path: '/blog'
@@ -165,6 +190,7 @@ declare module '@tanstack/react-router' {
 
 interface AppRouteRouteChildren {
   AppBlogRoute: typeof AppBlogRoute
+  AppChatRoute: typeof AppChatRoute
   AppDiaryRoute: typeof AppDiaryRoute
   AppGalleryRoute: typeof AppGalleryRoute
   AppIndexRoute: typeof AppIndexRoute
@@ -172,6 +198,7 @@ interface AppRouteRouteChildren {
 
 const AppRouteRouteChildren: AppRouteRouteChildren = {
   AppBlogRoute: AppBlogRoute,
+  AppChatRoute: AppChatRoute,
   AppDiaryRoute: AppDiaryRoute,
   AppGalleryRoute: AppGalleryRoute,
   AppIndexRoute: AppIndexRoute,
