@@ -3,12 +3,13 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
-import { ImagePlus, Trash2, X } from "lucide-react";
+import { Eye, EyeOff, ImagePlus, Trash2, X } from "lucide-react";
 
 export const Route = createFileRoute("/app/diary")({
   component: DiaryPage,
 });
 
+type Visibility = "private" | "public_anon";
 type DiaryRow = {
   id: string;
   title: string | null;
@@ -16,6 +17,7 @@ type DiaryRow = {
   mood: string | null;
   entry_date: string;
   image_path: string | null;
+  visibility: Visibility;
 };
 
 function DiaryPage() {
@@ -26,6 +28,7 @@ function DiaryPage() {
   const [mood, setMood] = useState("");
   const [photo, setPhoto] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+  const [visibility, setVisibility] = useState<Visibility>("private");
 
   useEffect(() => {
     if (!photo) { setPhotoPreview(null); return; }
@@ -66,12 +69,12 @@ function DiaryPage() {
         if (gErr) throw gErr;
       }
       const { error } = await supabase.from("diary_entries").insert({
-        user_id: user.id, title: title || null, content, mood: mood || null, image_path: imagePath,
+        user_id: user.id, title: title || null, content, mood: mood || null, image_path: imagePath, visibility,
       });
       if (error) throw error;
     },
     onSuccess: () => {
-      setTitle(""); setContent(""); setMood(""); setPhoto(null);
+      setTitle(""); setContent(""); setMood(""); setPhoto(null); setVisibility("private");
       toast.success("Entry saved");
       qc.invalidateQueries({ queryKey: ["diary"] });
       qc.invalidateQueries({ queryKey: ["gallery"] });
@@ -87,6 +90,19 @@ function DiaryPage() {
       if (error) throw error;
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["diary"] }),
+  });
+
+  const setVis = useMutation({
+    mutationFn: async ({ id, v }: { id: string; v: Visibility }) => {
+      const { error } = await supabase.from("diary_entries").update({ visibility: v }).eq("id", id);
+      if (error) throw error;
+    },
+    onSuccess: (_d, vars) => {
+      toast.success(vars.v === "public_anon" ? "Shared anonymously" : "Made private");
+      qc.invalidateQueries({ queryKey: ["diary"] });
+      qc.invalidateQueries({ queryKey: ["foryou-diaries"] });
+    },
+    onError: (e: Error) => toast.error(e.message),
   });
 
   return (
@@ -127,13 +143,25 @@ function DiaryPage() {
           </div>
         )}
 
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <label className="flex cursor-pointer items-center gap-2 text-sm text-accent hover:text-primary">
             <ImagePlus className="size-4" />
             <span>{photo ? "Change photo" : "Add a photo (also saved to gallery)"}</span>
             <input type="file" accept="image/*" className="hidden"
               onChange={(e) => { const f = e.target.files?.[0]; if (f) setPhoto(f); e.currentTarget.value = ""; }} />
           </label>
+
+          <div className="flex items-center gap-1 rounded-md border border-border bg-secondary/40 p-1 text-xs">
+            <button type="button" onClick={() => setVisibility("private")}
+              className={`flex items-center gap-1 rounded px-2 py-1 ${visibility === "private" ? "bg-background text-primary shadow-sm" : "text-muted-foreground"}`}>
+              <EyeOff className="size-3.5" /> Private
+            </button>
+            <button type="button" onClick={() => setVisibility("public_anon")}
+              className={`flex items-center gap-1 rounded px-2 py-1 ${visibility === "public_anon" ? "bg-background text-primary shadow-sm" : "text-muted-foreground"}`}>
+              <Eye className="size-3.5" /> Public (anonymous)
+            </button>
+          </div>
+
           <button
             type="submit" disabled={!content.trim() || create.isPending}
             className="rounded-md bg-primary px-5 py-2 text-sm text-primary-foreground disabled:opacity-50"
@@ -150,6 +178,13 @@ function DiaryPage() {
             <header className="flex items-baseline justify-between">
               <h3 className="font-serif text-xl text-primary">{e.title || "Untitled"}</h3>
               <div className="flex items-center gap-3">
+                <button
+                  onClick={() => setVis.mutate({ id: e.id, v: e.visibility === "public_anon" ? "private" : "public_anon" })}
+                  title={e.visibility === "public_anon" ? "Shared anonymously — click to make private" : "Private — click to share anonymously"}
+                  className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-xs ${e.visibility === "public_anon" ? "bg-accent/15 text-accent" : "bg-secondary text-muted-foreground"}`}
+                >
+                  {e.visibility === "public_anon" ? <><Eye className="size-3" /> Public</> : <><EyeOff className="size-3" /> Private</>}
+                </button>
                 <span className="font-hand text-sepia">{new Date(e.entry_date).toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" })}</span>
                 <button onClick={() => remove.mutate(e.id)} className="text-muted-foreground hover:text-destructive">
                   <Trash2 className="size-4" />
