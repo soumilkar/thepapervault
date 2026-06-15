@@ -1,13 +1,22 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
-import { Trash2 } from "lucide-react";
+import { ImagePlus, Trash2, X } from "lucide-react";
 
 export const Route = createFileRoute("/app/diary")({
   component: DiaryPage,
 });
+
+type DiaryRow = {
+  id: string;
+  title: string | null;
+  content: string;
+  mood: string | null;
+  entry_date: string;
+  image_path: string | null;
+};
 
 function DiaryPage() {
   const { user } = Route.useRouteContext();
@@ -15,29 +24,57 @@ function DiaryPage() {
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
   const [mood, setMood] = useState("");
+  const [photo, setPhoto] = useState<File | null>(null);
+  const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!photo) { setPhotoPreview(null); return; }
+    const url = URL.createObjectURL(photo);
+    setPhotoPreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [photo]);
 
   const entries = useQuery({
     queryKey: ["diary", user.id],
     queryFn: async () => {
       const { data, error } = await supabase
-        .from("diary_entries").select("*")
+        .from("diary_entries").select("*").eq("user_id", user.id)
         .order("entry_date", { ascending: false }).order("created_at", { ascending: false });
       if (error) throw error;
-      return data;
+      const rows = (data ?? []) as DiaryRow[];
+      const withUrls = await Promise.all(rows.map(async (e) => {
+        if (!e.image_path) return { ...e, image_url: null as string | null };
+        const { data: signed } = await supabase.storage.from("gallery").createSignedUrl(e.image_path, 60 * 60);
+        return { ...e, image_url: signed?.signedUrl ?? null };
+      }));
+      return withUrls;
     },
   });
 
   const create = useMutation({
     mutationFn: async () => {
+      let imagePath: string | null = null;
+      if (photo) {
+        const ext = photo.name.split(".").pop() || "jpg";
+        imagePath = `${user.id}/${crypto.randomUUID()}.${ext}`;
+        const { error: upErr } = await supabase.storage.from("gallery").upload(imagePath, photo);
+        if (upErr) throw upErr;
+        const { error: gErr } = await supabase.from("gallery_images").insert({
+          user_id: user.id, storage_path: imagePath,
+          caption: title || (content.slice(0, 60) || "from my diary"),
+        });
+        if (gErr) throw gErr;
+      }
       const { error } = await supabase.from("diary_entries").insert({
-        user_id: user.id, title: title || null, content, mood: mood || null,
+        user_id: user.id, title: title || null, content, mood: mood || null, image_path: imagePath,
       });
       if (error) throw error;
     },
     onSuccess: () => {
-      setTitle(""); setContent(""); setMood("");
+      setTitle(""); setContent(""); setMood(""); setPhoto(null);
       toast.success("Entry saved");
       qc.invalidateQueries({ queryKey: ["diary"] });
+      qc.invalidateQueries({ queryKey: ["gallery"] });
       qc.invalidateQueries({ queryKey: ["dashboard-counts"] });
       qc.invalidateQueries({ queryKey: ["recent-diary"] });
     },
@@ -79,7 +116,24 @@ function DiaryPage() {
           rows={6}
           className="w-full resize-none bg-transparent leading-relaxed outline-none placeholder:text-muted-foreground/60"
         />
-        <div className="flex justify-end">
+
+        {photoPreview && (
+          <div className="relative inline-block">
+            <img src={photoPreview} alt="preview" className="max-h-56 rounded-md border border-border" />
+            <button type="button" onClick={() => setPhoto(null)}
+              className="absolute -right-2 -top-2 rounded-full bg-background p-1 shadow">
+              <X className="size-4" />
+            </button>
+          </div>
+        )}
+
+        <div className="flex items-center justify-between">
+          <label className="flex cursor-pointer items-center gap-2 text-sm text-accent hover:text-primary">
+            <ImagePlus className="size-4" />
+            <span>{photo ? "Change photo" : "Add a photo (also saved to gallery)"}</span>
+            <input type="file" accept="image/*" className="hidden"
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) setPhoto(f); e.currentTarget.value = ""; }} />
+          </label>
           <button
             type="submit" disabled={!content.trim() || create.isPending}
             className="rounded-md bg-primary px-5 py-2 text-sm text-primary-foreground disabled:opacity-50"
@@ -104,6 +158,9 @@ function DiaryPage() {
             </header>
             {e.mood && <p className="mt-1 text-sm text-accent">Feeling: {e.mood}</p>}
             <p className="mt-3 whitespace-pre-wrap leading-relaxed">{e.content}</p>
+            {e.image_url && (
+              <img src={e.image_url} alt="" className="mt-4 max-h-96 rounded-md border border-border" loading="lazy" />
+            )}
           </article>
         ))}
       </div>

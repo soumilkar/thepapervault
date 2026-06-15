@@ -1,6 +1,6 @@
 import { createFileRoute, Outlet, redirect, Link, useRouter } from "@tanstack/react-router";
 import { supabase } from "@/integrations/supabase/client";
-import { BookOpen, Image as ImageIcon, PenLine, Sparkles, LogOut, Home } from "lucide-react";
+import { BookOpen, Image as ImageIcon, PenLine, Sparkles, LogOut, Home, Users } from "lucide-react";
 
 export const Route = createFileRoute("/app")({
   ssr: false,
@@ -32,6 +32,7 @@ function AuthedLayout() {
             <NavLink to="/app/diary" icon={<PenLine className="size-4" />} label="Diary" />
             <NavLink to="/app/blog" icon={<BookOpen className="size-4" />} label="Blog" />
             <NavLink to="/app/gallery" icon={<ImageIcon className="size-4" />} label="Gallery" />
+            <NavLink to="/app/foryou" icon={<Users className="size-4" />} label="For You" />
             <NavLink to="/app/chat" icon={<Sparkles className="size-4" />} label="Companion" />
             <button onClick={handleSignOut} className="ml-2 flex items-center gap-1.5 rounded-md px-3 py-2 text-muted-foreground hover:text-primary">
               <LogOut className="size-4" /> Sign out
