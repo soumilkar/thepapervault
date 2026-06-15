@@ -50,6 +50,7 @@ export type Database = {
           created_at: string
           entry_date: string
           id: string
+          image_path: string | null
           mood: string | null
           title: string | null
           updated_at: string
@@ -60,6 +61,7 @@ export type Database = {
           created_at?: string
           entry_date?: string
           id?: string
+          image_path?: string | null
           mood?: string | null
           title?: string | null
           updated_at?: string
@@ -70,6 +72,7 @@ export type Database = {
           created_at?: string
           entry_date?: string
           id?: string
+          image_path?: string | null
           mood?: string | null
           title?: string | null
           updated_at?: string
