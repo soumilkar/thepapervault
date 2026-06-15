@@ -51,8 +51,16 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "Inkwell — Your personal journal" },
+      { title: "The PaperVault — Your personal journal" },
       { name: "description", content: "A warm, private space for your diary, blog, gallery, and an AI companion that knows your story." },
+      { property: "og:title", content: "The PaperVault — Your personal journal" },
+      { name: "twitter:title", content: "The PaperVault — Your personal journal" },
+      { property: "og:description", content: "A warm, private space for your diary, blog, gallery, and an AI companion that knows your story." },
+      { name: "twitter:description", content: "A warm, private space for your diary, blog, gallery, and an AI companion that knows your story." },
+      { property: "og:image", content: "https://storage.googleapis.com/gpt-engineer-file-uploads/attachments/og-images/1430fae1-cc9e-4a3a-87be-a6694be59784" },
+      { name: "twitter:image", content: "https://storage.googleapis.com/gpt-engineer-file-uploads/attachments/og-images/1430fae1-cc9e-4a3a-87be-a6694be59784" },
+      { name: "twitter:card", content: "summary_large_image" },
+      { property: "og:type", content: "website" },
     ],
     links: [
       { rel: "stylesheet", href: appCss },
