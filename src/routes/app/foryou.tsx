@@ -119,20 +119,34 @@ function DiariesFeed({ selfId }: { selfId: string }) {
 
   return (
     <div className="space-y-4">
-      {q.data.map((e) => (
-        <article key={e.id} className="paper-card p-6">
-          <header className="flex items-baseline justify-between">
-            <h3 className="font-hand text-2xl text-sepia">notes from a stranger</h3>
-            <span className="font-hand text-sepia">{new Date(e.entry_date).toLocaleDateString(undefined, { month: "long", day: "numeric" })}</span>
-          </header>
-          {e.title && <p className="mt-2 font-serif text-xl text-primary">{e.title}</p>}
-          {e.mood && <p className="mt-1 text-sm text-accent">Feeling: {e.mood}</p>}
-          <p className="mt-3 whitespace-pre-wrap leading-relaxed">{e.content}</p>
-          {e.image_url && (
-            <img src={e.image_url} alt="" className="mt-4 max-h-96 rounded-md border border-border" loading="lazy" />
-          )}
-        </article>
-      ))}
+      {q.data.map((e) => <ForYouDiaryCard key={e.id} entry={e} />)}
     </div>
+  );
+}
+
+function ForYouDiaryCard({ entry: e }: { entry: any }) {
+  const [open, setOpen] = useState(false);
+  const long = e.content.length > 220 || !!e.image_url;
+  const preview = e.content.length > 220 ? e.content.slice(0, 220).trimEnd() + "…" : e.content;
+  return (
+    <article className="paper-card p-6">
+      <header className="flex items-baseline justify-between">
+        <button onClick={() => setOpen((o) => !o)} className="text-left font-hand text-2xl text-sepia hover:text-primary">
+          notes from a stranger
+        </button>
+        <span className="font-hand text-sepia">{new Date(e.entry_date).toLocaleDateString(undefined, { month: "long", day: "numeric" })}</span>
+      </header>
+      {e.title && <p className="mt-2 font-serif text-xl text-primary">{e.title}</p>}
+      {e.mood && <p className="mt-1 text-sm text-accent">Feeling: {e.mood}</p>}
+      <p className="mt-3 whitespace-pre-wrap leading-relaxed">{open ? e.content : preview}</p>
+      {open && e.image_url && (
+        <img src={e.image_url} alt="" className="mt-4 max-h-96 rounded-md border border-border" loading="lazy" />
+      )}
+      {long && (
+        <button onClick={() => setOpen((o) => !o)} className="mt-2 text-sm text-accent hover:text-primary">
+          {open ? "Show less" : "Read more"}
+        </button>
+      )}
+    </article>
   );
 }
