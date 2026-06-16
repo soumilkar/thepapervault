@@ -10,7 +10,7 @@ export const Route = createFileRoute("/")({
   },
   head: () => ({
     meta: [
-      { title: "Inkwell — Your warm personal journal" },
+      { title: "The PaperVault — Your warm personal journal" },
       { name: "description", content: "A private home for diaries, blogs, a personal gallery, and an AI companion that knows your story." },
     ],
   }),
