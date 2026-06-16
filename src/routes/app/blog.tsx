@@ -90,7 +90,7 @@ function BlogPage() {
 
       <div className="space-y-4">
         {posts.data?.length === 0 && <p className="text-muted-foreground">No blog posts yet.</p>}
-        {posts.data?.map((p) => <BlogCard key={p.id} post={p} onDelete={() => remove.mutate(p.id)} />)}
+        {posts.data?.map((p) => <BlogCard key={p.id} post={p} isOwner={p.user_id === user.id} onDelete={() => remove.mutate(p.id)} />)}
       </div>
     </div>
   );
