@@ -90,13 +90,13 @@ function BlogPage() {
 
       <div className="space-y-4">
         {posts.data?.length === 0 && <p className="text-muted-foreground">No blog posts yet.</p>}
-        {posts.data?.map((p) => <BlogCard key={p.id} post={p} onDelete={() => remove.mutate(p.id)} />)}
+        {posts.data?.map((p) => <BlogCard key={p.id} post={p} isOwner={p.user_id === user.id} onDelete={() => remove.mutate(p.id)} />)}
       </div>
     </div>
   );
 }
 
-function BlogCard({ post: p, onDelete }: { post: any; onDelete: () => void }) {
+function BlogCard({ post: p, isOwner, onDelete }: { post: any; isOwner: boolean; onDelete: () => void }) {
   const [open, setOpen] = useState(false);
   const preview = p.content.length > 220 ? p.content.slice(0, 220).trimEnd() + "…" : p.content;
   return (
@@ -107,9 +107,11 @@ function BlogCard({ post: p, onDelete }: { post: any; onDelete: () => void }) {
         </button>
         <div className="flex items-center gap-3">
           <span className="font-hand text-sepia">{new Date(p.created_at).toLocaleDateString()}</span>
-          <button onClick={onDelete} className="text-muted-foreground hover:text-destructive">
-            <Trash2 className="size-4" />
-          </button>
+          {isOwner && (
+            <button onClick={onDelete} className="text-muted-foreground hover:text-destructive">
+              <Trash2 className="size-4" />
+            </button>
+          )}
         </div>
       </header>
       {p.tags && p.tags.length > 0 && (

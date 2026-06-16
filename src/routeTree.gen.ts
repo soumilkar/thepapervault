@@ -14,7 +14,6 @@ import { Route as AppRouteRouteImport } from './routes/app/route'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AppIndexRouteImport } from './routes/app/index'
 import { Route as AppGalleryRouteImport } from './routes/app/gallery'
-import { Route as AppForyouRouteImport } from './routes/app/foryou'
 import { Route as AppDiaryRouteImport } from './routes/app/diary'
 import { Route as AppChatRouteImport } from './routes/app/chat'
 import { Route as AppBlogRouteImport } from './routes/app/blog'
@@ -44,11 +43,6 @@ const AppGalleryRoute = AppGalleryRouteImport.update({
   path: '/gallery',
   getParentRoute: () => AppRouteRoute,
 } as any)
-const AppForyouRoute = AppForyouRouteImport.update({
-  id: '/foryou',
-  path: '/foryou',
-  getParentRoute: () => AppRouteRoute,
-} as any)
 const AppDiaryRoute = AppDiaryRouteImport.update({
   id: '/diary',
   path: '/diary',
@@ -72,7 +66,6 @@ export interface FileRoutesByFullPath {
   '/app/blog': typeof AppBlogRoute
   '/app/chat': typeof AppChatRoute
   '/app/diary': typeof AppDiaryRoute
-  '/app/foryou': typeof AppForyouRoute
   '/app/gallery': typeof AppGalleryRoute
   '/app/': typeof AppIndexRoute
 }
@@ -82,7 +75,6 @@ export interface FileRoutesByTo {
   '/app/blog': typeof AppBlogRoute
   '/app/chat': typeof AppChatRoute
   '/app/diary': typeof AppDiaryRoute
-  '/app/foryou': typeof AppForyouRoute
   '/app/gallery': typeof AppGalleryRoute
   '/app': typeof AppIndexRoute
 }
@@ -94,7 +86,6 @@ export interface FileRoutesById {
   '/app/blog': typeof AppBlogRoute
   '/app/chat': typeof AppChatRoute
   '/app/diary': typeof AppDiaryRoute
-  '/app/foryou': typeof AppForyouRoute
   '/app/gallery': typeof AppGalleryRoute
   '/app/': typeof AppIndexRoute
 }
@@ -107,7 +98,6 @@ export interface FileRouteTypes {
     | '/app/blog'
     | '/app/chat'
     | '/app/diary'
-    | '/app/foryou'
     | '/app/gallery'
     | '/app/'
   fileRoutesByTo: FileRoutesByTo
@@ -117,7 +107,6 @@ export interface FileRouteTypes {
     | '/app/blog'
     | '/app/chat'
     | '/app/diary'
-    | '/app/foryou'
     | '/app/gallery'
     | '/app'
   id:
@@ -128,7 +117,6 @@ export interface FileRouteTypes {
     | '/app/blog'
     | '/app/chat'
     | '/app/diary'
-    | '/app/foryou'
     | '/app/gallery'
     | '/app/'
   fileRoutesById: FileRoutesById
@@ -176,13 +164,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppGalleryRouteImport
       parentRoute: typeof AppRouteRoute
     }
-    '/app/foryou': {
-      id: '/app/foryou'
-      path: '/foryou'
-      fullPath: '/app/foryou'
-      preLoaderRoute: typeof AppForyouRouteImport
-      parentRoute: typeof AppRouteRoute
-    }
     '/app/diary': {
       id: '/app/diary'
       path: '/diary'
@@ -211,7 +192,6 @@ interface AppRouteRouteChildren {
   AppBlogRoute: typeof AppBlogRoute
   AppChatRoute: typeof AppChatRoute
   AppDiaryRoute: typeof AppDiaryRoute
-  AppForyouRoute: typeof AppForyouRoute
   AppGalleryRoute: typeof AppGalleryRoute
   AppIndexRoute: typeof AppIndexRoute
 }
@@ -220,7 +200,6 @@ const AppRouteRouteChildren: AppRouteRouteChildren = {
   AppBlogRoute: AppBlogRoute,
   AppChatRoute: AppChatRoute,
   AppDiaryRoute: AppDiaryRoute,
-  AppForyouRoute: AppForyouRoute,
   AppGalleryRoute: AppGalleryRoute,
   AppIndexRoute: AppIndexRoute,
 }
