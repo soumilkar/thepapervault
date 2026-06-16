@@ -22,7 +22,7 @@ function Landing() {
     <div className="min-h-screen">
       <header className="mx-auto flex max-w-6xl items-center justify-between px-6 py-6">
         <div className="flex items-center gap-2">
-          <span className="font-serif text-2xl text-primary">Inkwell</span>
+          <span className="font-serif text-2xl text-primary">The PaperVault</span>
           <span className="font-hand text-sepia text-lg">·your story</span>
         </div>
         <Link to="/auth" className="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:opacity-90">
