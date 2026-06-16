@@ -19,13 +19,13 @@ export const Route = createFileRoute("/app")({
   component: AuthedLayout,
 });
 
-const NAV = [
+const NAV: { to: string; icon: typeof Home; label: string; exact?: boolean }[] = [
   { to: "/app", icon: Home, label: "Home", exact: true },
   { to: "/app/diary", icon: PenLine, label: "Diary" },
   { to: "/app/blog", icon: BookOpen, label: "Blog" },
   { to: "/app/gallery", icon: ImageIcon, label: "Gallery" },
   { to: "/app/chat", icon: Sparkles, label: "Companion" },
-] as const;
+];
 
 function AuthedLayout() {
   const router = useRouter();
