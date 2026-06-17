@@ -77,9 +77,10 @@ function ChatPage() {
         {loading && <p className="font-hand text-sepia">thinking...</p>}
       </div>
 
+      <div className="h-24" aria-hidden />
       <form
         onSubmit={(e) => { e.preventDefault(); send(input); }}
-        className="paper-card sticky bottom-4 flex items-center gap-2 p-2"
+        className="paper-card fixed bottom-4 left-4 right-4 z-30 mx-auto flex max-w-3xl items-center gap-2 p-2 shadow-lg"
       >
         <input
           value={input} onChange={(e) => setInput(e.target.value)}

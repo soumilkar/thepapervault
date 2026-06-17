@@ -148,7 +148,14 @@ function DiaryPage() {
             <ImagePlus className="size-4" />
             <span>{photo ? "Change photo" : "Add a photo (also saved to gallery)"}</span>
             <input type="file" accept="image/*" className="hidden"
-              onChange={(e) => { const f = e.target.files?.[0]; if (f) setPhoto(f); e.currentTarget.value = ""; }} />
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) {
+                  if (f.size > 5 * 1024 * 1024) { toast.error("Photo must be smaller than 5 MB"); }
+                  else { setPhoto(f); }
+                }
+                e.currentTarget.value = "";
+              }} />
           </label>
 
           <div className="flex items-center gap-1 rounded-md border border-border bg-secondary/40 p-1 text-xs">

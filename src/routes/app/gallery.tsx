@@ -34,6 +34,10 @@ function GalleryPage() {
   });
 
   const upload = async (file: File) => {
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error("Photo must be smaller than 5 MB");
+      return;
+    }
     setUploading(true);
     try {
       const ext = file.name.split(".").pop() || "jpg";
