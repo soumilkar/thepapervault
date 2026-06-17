@@ -3,7 +3,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
-import { Trash2, Pencil, X, Check, BookOpen, Users } from "lucide-react";
+import { Trash2, Pencil, X, Check, BookOpen, Users, Heart, MessageCircle } from "lucide-react";
+import { MusicSearch, MusicPlayer, type SelectedTrack } from "@/components/MusicSearch";
 
 export const Route = createFileRoute("/app/blog")({
   component: BlogPage,
@@ -17,6 +18,7 @@ function BlogPage() {
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
   const [tags, setTags] = useState("");
+  const [music, setMusic] = useState<SelectedTrack | null>(null);
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<Tab>("mine");
 
@@ -51,12 +53,18 @@ function BlogPage() {
     mutationFn: async () => {
       const tagArr = tags.split(",").map((t) => t.trim()).filter(Boolean);
       const { error } = await supabase.from("blog_posts").insert({
-        user_id: user.id, title, content, tags: tagArr.length ? tagArr : null,
+        user_id: user.id, title, content,
+        tags: tagArr.length ? tagArr : null,
+        music_track_id: music?.music_track_id ?? null,
+        music_track_name: music?.music_track_name ?? null,
+        music_artist: music?.music_artist ?? null,
+        music_preview_url: music?.music_preview_url ?? null,
+        music_artwork_url: music?.music_artwork_url ?? null,
       });
       if (error) throw error;
     },
     onSuccess: () => {
-      setTitle(""); setContent(""); setTags(""); setOpen(false);
+      setTitle(""); setContent(""); setTags(""); setMusic(null); setOpen(false);
       toast.success("Blog published");
       qc.invalidateQueries({ queryKey: ["blog"] });
       qc.invalidateQueries({ queryKey: ["dashboard-counts"] });
@@ -119,6 +127,7 @@ function BlogPage() {
             value={content} onChange={(e) => setContent(e.target.value)} placeholder="Write your story..." rows={12} required
             className="w-full resize-none bg-transparent leading-relaxed outline-none placeholder:text-muted-foreground/60"
           />
+          <MusicSearch selected={music} onChange={setMusic} />
           <div className="flex justify-end">
             <button type="submit" disabled={create.isPending} className="rounded-md bg-primary px-5 py-2 text-sm text-primary-foreground disabled:opacity-50">
               {create.isPending ? "Publishing..." : "Publish"}
@@ -140,6 +149,7 @@ function BlogPage() {
             <BlogCard
               key={p.id}
               post={p}
+              currentUserId={user.id}
               isOwner
               onDelete={() => remove.mutate(p.id)}
               onSave={(vals) => update.mutate({ id: p.id, ...vals })}
@@ -151,7 +161,7 @@ function BlogPage() {
           {community.isLoading && <p className="text-muted-foreground">Loading community stories...</p>}
           {community.data?.length === 0 && <p className="text-muted-foreground">No posts from others yet.</p>}
           {community.data?.map((p) => (
-            <BlogCard key={p.id} post={p} isOwner={false} author={p.author} />
+            <BlogCard key={p.id} post={p} currentUserId={user.id} isOwner={false} author={p.author} />
           ))}
         </div>
       )}
@@ -171,9 +181,9 @@ function TabBtn({ active, onClick, icon, label }: { active: boolean; onClick: ()
 }
 
 function BlogCard({
-  post: p, isOwner, author, onDelete, onSave,
+  post: p, isOwner, author, currentUserId, onDelete, onSave,
 }: {
-  post: any; isOwner: boolean; author?: string;
+  post: any; isOwner: boolean; author?: string; currentUserId: string;
   onDelete?: () => void;
   onSave?: (vals: { title: string; content: string; tags: string }) => void;
 }) {
@@ -182,6 +192,7 @@ function BlogCard({
   const [eTitle, setETitle] = useState(p.title);
   const [eContent, setEContent] = useState(p.content);
   const [eTags, setETags] = useState((p.tags ?? []).join(", "));
+  const [showComments, setShowComments] = useState(false);
 
   const preview = p.content.length > 220 ? p.content.slice(0, 220).trimEnd() + "…" : p.content;
 
@@ -246,6 +257,133 @@ function BlogCard({
           {open ? "Show less" : "Read more"}
         </button>
       )}
+      {p.music_preview_url && <MusicPlayer track={p} />}
+
+      <div className="mt-4 flex items-center gap-4 border-t border-border/60 pt-3">
+        <LikeButton postId={p.id} currentUserId={currentUserId} />
+        <button onClick={() => setShowComments((s) => !s)} className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-primary">
+          <MessageCircle className="size-4" /> Comments
+        </button>
+      </div>
+
+      {showComments && <Comments postId={p.id} postAuthorId={p.user_id} currentUserId={currentUserId} />}
     </article>
+  );
+}
+
+function LikeButton({ postId, currentUserId }: { postId: string; currentUserId: string }) {
+  const qc = useQueryClient();
+  const likes = useQuery({
+    queryKey: ["likes", postId],
+    queryFn: async () => {
+      const [{ count }, { data: mine }] = await Promise.all([
+        supabase.from("blog_likes").select("id", { count: "exact", head: true }).eq("post_id", postId),
+        supabase.from("blog_likes").select("id").eq("post_id", postId).eq("user_id", currentUserId).maybeSingle(),
+      ]);
+      return { count: count ?? 0, liked: !!mine };
+    },
+  });
+
+  const toggle = useMutation({
+    mutationFn: async () => {
+      if (likes.data?.liked) {
+        const { error } = await supabase.from("blog_likes").delete().eq("post_id", postId).eq("user_id", currentUserId);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.from("blog_likes").insert({ post_id: postId, user_id: currentUserId });
+        if (error) throw error;
+      }
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["likes", postId] }),
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const liked = likes.data?.liked;
+  return (
+    <button
+      onClick={() => toggle.mutate()}
+      className={`flex items-center gap-1.5 text-sm transition ${liked ? "text-destructive" : "text-muted-foreground hover:text-destructive"}`}
+    >
+      <Heart className={`size-4 ${liked ? "fill-current" : ""}`} />
+      {likes.data?.count ?? 0}
+    </button>
+  );
+}
+
+function Comments({ postId, postAuthorId, currentUserId }: { postId: string; postAuthorId: string; currentUserId: string }) {
+  const qc = useQueryClient();
+  const [text, setText] = useState("");
+
+  const comments = useQuery({
+    queryKey: ["comments", postId],
+    queryFn: async () => {
+      const { data, error } = await supabase.from("blog_comments").select("*").eq("post_id", postId).order("created_at", { ascending: true });
+      if (error) throw error;
+      const ids = Array.from(new Set((data ?? []).map((c) => c.user_id)));
+      const nameMap = new Map<string, string>();
+      if (ids.length) {
+        const { data: profs } = await supabase.from("profiles").select("id, display_name").in("id", ids);
+        (profs ?? []).forEach((p) => nameMap.set(p.id, p.display_name || "someone"));
+      }
+      return (data ?? []).map((c) => ({ ...c, author: nameMap.get(c.user_id) || "someone" }));
+    },
+  });
+
+  const add = useMutation({
+    mutationFn: async () => {
+      const { error } = await supabase.from("blog_comments").insert({
+        post_id: postId, user_id: currentUserId, content: text.trim(),
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => { setText(""); qc.invalidateQueries({ queryKey: ["comments", postId] }); },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const del = useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase.from("blog_comments").delete().eq("id", id);
+      if (error) throw error;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["comments", postId] }),
+  });
+
+  return (
+    <div className="mt-3 space-y-3 border-t border-border/60 pt-3">
+      {comments.data?.length === 0 && <p className="text-sm text-muted-foreground">Be the first to comment.</p>}
+      {comments.data?.map((c) => {
+        const isPostAuthor = c.user_id === postAuthorId;
+        return (
+          <div key={c.id} className="rounded-md bg-secondary/40 p-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-xs font-medium text-primary">
+                {c.author}
+                {isPostAuthor && <span className="text-accent">/Author</span>}
+                <span className="ml-2 font-normal text-muted-foreground">{new Date(c.created_at).toLocaleDateString()}</span>
+              </p>
+              {c.user_id === currentUserId && (
+                <button onClick={() => del.mutate(c.id)} className="text-muted-foreground hover:text-destructive" aria-label="Delete comment">
+                  <Trash2 className="size-3.5" />
+                </button>
+              )}
+            </div>
+            <p className="mt-1 whitespace-pre-wrap text-sm">{c.content}</p>
+          </div>
+        );
+      })}
+      <form
+        onSubmit={(e) => { e.preventDefault(); if (text.trim()) add.mutate(); }}
+        className="flex gap-2"
+      >
+        <input
+          value={text} onChange={(e) => setText(e.target.value)}
+          placeholder="Write a comment..."
+          className="flex-1 rounded-md border border-input bg-card px-3 py-1.5 text-sm outline-none focus:border-ring"
+        />
+        <button type="submit" disabled={!text.trim() || add.isPending} className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground disabled:opacity-50">
+          Post
+        </button>
+      </form>
+    </div>
   );
 }

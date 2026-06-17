@@ -13,8 +13,8 @@ export const askCompanion = createServerFn({ method: "POST" })
 
     const { supabase, userId } = context;
     const [diary, blog, profile] = await Promise.all([
-      supabase.from("diary_entries").select("title,content,mood,entry_date").order("entry_date", { ascending: false }).limit(50),
-      supabase.from("blog_posts").select("title,content,tags,created_at").order("created_at", { ascending: false }).limit(30),
+      supabase.from("diary_entries").select("title,content,mood,entry_date").eq("user_id", userId).order("entry_date", { ascending: false }).limit(50),
+      supabase.from("blog_posts").select("title,content,tags,created_at").eq("user_id", userId).order("created_at", { ascending: false }).limit(30),
       supabase.from("profiles").select("display_name,bio").eq("id", userId).maybeSingle(),
     ]);
 
