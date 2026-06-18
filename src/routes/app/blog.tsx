@@ -1,10 +1,15 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
-import { Trash2, Pencil, X, Check, BookOpen, Users, Heart, MessageCircle } from "lucide-react";
+import {
+  Trash2, Pencil, X, Check, BookOpen, Users, Heart, MessageCircle,
+  Bell, BellOff, ArrowUp, ArrowDown, CornerDownRight, Download,
+} from "lucide-react";
 import { MusicSearch, MusicPlayer, type SelectedTrack } from "@/components/MusicSearch";
+import { Markdown } from "@/components/Markdown";
+import { downloadTextFile } from "@/lib/download";
 
 export const Route = createFileRoute("/app/blog")({
   component: BlogPage,
@@ -19,6 +24,7 @@ function BlogPage() {
   const [content, setContent] = useState("");
   const [tags, setTags] = useState("");
   const [music, setMusic] = useState<SelectedTrack | null>(null);
+  const [notify, setNotify] = useState(true);
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<Tab>("mine");
 
@@ -55,6 +61,7 @@ function BlogPage() {
       const { error } = await supabase.from("blog_posts").insert({
         user_id: user.id, title, content,
         tags: tagArr.length ? tagArr : null,
+        notify_on_comment: notify,
         music_track_id: music?.music_track_id ?? null,
         music_track_name: music?.music_track_name ?? null,
         music_artist: music?.music_artist ?? null,
@@ -64,7 +71,7 @@ function BlogPage() {
       if (error) throw error;
     },
     onSuccess: () => {
-      setTitle(""); setContent(""); setTags(""); setMusic(null); setOpen(false);
+      setTitle(""); setContent(""); setTags(""); setMusic(null); setNotify(true); setOpen(false);
       toast.success("Blog published");
       qc.invalidateQueries({ queryKey: ["blog"] });
       qc.invalidateQueries({ queryKey: ["dashboard-counts"] });
@@ -98,6 +105,15 @@ function BlogPage() {
     onError: (e: Error) => toast.error(e.message),
   });
 
+  const exportMine = () => {
+    const rows = mine.data ?? [];
+    if (!rows.length) { toast.error("No posts to export yet"); return; }
+    const txt = rows.map((p: any) =>
+      `${new Date(p.created_at).toISOString().slice(0, 10)} — ${p.title}${p.tags?.length ? `  [${p.tags.join(", ")}]` : ""}\n${"=".repeat(60)}\n${p.content}\n`
+    ).join("\n\n");
+    downloadTextFile(`blog-${new Date().toISOString().slice(0, 10)}.txt`, txt);
+  };
+
   return (
     <div className="space-y-8">
       <div className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-3">
@@ -105,9 +121,14 @@ function BlogPage() {
           <p className="font-hand text-2xl text-sepia">your thoughts, published</p>
           <h1 className="font-serif text-4xl text-primary">Blog</h1>
         </div>
-        <button onClick={() => setOpen(!open)} className="shrink-0 rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground">
-          {open ? "Cancel" : "Write new post"}
-        </button>
+        <div className="flex shrink-0 gap-2">
+          <button onClick={exportMine} className="flex items-center gap-1.5 rounded-md border border-border bg-card px-3 py-2 text-sm text-primary hover:bg-secondary">
+            <Download className="size-4" /> Export
+          </button>
+          <button onClick={() => setOpen(!open)} className="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground">
+            {open ? "Cancel" : "Write new post"}
+          </button>
+        </div>
       </div>
 
       {open && (
@@ -124,10 +145,19 @@ function BlogPage() {
             className="w-full bg-transparent text-sm text-accent outline-none placeholder:text-muted-foreground/60"
           />
           <textarea
-            value={content} onChange={(e) => setContent(e.target.value)} placeholder="Write your story..." rows={12} required
+            value={content} onChange={(e) => setContent(e.target.value)}
+            placeholder="Write your story... (markdown supported: **bold**, _italic_, # heading, lists, links)"
+            rows={12} required
             className="w-full resize-none bg-transparent leading-relaxed outline-none placeholder:text-muted-foreground/60"
           />
           <MusicSearch selected={music} onChange={setMusic} />
+          <label className="flex cursor-pointer items-center gap-2 text-sm text-muted-foreground">
+            <input type="checkbox" checked={notify} onChange={(e) => setNotify(e.target.checked)} className="size-4 accent-primary" />
+            <span className="flex items-center gap-1">
+              {notify ? <Bell className="size-3.5 text-accent" /> : <BellOff className="size-3.5" />}
+              Email me when someone comments on this post
+            </span>
+          </label>
           <div className="flex justify-end">
             <button type="submit" disabled={create.isPending} className="rounded-md bg-primary px-5 py-2 text-sm text-primary-foreground disabled:opacity-50">
               {create.isPending ? "Publishing..." : "Publish"}
@@ -251,7 +281,9 @@ function BlogCard({
           {p.tags.map((t: string) => <span key={t} className="rounded-full bg-secondary px-2 py-0.5 text-xs text-secondary-foreground">#{t}</span>)}
         </div>
       )}
-      <p className="mt-3 whitespace-pre-wrap leading-relaxed">{open ? p.content : preview}</p>
+      <div className="mt-3">
+        {open ? <Markdown>{p.content}</Markdown> : <p className="whitespace-pre-wrap leading-relaxed">{preview}</p>}
+      </div>
       {p.content.length > 220 && (
         <button onClick={() => setOpen((o) => !o)} className="mt-2 text-sm text-accent hover:text-primary">
           {open ? "Show less" : "Read more"}
@@ -310,6 +342,16 @@ function LikeButton({ postId, currentUserId }: { postId: string; currentUserId: 
   );
 }
 
+type CommentNode = {
+  id: string;
+  user_id: string;
+  content: string;
+  created_at: string;
+  parent_id: string | null;
+  author: string;
+  children: CommentNode[];
+};
+
 function Comments({ postId, postAuthorId, currentUserId }: { postId: string; postAuthorId: string; currentUserId: string }) {
   const qc = useQueryClient();
   const [text, setText] = useState("");
@@ -325,14 +367,27 @@ function Comments({ postId, postAuthorId, currentUserId }: { postId: string; pos
         const { data: profs } = await supabase.from("profiles").select("id, display_name").in("id", ids);
         (profs ?? []).forEach((p) => nameMap.set(p.id, p.display_name || "someone"));
       }
-      return (data ?? []).map((c) => ({ ...c, author: nameMap.get(c.user_id) || "someone" }));
+      return (data ?? []).map((c: any) => ({ ...c, author: nameMap.get(c.user_id) || "someone" }));
     },
   });
 
+  const tree = useMemo<CommentNode[]>(() => {
+    const rows = comments.data ?? [];
+    const map = new Map<string, CommentNode>();
+    rows.forEach((r: any) => map.set(r.id, { ...r, children: [] }));
+    const roots: CommentNode[] = [];
+    map.forEach((n) => {
+      if (n.parent_id && map.has(n.parent_id)) map.get(n.parent_id)!.children.push(n);
+      else roots.push(n);
+    });
+    return roots;
+  }, [comments.data]);
+
   const add = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (vars: { content: string; parent_id: string | null }) => {
       const { error } = await supabase.from("blog_comments").insert({
-        post_id: postId, user_id: currentUserId, content: text.trim(),
+        post_id: postId, user_id: currentUserId,
+        content: vars.content.trim(), parent_id: vars.parent_id,
       });
       if (error) throw error;
     },
@@ -350,29 +405,15 @@ function Comments({ postId, postAuthorId, currentUserId }: { postId: string; pos
 
   return (
     <div className="mt-3 space-y-3 border-t border-border/60 pt-3">
-      {comments.data?.length === 0 && <p className="text-sm text-muted-foreground">Be the first to comment.</p>}
-      {comments.data?.map((c) => {
-        const isPostAuthor = c.user_id === postAuthorId;
-        return (
-          <div key={c.id} className="rounded-md bg-secondary/40 p-2.5">
-            <div className="flex items-center justify-between gap-2">
-              <p className="text-xs font-medium text-primary">
-                {c.author}
-                {isPostAuthor && <span className="text-accent">/Author</span>}
-                <span className="ml-2 font-normal text-muted-foreground">{new Date(c.created_at).toLocaleDateString()}</span>
-              </p>
-              {c.user_id === currentUserId && (
-                <button onClick={() => del.mutate(c.id)} className="text-muted-foreground hover:text-destructive" aria-label="Delete comment">
-                  <Trash2 className="size-3.5" />
-                </button>
-              )}
-            </div>
-            <p className="mt-1 whitespace-pre-wrap text-sm">{c.content}</p>
-          </div>
-        );
-      })}
+      {tree.length === 0 && <p className="text-sm text-muted-foreground">Be the first to comment.</p>}
+      {tree.map((c) => (
+        <CommentItem key={c.id} node={c} postAuthorId={postAuthorId} currentUserId={currentUserId} depth={0}
+          onReply={(parentId, content) => add.mutate({ content, parent_id: parentId })}
+          onDelete={(id) => del.mutate(id)}
+        />
+      ))}
       <form
-        onSubmit={(e) => { e.preventDefault(); if (text.trim()) add.mutate(); }}
+        onSubmit={(e) => { e.preventDefault(); if (text.trim()) add.mutate({ content: text, parent_id: null }); }}
         className="flex gap-2"
       >
         <input
@@ -384,6 +425,117 @@ function Comments({ postId, postAuthorId, currentUserId }: { postId: string; pos
           Post
         </button>
       </form>
+    </div>
+  );
+}
+
+function CommentItem({
+  node: c, postAuthorId, currentUserId, depth, onReply, onDelete,
+}: {
+  node: CommentNode; postAuthorId: string; currentUserId: string; depth: number;
+  onReply: (parentId: string, content: string) => void;
+  onDelete: (id: string) => void;
+}) {
+  const [replying, setReplying] = useState(false);
+  const [replyText, setReplyText] = useState("");
+  const isAuthor = c.user_id === postAuthorId;
+  const indent = Math.min(depth, 4) * 16;
+
+  return (
+    <div style={{ marginLeft: indent }} className="rounded-md bg-secondary/40 p-2.5">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-xs font-medium text-primary">
+          {c.author}
+          {isAuthor && <span className="text-accent">/Author</span>}
+          <span className="ml-2 font-normal text-muted-foreground">{new Date(c.created_at).toLocaleDateString()}</span>
+        </p>
+        {c.user_id === currentUserId && (
+          <button onClick={() => onDelete(c.id)} className="text-muted-foreground hover:text-destructive" aria-label="Delete comment">
+            <Trash2 className="size-3.5" />
+          </button>
+        )}
+      </div>
+      <div className="mt-1 text-sm">
+        <Markdown>{c.content}</Markdown>
+      </div>
+      <div className="mt-1.5 flex items-center gap-3">
+        <CommentVotes commentId={c.id} currentUserId={currentUserId} />
+        <button onClick={() => setReplying((r) => !r)} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-primary">
+          <CornerDownRight className="size-3" /> Reply
+        </button>
+      </div>
+      {replying && (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!replyText.trim()) return;
+            onReply(c.id, replyText);
+            setReplyText(""); setReplying(false);
+          }}
+          className="mt-2 flex gap-2"
+        >
+          <input
+            autoFocus value={replyText} onChange={(e) => setReplyText(e.target.value)}
+            placeholder={`Reply to ${c.author}...`}
+            className="flex-1 rounded-md border border-input bg-card px-2 py-1 text-xs outline-none focus:border-ring"
+          />
+          <button type="submit" className="rounded-md bg-primary px-2.5 py-1 text-xs text-primary-foreground">Send</button>
+        </form>
+      )}
+      {c.children.length > 0 && (
+        <div className="mt-2 space-y-2">
+          {c.children.map((child) => (
+            <CommentItem key={child.id} node={child} postAuthorId={postAuthorId} currentUserId={currentUserId} depth={depth + 1}
+              onReply={onReply} onDelete={onDelete} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CommentVotes({ commentId, currentUserId }: { commentId: string; currentUserId: string }) {
+  const qc = useQueryClient();
+  const votes = useQuery({
+    queryKey: ["cvotes", commentId],
+    queryFn: async () => {
+      const [{ data: all }, { data: mine }] = await Promise.all([
+        supabase.from("comment_votes").select("value").eq("comment_id", commentId),
+        supabase.from("comment_votes").select("value").eq("comment_id", commentId).eq("user_id", currentUserId).maybeSingle(),
+      ]);
+      const score = (all ?? []).reduce((s, v: any) => s + v.value, 0);
+      return { score, mine: (mine?.value as 1 | -1 | undefined) ?? 0 };
+    },
+  });
+
+  const cast = useMutation({
+    mutationFn: async (v: 1 | -1) => {
+      const current = votes.data?.mine ?? 0;
+      if (current === v) {
+        const { error } = await supabase.from("comment_votes").delete().eq("comment_id", commentId).eq("user_id", currentUserId);
+        if (error) throw error;
+      } else if (current === 0) {
+        const { error } = await supabase.from("comment_votes").insert({ comment_id: commentId, user_id: currentUserId, value: v });
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.from("comment_votes").update({ value: v }).eq("comment_id", commentId).eq("user_id", currentUserId);
+        if (error) throw error;
+      }
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["cvotes", commentId] }),
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const mine = votes.data?.mine ?? 0;
+  return (
+    <div className="flex items-center gap-0.5 text-xs">
+      <button onClick={() => cast.mutate(1)} className={`rounded p-0.5 transition ${mine === 1 ? "text-accent" : "text-muted-foreground hover:text-accent"}`} aria-label="Upvote">
+        <ArrowUp className="size-3.5" />
+      </button>
+      <span className="min-w-4 text-center tabular-nums">{votes.data?.score ?? 0}</span>
+      <button onClick={() => cast.mutate(-1)} className={`rounded p-0.5 transition ${mine === -1 ? "text-destructive" : "text-muted-foreground hover:text-destructive"}`} aria-label="Downvote">
+        <ArrowDown className="size-3.5" />
+      </button>
     </div>
   );
 }
