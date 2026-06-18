@@ -19,6 +19,7 @@ export type Database = {
           content: string
           created_at: string
           id: string
+          parent_id: string | null
           post_id: string
           updated_at: string
           user_id: string
@@ -27,6 +28,7 @@ export type Database = {
           content: string
           created_at?: string
           id?: string
+          parent_id?: string | null
           post_id: string
           updated_at?: string
           user_id: string
@@ -35,11 +37,19 @@ export type Database = {
           content?: string
           created_at?: string
           id?: string
+          parent_id?: string | null
           post_id?: string
           updated_at?: string
           user_id?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "blog_comments_parent_id_fkey"
+            columns: ["parent_id"]
+            isOneToOne: false
+            referencedRelation: "blog_comments"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "blog_comments_post_id_fkey"
             columns: ["post_id"]
@@ -88,6 +98,7 @@ export type Database = {
           music_preview_url: string | null
           music_track_id: string | null
           music_track_name: string | null
+          notify_on_comment: boolean
           tags: string[] | null
           title: string
           updated_at: string
@@ -102,6 +113,7 @@ export type Database = {
           music_preview_url?: string | null
           music_track_id?: string | null
           music_track_name?: string | null
+          notify_on_comment?: boolean
           tags?: string[] | null
           title: string
           updated_at?: string
@@ -116,12 +128,45 @@ export type Database = {
           music_preview_url?: string | null
           music_track_id?: string | null
           music_track_name?: string | null
+          notify_on_comment?: boolean
           tags?: string[] | null
           title?: string
           updated_at?: string
           user_id?: string
         }
         Relationships: []
+      }
+      comment_votes: {
+        Row: {
+          comment_id: string
+          created_at: string
+          id: string
+          user_id: string
+          value: number
+        }
+        Insert: {
+          comment_id: string
+          created_at?: string
+          id?: string
+          user_id: string
+          value: number
+        }
+        Update: {
+          comment_id?: string
+          created_at?: string
+          id?: string
+          user_id?: string
+          value?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "comment_votes_comment_id_fkey"
+            columns: ["comment_id"]
+            isOneToOne: false
+            referencedRelation: "blog_comments"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       diary_entries: {
         Row: {

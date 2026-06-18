@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { Music, Search, X } from "lucide-react";
+import { Music, Search, X, Play, Pause } from "lucide-react";
+
 
 export type SelectedTrack = {
   music_track_id: string;
@@ -108,15 +109,46 @@ export function MusicSearch({
 
 export function MusicPlayer({ track }: {
   track: { music_track_name: string | null; music_artist: string | null; music_preview_url: string | null; music_artwork_url: string | null } }) {
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [playing, setPlaying] = useState(false);
+
+  useEffect(() => {
+    const a = audioRef.current;
+    if (!a) return;
+    const onEnd = () => setPlaying(false);
+    a.addEventListener("ended", onEnd);
+    return () => a.removeEventListener("ended", onEnd);
+  }, []);
+
   if (!track.music_preview_url) return null;
+
+  const toggle = () => {
+    const a = audioRef.current;
+    if (!a) return;
+    if (playing) { a.pause(); setPlaying(false); }
+    else { a.play().then(() => setPlaying(true)).catch(() => setPlaying(false)); }
+  };
+
   return (
-    <div className="mt-3 flex items-center gap-3 rounded-md border border-border bg-secondary/40 p-2">
-      {track.music_artwork_url && <img src={track.music_artwork_url} alt="" className="size-12 rounded" />}
+    <div className="mt-4 flex items-center gap-3 rounded-lg border border-border bg-gradient-to-br from-secondary/60 to-accent/10 p-3 shadow-sm">
+      {track.music_artwork_url && (
+        <img src={track.music_artwork_url} alt="" className="size-14 rounded-md shadow-sm" />
+      )}
       <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-medium">{track.music_track_name}</p>
+        <p className="font-hand text-sepia text-sm leading-none">now playing</p>
+        <p className="mt-1 truncate font-serif text-base text-primary">{track.music_track_name}</p>
         <p className="truncate text-xs text-muted-foreground">{track.music_artist}</p>
-        <audio controls src={track.music_preview_url} className="mt-1 w-full" preload="none" />
       </div>
+      <button
+        type="button"
+        onClick={toggle}
+        aria-label={playing ? "Pause" : "Play"}
+        className="flex size-11 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-md transition hover:scale-105 active:scale-95"
+      >
+        {playing ? <Pause className="size-5" /> : <Play className="size-5 translate-x-0.5" />}
+      </button>
+      <audio ref={audioRef} src={track.music_preview_url} preload="none" />
     </div>
   );
 }
+

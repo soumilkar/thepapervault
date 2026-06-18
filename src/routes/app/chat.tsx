@@ -4,6 +4,8 @@ import { useState } from "react";
 import { Sparkles, Send } from "lucide-react";
 import { toast } from "sonner";
 import { askCompanion } from "@/lib/companion.functions";
+import { Markdown } from "@/components/Markdown";
+
 
 export const Route = createFileRoute("/app/chat")({
   component: ChatPage,
@@ -66,15 +68,19 @@ function ChatPage() {
         {messages.map((m, i) => (
           <div key={i} className={m.role === "user" ? "flex justify-end" : ""}>
             {m.role === "user" ? (
-              <div className="max-w-[80%] rounded-2xl bg-primary px-4 py-2.5 text-primary-foreground">{m.content}</div>
+              <div className="max-w-[80%] rounded-2xl bg-primary px-4 py-2.5 text-primary-foreground">
+                <Markdown>{m.content}</Markdown>
+              </div>
             ) : (
-              <div className="max-w-[85%] whitespace-pre-wrap leading-relaxed text-foreground">
-                <span className="font-hand text-sepia">companion · </span>{m.content}
+              <div className="paper-card max-w-[90%] p-4">
+                <p className="mb-2 font-hand text-sepia text-lg leading-none">companion</p>
+                <Markdown>{m.content}</Markdown>
               </div>
             )}
           </div>
         ))}
         {loading && <p className="font-hand text-sepia">thinking...</p>}
+
       </div>
 
       <div className="h-24" aria-hidden />
