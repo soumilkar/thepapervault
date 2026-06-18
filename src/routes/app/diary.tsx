@@ -3,7 +3,10 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
-import { Eye, EyeOff, ImagePlus, Trash2, X } from "lucide-react";
+import { Eye, EyeOff, ImagePlus, Trash2, X, Download } from "lucide-react";
+import { Markdown } from "@/components/Markdown";
+import { downloadTextFile } from "@/lib/download";
+
 
 export const Route = createFileRoute("/app/diary")({
   component: DiaryPage,
@@ -107,10 +110,27 @@ function DiaryPage() {
 
   return (
     <div className="space-y-8">
-      <div>
-        <p className="font-hand text-2xl text-sepia">today's page</p>
-        <h1 className="font-serif text-4xl text-primary">Diary</h1>
+      <div className="flex items-end justify-between gap-3">
+        <div>
+          <p className="font-hand text-2xl text-sepia">today's page</p>
+          <h1 className="font-serif text-4xl text-primary">Diary</h1>
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            const rows = entries.data ?? [];
+            if (!rows.length) { toast.error("No entries to export yet"); return; }
+            const txt = rows.map((e: any) =>
+              `${e.entry_date} — ${e.title || "Untitled"}${e.mood ? `  (feeling: ${e.mood})` : ""}\n${"-".repeat(60)}\n${e.content}\n`
+            ).join("\n\n");
+            downloadTextFile(`diary-${new Date().toISOString().slice(0, 10)}.txt`, txt);
+          }}
+          className="flex shrink-0 items-center gap-1.5 rounded-md border border-border bg-card px-3 py-2 text-sm text-primary hover:bg-secondary"
+        >
+          <Download className="size-4" /> Export
+        </button>
       </div>
+
 
       <form
         onSubmit={(e) => { e.preventDefault(); if (content.trim()) create.mutate(); }}
@@ -218,7 +238,7 @@ function DiaryCard({ entry: e, onDelete, onToggleVis }: { entry: any; onDelete: 
         </div>
       </header>
       {e.mood && <p className="mt-1 text-sm text-accent">Feeling: {e.mood}</p>}
-      <p className="mt-3 whitespace-pre-wrap leading-relaxed">{open ? e.content : preview}</p>
+      {open ? <Markdown>{e.content}</Markdown> : <p className="mt-3 whitespace-pre-wrap leading-relaxed">{preview}</p>}
       {open && e.image_url && (
         <img src={e.image_url} alt="" className="mt-4 max-h-96 rounded-md border border-border" loading="lazy" />
       )}
