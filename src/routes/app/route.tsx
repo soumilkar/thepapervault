@@ -92,6 +92,10 @@ function AuthedLayout() {
               soumil.karma@gmail.com
             </a>
           </p>
+          <div className="mt-4 flex flex-wrap justify-center gap-4 text-sm text-muted-foreground">
+            <Link to="/privacy" className="hover:text-primary">Privacy Policy</Link>
+            <Link to="/terms" className="hover:text-primary">Terms of Service</Link>
+          </div>
         </div>
       </footer>
     </div>
