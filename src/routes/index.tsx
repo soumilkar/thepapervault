@@ -20,7 +20,7 @@ export const Route = createFileRoute("/")({
 function Landing() {
   return (
     <div className="min-h-screen">
-      <header className="mx-auto flex max-w-6xl items-center justify-between px-6 py-6">
+      <header className="sticky top-4 z-50 mx-4 mt-4 rounded-2xl border border-border/60 bg-card/80 shadow-lg backdrop-blur sm:mx-6 lg:mx-auto lg:max-w-6xl">
         <div className="flex items-center gap-2">
           <span className="font-serif text-2xl text-primary">The PaperVault</span>
           <span className="font-hand text-sepia text-lg">·your story</span>
