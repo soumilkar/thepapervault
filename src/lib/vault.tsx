@@ -76,6 +76,15 @@ export function VaultProvider({ userId, children }: { userId: string; children: 
   }, [kdfSalt]);
 
   const value = useMemo(() => ({ status, key, setup, unlock, lock }), [status, key, setup, unlock, lock]);
+
+  // Expose key to non-React helpers (vault-migrate) without prop drilling.
+  useEffect(() => {
+    (window as unknown as { __vaultKey?: CryptoKey | null }).__vaultKey = key;
+    return () => {
+      (window as unknown as { __vaultKey?: CryptoKey | null }).__vaultKey = null;
+    };
+  }, [key]);
+
   return <VaultContext.Provider value={value}>{children}</VaultContext.Provider>;
 }
 
