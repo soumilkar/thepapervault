@@ -93,7 +93,6 @@ function DiaryPage() {
         const { ct: capCt, iv: capIv } = await encryptText(key, captionPlain);
         const { error: gErr } = await supabase.from("gallery_images").insert({
           user_id: user.id, storage_path: imagePath, caption: capCt,
-          // @ts-expect-error generated types may lag the migration
           iv, caption_iv: capIv, mime: photo.type,
         });
         if (gErr) throw gErr;
@@ -102,7 +101,6 @@ function DiaryPage() {
       const { ct, iv } = await encryptText(key, plaintext);
       const { error } = await supabase.from("diary_entries").insert({
         user_id: user.id, title: null, content: ct, mood: null, image_path: imagePath, visibility: "private",
-        // @ts-expect-error generated types may lag the migration
         iv,
       });
       if (error) throw error;

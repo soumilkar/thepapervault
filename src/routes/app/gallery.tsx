@@ -82,7 +82,6 @@ function GalleryPage() {
       }
       const { error: dbErr } = await supabase.from("gallery_images").insert({
         user_id: user.id, storage_path: path, caption: captionCt,
-        // @ts-expect-error generated types may lag the migration
         iv, caption_iv: captionIv, mime: file.type,
       });
       if (dbErr) throw dbErr;
@@ -117,7 +116,6 @@ function GalleryPage() {
       }
       const { error } = await supabase.from("gallery_images").update({
         caption: captionCt,
-        // @ts-expect-error generated types may lag the migration
         caption_iv: captionIv,
       }).eq("id", id);
       if (error) throw error;
