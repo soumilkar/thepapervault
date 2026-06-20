@@ -3,16 +3,23 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
-import { Check, Pencil, Trash2, Upload, X } from "lucide-react";
+import { Check, Pencil, Trash2, Upload, X, Lock } from "lucide-react";
+import { useVault } from "@/lib/vault";
+import { decryptBytes, decryptText, encryptBlob, encryptText } from "@/lib/crypto";
 
 export const Route = createFileRoute("/app/gallery")({
   component: GalleryPage,
 });
 
-type ImageRow = { id: string; storage_path: string; caption: string | null; created_at: string };
+type ImageRowRaw = {
+  id: string; storage_path: string; caption: string | null; created_at: string;
+  iv: string | null; caption_iv: string | null; mime: string | null;
+};
+type Decoded = { id: string; storage_path: string; caption: string; created_at: string; url: string };
 
 function GalleryPage() {
   const { user } = Route.useRouteContext();
+  const { key } = useVault();
   const qc = useQueryClient();
   const [caption, setCaption] = useState("");
   const [uploading, setUploading] = useState(false);
@@ -20,22 +27,39 @@ function GalleryPage() {
   const [draftCaption, setDraftCaption] = useState("");
 
   const images = useQuery({
+    enabled: !!key,
     queryKey: ["gallery", user.id],
-    queryFn: async (): Promise<(ImageRow & { url: string })[]> => {
+    queryFn: async (): Promise<Decoded[]> => {
       const { data, error } = await supabase
-        .from("gallery_images").select("*").eq("user_id", user.id).order("created_at", { ascending: false });
+        .from("gallery_images").select("id,storage_path,caption,created_at,iv,caption_iv,mime" as never).eq("user_id", user.id).order("created_at", { ascending: false });
       if (error) throw error;
-      const withUrls = await Promise.all((data ?? []).map(async (img) => {
+      const rows = (data ?? []) as unknown as ImageRowRaw[];
+      const out: Decoded[] = [];
+      for (const img of rows) {
         const { data: signed } = await supabase.storage.from("gallery").createSignedUrl(img.storage_path, 60 * 60);
-        return { ...img, url: signed?.signedUrl ?? "" };
-      }));
-      return withUrls;
+        let url = signed?.signedUrl ?? "";
+        if (img.iv && key && signed?.signedUrl) {
+          try {
+            const res = await fetch(signed.signedUrl);
+            const ct = await res.arrayBuffer();
+            const pt = await decryptBytes(key, ct, img.iv);
+            url = URL.createObjectURL(new Blob([pt], { type: img.mime || "image/jpeg" }));
+          } catch { url = ""; }
+        }
+        let captionPlain = img.caption ?? "";
+        if (img.caption && img.caption_iv && key) {
+          try { captionPlain = await decryptText(key, img.caption, img.caption_iv); }
+          catch { captionPlain = "[encrypted]"; }
+        }
+        out.push({ id: img.id, storage_path: img.storage_path, caption: captionPlain, created_at: img.created_at, url });
+      }
+      return out;
     },
   });
 
   const upload = async (file: File) => {
+    if (!key) { toast.error("Vault is locked"); return; }
     const ALLOWED = ["image/jpeg", "image/png", "image/webp", "image/gif"];
-    const EXT_BY_MIME: Record<string, string> = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif" };
     if (!ALLOWED.includes(file.type)) {
       toast.error("Only JPEG, PNG, WebP, or GIF images are allowed");
       return;
@@ -46,16 +70,24 @@ function GalleryPage() {
     }
     setUploading(true);
     try {
-      const ext = EXT_BY_MIME[file.type];
-      const path = `${user.id}/${crypto.randomUUID()}.${ext}`;
-      const { error: upErr } = await supabase.storage.from("gallery").upload(path, file, { contentType: file.type });
+      const path = `${user.id}/${crypto.randomUUID()}.bin`;
+      const { blob, iv } = await encryptBlob(key, file);
+      const { error: upErr } = await supabase.storage.from("gallery").upload(path, blob, { contentType: "application/octet-stream" });
       if (upErr) throw upErr;
+      let captionCt: string | null = null;
+      let captionIv: string | null = null;
+      if (caption) {
+        const enc = await encryptText(key, caption);
+        captionCt = enc.ct; captionIv = enc.iv;
+      }
       const { error: dbErr } = await supabase.from("gallery_images").insert({
-        user_id: user.id, storage_path: path, caption: caption || null,
+        user_id: user.id, storage_path: path, caption: captionCt,
+        // @ts-expect-error generated types may lag the migration
+        iv, caption_iv: captionIv, mime: file.type,
       });
       if (dbErr) throw dbErr;
       setCaption("");
-      toast.success("Photo added");
+      toast.success("Photo added (encrypted)");
       qc.invalidateQueries({ queryKey: ["gallery"] });
       qc.invalidateQueries({ queryKey: ["dashboard-counts"] });
     } catch (e: unknown) {
@@ -66,7 +98,7 @@ function GalleryPage() {
   };
 
   const remove = useMutation({
-    mutationFn: async (img: ImageRow) => {
+    mutationFn: async (img: Decoded) => {
       await supabase.storage.from("gallery").remove([img.storage_path]);
       const { error } = await supabase.from("gallery_images").delete().eq("id", img.id);
       if (error) throw error;
@@ -76,7 +108,18 @@ function GalleryPage() {
 
   const updateCaption = useMutation({
     mutationFn: async ({ id, caption }: { id: string; caption: string }) => {
-      const { error } = await supabase.from("gallery_images").update({ caption: caption || null }).eq("id", id);
+      if (!key) throw new Error("Vault is locked");
+      let captionCt: string | null = null;
+      let captionIv: string | null = null;
+      if (caption) {
+        const enc = await encryptText(key, caption);
+        captionCt = enc.ct; captionIv = enc.iv;
+      }
+      const { error } = await supabase.from("gallery_images").update({
+        caption: captionCt,
+        // @ts-expect-error generated types may lag the migration
+        caption_iv: captionIv,
+      }).eq("id", id);
       if (error) throw error;
     },
     onSuccess: () => {
@@ -92,6 +135,7 @@ function GalleryPage() {
       <div>
         <p className="font-hand text-2xl text-sepia">moments worth keeping</p>
         <h1 className="font-serif text-4xl text-primary">Gallery</h1>
+        <p className="mt-1 flex items-center gap-1 text-xs text-muted-foreground"><Lock className="size-3" /> Photos are end-to-end encrypted with your vault passphrase.</p>
       </div>
 
       <div className="paper-card p-6">
@@ -102,9 +146,9 @@ function GalleryPage() {
         />
         <label className="flex cursor-pointer items-center justify-center gap-2 rounded-md border-2 border-dashed border-border bg-secondary/40 px-6 py-10 transition hover:border-ring hover:bg-secondary">
           <Upload className="size-5 text-accent" />
-          <span className="text-sm">{uploading ? "Uploading..." : "Click to upload a photo"}</span>
+          <span className="text-sm">{uploading ? "Encrypting & uploading..." : "Click to upload a photo"}</span>
           <input
-            type="file" accept="image/*" className="hidden" disabled={uploading}
+            type="file" accept="image/jpeg,image/png,image/webp,image/gif" className="hidden" disabled={uploading}
             onChange={(e) => { const f = e.target.files?.[0]; if (f) upload(f); e.currentTarget.value = ""; }}
           />
         </label>
