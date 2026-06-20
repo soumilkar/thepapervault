@@ -1,13 +1,19 @@
 // One-time migration: encrypt any pre-existing plaintext diary entries and gallery files
 // belonging to the current user. Runs after the vault is unlocked.
 import { supabase } from "@/integrations/supabase/client";
-import { useVault } from "@/lib/vault";
 import { encryptBlob, encryptText } from "@/lib/crypto";
 
-// Standalone variant called from VaultGate; resolves the key via a one-time hook bridge.
+// Re-typed Supabase client to avoid TS strict-checking the new columns until the generated
+// types catch up with the migration.
+const db = supabase as unknown as {
+  from: (t: string) => {
+    select: (cols: string) => { eq: (col: string, v: string) => Promise<{ data: unknown[] | null }> };
+    update: (vals: Record<string, unknown>) => { eq: (col: string, v: string) => Promise<{ error: unknown }> };
+  };
+};
+
 let migrationRunning = false;
 export async function runVaultMigration(userId: string) {
-  // The hook context can't be used outside React, so we read the key via a callback set by Provider.
   const key = (window as unknown as { __vaultKey?: CryptoKey }).__vaultKey;
   if (!key) return;
   if (migrationRunning) return;
@@ -20,26 +26,23 @@ export async function runVaultMigration(userId: string) {
   }
 }
 
+type DiaryRow = { id: string; title: string | null; content: string; mood: string | null; iv: string | null };
+type GalleryRow = { id: string; storage_path: string; caption: string | null; iv: string | null; caption_iv: string | null; mime: string | null };
+
 async function migrateDiary(userId: string, key: CryptoKey) {
-  const { data } = await supabase
-    .from("diary_entries")
-    .select("id,title,content,mood,iv" as never)
-    .eq("user_id", userId);
-  const rows = (data ?? []) as Array<{ id: string; title: string | null; content: string; mood: string | null; iv: string | null }>;
+  const { data } = await db.from("diary_entries").select("id,title,content,mood,iv").eq("user_id", userId);
+  const rows = (data ?? []) as DiaryRow[];
   for (const row of rows) {
     if (row.iv) continue;
     const plaintext = JSON.stringify({ t: row.title ?? "", c: row.content, m: row.mood ?? "" });
     const { ct, iv } = await encryptText(key, plaintext);
-    await supabase.from("diary_entries").update({ title: null, content: ct, mood: null, iv } as never).eq("id", row.id);
+    await db.from("diary_entries").update({ title: null, content: ct, mood: null, iv }).eq("id", row.id);
   }
 }
 
 async function migrateGallery(userId: string, key: CryptoKey) {
-  const { data } = await supabase
-    .from("gallery_images")
-    .select("id,storage_path,caption,iv,caption_iv,mime" as never)
-    .eq("user_id", userId);
-  const rows = (data ?? []) as Array<{ id: string; storage_path: string; caption: string | null; iv: string | null; caption_iv: string | null; mime: string | null }>;
+  const { data } = await db.from("gallery_images").select("id,storage_path,caption,iv,caption_iv,mime").eq("user_id", userId);
+  const rows = (data ?? []) as GalleryRow[];
   for (const row of rows) {
     const updates: Record<string, unknown> = {};
     if (!row.iv) {
@@ -62,13 +65,7 @@ async function migrateGallery(userId: string, key: CryptoKey) {
       updates.caption_iv = iv;
     }
     if (Object.keys(updates).length) {
-      await supabase.from("gallery_images").update(updates as never).eq("id", row.id);
+      await db.from("gallery_images").update(updates).eq("id", row.id);
     }
   }
-}
-
-// Helper hook used by VaultProvider consumers to publish the key to the migration helper.
-export function useExposeVaultKey() {
-  const { key } = useVault();
-  (window as unknown as { __vaultKey?: CryptoKey | null }).__vaultKey = key;
 }
