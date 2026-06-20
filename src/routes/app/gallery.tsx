@@ -34,15 +34,21 @@ function GalleryPage() {
   });
 
   const upload = async (file: File) => {
+    const ALLOWED = ["image/jpeg", "image/png", "image/webp", "image/gif"];
+    const EXT_BY_MIME: Record<string, string> = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif" };
+    if (!ALLOWED.includes(file.type)) {
+      toast.error("Only JPEG, PNG, WebP, or GIF images are allowed");
+      return;
+    }
     if (file.size > 5 * 1024 * 1024) {
       toast.error("Photo must be smaller than 5 MB");
       return;
     }
     setUploading(true);
     try {
-      const ext = file.name.split(".").pop() || "jpg";
+      const ext = EXT_BY_MIME[file.type];
       const path = `${user.id}/${crypto.randomUUID()}.${ext}`;
-      const { error: upErr } = await supabase.storage.from("gallery").upload(path, file);
+      const { error: upErr } = await supabase.storage.from("gallery").upload(path, file, { contentType: file.type });
       if (upErr) throw upErr;
       const { error: dbErr } = await supabase.from("gallery_images").insert({
         user_id: user.id, storage_path: path, caption: caption || null,

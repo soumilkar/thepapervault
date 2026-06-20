@@ -61,9 +61,12 @@ function DiaryPage() {
     mutationFn: async () => {
       let imagePath: string | null = null;
       if (photo) {
-        const ext = photo.name.split(".").pop() || "jpg";
+        const ALLOWED: Record<string, string> = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif" };
+        if (!ALLOWED[photo.type]) throw new Error("Only JPEG, PNG, WebP, or GIF images are allowed");
+        if (photo.size > 5 * 1024 * 1024) throw new Error("Photo must be smaller than 5 MB");
+        const ext = ALLOWED[photo.type];
         imagePath = `${user.id}/${crypto.randomUUID()}.${ext}`;
-        const { error: upErr } = await supabase.storage.from("gallery").upload(imagePath, photo);
+        const { error: upErr } = await supabase.storage.from("gallery").upload(imagePath, photo, { contentType: photo.type });
         if (upErr) throw upErr;
         const { error: gErr } = await supabase.from("gallery_images").insert({
           user_id: user.id, storage_path: imagePath,
