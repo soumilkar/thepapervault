@@ -175,6 +175,7 @@ export type Database = {
           entry_date: string
           id: string
           image_path: string | null
+          iv: string | null
           mood: string | null
           title: string | null
           updated_at: string
@@ -187,6 +188,7 @@ export type Database = {
           entry_date?: string
           id?: string
           image_path?: string | null
+          iv?: string | null
           mood?: string | null
           title?: string | null
           updated_at?: string
@@ -199,6 +201,7 @@ export type Database = {
           entry_date?: string
           id?: string
           image_path?: string | null
+          iv?: string | null
           mood?: string | null
           title?: string | null
           updated_at?: string
@@ -210,22 +213,31 @@ export type Database = {
       gallery_images: {
         Row: {
           caption: string | null
+          caption_iv: string | null
           created_at: string
           id: string
+          iv: string | null
+          mime: string | null
           storage_path: string
           user_id: string
         }
         Insert: {
           caption?: string | null
+          caption_iv?: string | null
           created_at?: string
           id?: string
+          iv?: string | null
+          mime?: string | null
           storage_path: string
           user_id: string
         }
         Update: {
           caption?: string | null
+          caption_iv?: string | null
           created_at?: string
           id?: string
+          iv?: string | null
+          mime?: string | null
           storage_path?: string
           user_id?: string
         }
@@ -255,6 +267,33 @@ export type Database = {
           id?: string
           tour_completed?: boolean
           updated_at?: string
+        }
+        Relationships: []
+      }
+      vault_keys: {
+        Row: {
+          created_at: string
+          kdf_salt: string
+          updated_at: string
+          user_id: string
+          verifier: string
+          verifier_salt: string
+        }
+        Insert: {
+          created_at?: string
+          kdf_salt: string
+          updated_at?: string
+          user_id: string
+          verifier: string
+          verifier_salt: string
+        }
+        Update: {
+          created_at?: string
+          kdf_salt?: string
+          updated_at?: string
+          user_id?: string
+          verifier?: string
+          verifier_salt?: string
         }
         Relationships: []
       }
