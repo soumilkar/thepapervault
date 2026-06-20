@@ -40,11 +40,10 @@ function AuthedLayout() {
 
   return (
     <div className="min-h-screen w-full overflow-x-hidden">
-      <header className="sticky top-4 z-50 mx-4 mt-4 rounded-2xl border border-border/60 bg-card/80 shadow-lg backdrop-blur sm:mx-6 lg:mx-auto lg:max-w-6xl">
+      <header className="fixed top-4 left-4 right-4 z-50 rounded-2xl border border-border/60 bg-card/80 shadow-lg backdrop-blur sm:left-6 sm:right-6 lg:left-1/2 lg:right-auto lg:w-full lg:max-w-6xl lg:-translate-x-1/2">
         <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-3 sm:px-6 sm:py-4">
           <Link to="/app" className="flex min-w-0 items-center gap-2">
             <span className="truncate font-serif text-xl text-primary sm:text-2xl">The PaperVault</span>
-            <span className="hidden font-hand text-sepia text-lg sm:inline">·your story</span>
           </Link>
 
           {/* Desktop nav */}
