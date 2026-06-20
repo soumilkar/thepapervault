@@ -40,11 +40,10 @@ function AuthedLayout() {
 
   return (
     <div className="min-h-screen w-full overflow-x-hidden">
-      <header className="sticky top-4 z-50 mx-4 mt-4 rounded-2xl border border-border/60 bg-card/80 shadow-lg backdrop-blur sm:mx-6 lg:mx-auto lg:max-w-6xl">
+      <header className="fixed top-4 left-4 right-4 z-50 rounded-2xl border border-border/60 bg-card/80 shadow-lg backdrop-blur sm:left-6 sm:right-6 lg:left-1/2 lg:right-auto lg:w-full lg:max-w-6xl lg:-translate-x-1/2">
         <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-3 sm:px-6 sm:py-4">
           <Link to="/app" className="flex min-w-0 items-center gap-2">
             <span className="truncate font-serif text-xl text-primary sm:text-2xl">The PaperVault</span>
-            <span className="hidden font-hand text-sepia text-lg sm:inline">·your story</span>
           </Link>
 
           {/* Desktop nav */}
@@ -82,22 +81,7 @@ function AuthedLayout() {
           </div>
         </div>
       </header>
-      <main className="mx-auto max-w-6xl px-4 py-8 sm:px-6 sm:py-10"><Outlet /></main>
-      <footer className="mt-16 border-t border-border/60 bg-card/40">
-        <div className="mx-auto max-w-6xl px-4 py-8 text-center sm:px-6">
-          <p className="font-hand text-xl text-sepia">have an idea to make The PaperVault better?</p>
-          <p className="mt-2 break-words text-sm text-muted-foreground">
-            Send your thoughts, suggestions, or feature ideas to{" "}
-            <a href="mailto:soumil.karma@gmail.com" className="text-primary underline-offset-2 hover:underline">
-              soumil.karma@gmail.com
-            </a>
-          </p>
-          <div className="mt-4 flex flex-wrap justify-center gap-4 text-sm text-muted-foreground">
-            <Link to="/privacy" className="hover:text-primary">Privacy Policy</Link>
-            <Link to="/terms" className="hover:text-primary">Terms of Service</Link>
-          </div>
-        </div>
-      </footer>
+      <main className="mx-auto max-w-6xl px-4 pb-10 pt-28 sm:px-6 sm:pt-32"><Outlet /></main>
     </div>
   );
 }

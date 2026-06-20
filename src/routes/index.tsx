@@ -20,17 +20,18 @@ export const Route = createFileRoute("/")({
 function Landing() {
   return (
     <div className="min-h-screen">
-      <header className="sticky top-4 z-50 mx-4 mt-4 rounded-2xl border border-border/60 bg-card/80 shadow-lg backdrop-blur sm:mx-6 lg:mx-auto lg:max-w-6xl">
-        <div className="flex items-center gap-2">
-          <span className="font-serif text-2xl text-primary">The PaperVault</span>
-          <span className="font-hand text-sepia text-lg">·your story</span>
+      <header className="fixed top-4 left-4 right-4 z-50 rounded-2xl border border-border/60 bg-card/80 shadow-lg backdrop-blur sm:left-6 sm:right-6 lg:left-1/2 lg:right-auto lg:w-full lg:max-w-6xl lg:-translate-x-1/2">
+        <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-3 sm:px-6 sm:py-4">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="truncate font-serif text-xl text-primary sm:text-2xl">The PaperVault</span>
+          </div>
+          <Link to="/auth" className="ml-auto rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:opacity-90">
+            Sign in
+          </Link>
         </div>
-        <Link to="/auth" className="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:opacity-90">
-          Sign in
-        </Link>
       </header>
 
-      <section className="mx-auto max-w-3xl px-6 pt-16 pb-12 text-center">
+      <section className="mx-auto max-w-3xl px-6 pt-32 pb-12 text-center sm:pt-36">
         <p className="font-hand text-2xl text-sepia">welcome to your quiet corner</p>
         <h1 className="mt-3 font-serif text-6xl leading-tight text-primary md:text-7xl">
           A warm home for<br />the things you write.
