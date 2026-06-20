@@ -1,6 +1,8 @@
 import { createFileRoute, Outlet, redirect, Link, useRouter, useRouterState } from "@tanstack/react-router";
 import { supabase } from "@/integrations/supabase/client";
-import { BookOpen, Image as ImageIcon, PenLine, Sparkles, LogOut, Home, ChevronDown } from "lucide-react";
+import { BookOpen, Image as ImageIcon, PenLine, Sparkles, LogOut, Home, ChevronDown, Lock } from "lucide-react";
+import { VaultProvider, useVault } from "@/lib/vault";
+import { VaultGate } from "@/components/VaultGate";
 import {
   DropdownMenu,
   DropdownMenuContent,
