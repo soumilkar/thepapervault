@@ -31,6 +31,7 @@ const NAV: { to: string; icon: typeof Home; label: string; exact?: boolean }[] =
 
 function AuthedLayout() {
   const router = useRouter();
+  const { user } = Route.useRouteContext();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const current =
     NAV.find((n) => (n.exact ? pathname === n.to : pathname.startsWith(n.to))) ?? NAV[0];
@@ -41,50 +42,78 @@ function AuthedLayout() {
   };
 
   return (
-    <div className="min-h-screen w-full overflow-x-hidden">
-      <header className="fixed top-4 left-4 right-4 z-50 rounded-2xl border border-border/60 bg-card/80 shadow-lg backdrop-blur sm:left-6 sm:right-6 lg:left-1/2 lg:right-auto lg:w-full lg:max-w-6xl lg:-translate-x-1/2">
-        <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-3 sm:px-6 sm:py-4">
-          <Link to="/app" className="flex min-w-0 items-center gap-2">
-            <span className="truncate font-serif text-xl text-primary sm:text-2xl">The PaperVault</span>
-          </Link>
+    <VaultProvider userId={user.id}>
+      <div className="min-h-screen w-full overflow-x-hidden">
+        <header className="fixed top-4 left-4 right-4 z-50 rounded-2xl border border-border/60 bg-card/80 shadow-lg backdrop-blur sm:left-6 sm:right-6 lg:left-1/2 lg:right-auto lg:w-full lg:max-w-6xl lg:-translate-x-1/2">
+          <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-3 sm:px-6 sm:py-4">
+            <Link to="/app" className="flex min-w-0 items-center gap-2">
+              <span className="truncate font-serif text-xl text-primary sm:text-2xl">The PaperVault</span>
+            </Link>
 
-          {/* Desktop nav */}
-          <nav className="hidden items-center gap-1 text-sm md:flex">
-            {NAV.map((n) => (
-              <NavLink key={n.to} to={n.to} exact={n.exact} icon={<n.icon className="size-4" />} label={n.label} />
-            ))}
-            <button onClick={handleSignOut} className="ml-2 flex items-center gap-1.5 rounded-md px-3 py-2 text-muted-foreground hover:text-primary">
-              <LogOut className="size-4" /> Sign out
-            </button>
-          </nav>
+            {/* Desktop nav */}
+            <nav className="hidden items-center gap-1 text-sm md:flex">
+              {NAV.map((n) => (
+                <NavLink key={n.to} to={n.to} exact={n.exact} icon={<n.icon className="size-4" />} label={n.label} />
+              ))}
+              <VaultLockButton />
+              <button onClick={handleSignOut} className="ml-2 flex items-center gap-1.5 rounded-md px-3 py-2 text-muted-foreground hover:text-primary">
+                <LogOut className="size-4" /> Sign out
+              </button>
+            </nav>
 
-          {/* Mobile dropdown */}
-          <div className="md:hidden">
-            <DropdownMenu>
-              <DropdownMenuTrigger className="flex items-center gap-1.5 rounded-md border border-border bg-card px-3 py-2 text-sm text-primary">
-                <current.icon className="size-4" />
-                <span>{current.label}</span>
-                <ChevronDown className="size-4 opacity-70" />
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-48">
-                {NAV.map((n) => (
-                  <DropdownMenuItem key={n.to} asChild>
-                    <Link to={n.to} className="flex w-full items-center gap-2">
-                      <n.icon className="size-4" /> {n.label}
-                    </Link>
+            {/* Mobile dropdown */}
+            <div className="md:hidden">
+              <DropdownMenu>
+                <DropdownMenuTrigger className="flex items-center gap-1.5 rounded-md border border-border bg-card px-3 py-2 text-sm text-primary">
+                  <current.icon className="size-4" />
+                  <span>{current.label}</span>
+                  <ChevronDown className="size-4 opacity-70" />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-48">
+                  {NAV.map((n) => (
+                    <DropdownMenuItem key={n.to} asChild>
+                      <Link to={n.to} className="flex w-full items-center gap-2">
+                        <n.icon className="size-4" /> {n.label}
+                      </Link>
+                    </DropdownMenuItem>
+                  ))}
+                  <DropdownMenuSeparator />
+                  <VaultLockMenuItem />
+                  <DropdownMenuItem onClick={handleSignOut} className="text-muted-foreground">
+                    <LogOut className="size-4" /> Sign out
                   </DropdownMenuItem>
-                ))}
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={handleSignOut} className="text-muted-foreground">
-                  <LogOut className="size-4" /> Sign out
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
           </div>
-        </div>
-      </header>
-      <main className="mx-auto max-w-6xl px-4 pb-10 pt-28 sm:px-6 sm:pt-32"><Outlet /></main>
-    </div>
+        </header>
+        <main className="mx-auto max-w-6xl px-4 pb-10 pt-28 sm:px-6 sm:pt-32">
+          <VaultGate userId={user.id}>
+            <Outlet />
+          </VaultGate>
+        </main>
+      </div>
+    </VaultProvider>
+  );
+}
+
+function VaultLockButton() {
+  const { status, lock } = useVault();
+  if (status !== "unlocked") return null;
+  return (
+    <button onClick={lock} title="Lock vault" className="ml-1 flex items-center gap-1.5 rounded-md px-3 py-2 text-muted-foreground hover:text-primary">
+      <Lock className="size-4" /> Lock
+    </button>
+  );
+}
+
+function VaultLockMenuItem() {
+  const { status, lock } = useVault();
+  if (status !== "unlocked") return null;
+  return (
+    <DropdownMenuItem onClick={lock} className="text-muted-foreground">
+      <Lock className="size-4" /> Lock vault
+    </DropdownMenuItem>
   );
 }
 
