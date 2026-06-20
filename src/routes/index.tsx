@@ -31,7 +31,7 @@ function Landing() {
         </div>
       </header>
 
-      <section className="mx-auto max-w-3xl px-6 pt-16 pb-12 text-center">
+      <section className="mx-auto max-w-3xl px-6 pt-32 pb-12 text-center sm:pt-36">
         <p className="font-hand text-2xl text-sepia">welcome to your quiet corner</p>
         <h1 className="mt-3 font-serif text-6xl leading-tight text-primary md:text-7xl">
           A warm home for<br />the things you write.
