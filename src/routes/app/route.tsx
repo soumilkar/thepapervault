@@ -1,6 +1,6 @@
 import { createFileRoute, Outlet, redirect, Link, useRouter, useRouterState } from "@tanstack/react-router";
 import { supabase } from "@/integrations/supabase/client";
-import { BookOpen, Image as ImageIcon, PenLine, Sparkles, LogOut, Home, ChevronDown, Lock } from "lucide-react";
+import { BookOpen, Image as ImageIcon, PenLine, Sparkles, LogOut, Home, ChevronDown, Lock, StickyNote, Globe } from "lucide-react";
 import { VaultProvider, useVault } from "@/lib/vault";
 import { VaultGate } from "@/components/VaultGate";
 import {
@@ -24,7 +24,9 @@ export const Route = createFileRoute("/app")({
 const NAV: { to: string; icon: typeof Home; label: string; exact?: boolean }[] = [
   { to: "/app", icon: Home, label: "Home", exact: true },
   { to: "/app/diary", icon: PenLine, label: "Diary" },
+  { to: "/app/notes", icon: StickyNote, label: "Notes" },
   { to: "/app/blog", icon: BookOpen, label: "Blog" },
+  { to: "/app/feed", icon: Globe, label: "Feed" },
   { to: "/app/gallery", icon: ImageIcon, label: "Gallery" },
   { to: "/app/chat", icon: Sparkles, label: "Companion" },
 ];
@@ -50,8 +52,7 @@ function AuthedLayout() {
               <span className="truncate font-serif text-xl text-primary sm:text-2xl">The PaperVault</span>
             </Link>
 
-            {/* Desktop nav */}
-            <nav className="hidden items-center gap-1 text-sm md:flex">
+            <nav className="hidden items-center gap-1 text-sm lg:flex">
               {NAV.map((n) => (
                 <NavLink key={n.to} to={n.to} exact={n.exact} icon={<n.icon className="size-4" />} label={n.label} />
               ))}
@@ -61,8 +62,7 @@ function AuthedLayout() {
               </button>
             </nav>
 
-            {/* Mobile dropdown */}
-            <div className="md:hidden">
+            <div className="lg:hidden">
               <DropdownMenu>
                 <DropdownMenuTrigger className="flex items-center gap-1.5 rounded-md border border-border bg-card px-3 py-2 text-sm text-primary">
                   <current.icon className="size-4" />
@@ -101,7 +101,7 @@ function VaultLockButton() {
   const { status, lock } = useVault();
   if (status !== "unlocked") return null;
   return (
-    <button onClick={lock} title="Lock vault" className="ml-1 flex items-center gap-1.5 rounded-md px-3 py-2 text-muted-foreground hover:text-primary">
+    <button onClick={lock} title="Lock" className="ml-1 flex items-center gap-1.5 rounded-md px-3 py-2 text-muted-foreground hover:text-primary">
       <Lock className="size-4" /> Lock
     </button>
   );
@@ -112,7 +112,7 @@ function VaultLockMenuItem() {
   if (status !== "unlocked") return null;
   return (
     <DropdownMenuItem onClick={lock} className="text-muted-foreground">
-      <Lock className="size-4" /> Lock vault
+      <Lock className="size-4" /> Lock
     </DropdownMenuItem>
   );
 }

@@ -13,7 +13,7 @@ export function VaultGate({ userId, children }: { userId: string; children: Reac
   if (status === "loading") {
     return (
       <div className="flex min-h-[40vh] items-center justify-center">
-        <p className="font-hand text-sepia text-lg">unlocking your vault...</p>
+        <p className="font-hand text-sepia text-lg">one moment...</p>
       </div>
     );
   }
@@ -27,16 +27,15 @@ export function VaultGate({ userId, children }: { userId: string; children: Reac
       if (status === "needs_setup") {
         if (passphrase !== confirm) throw new Error("Passphrases don't match");
         await setup(passphrase);
-        toast.success("Vault created");
+        toast.success("Welcome in");
       } else {
         await unlock(passphrase);
-        toast.success("Vault unlocked");
+        toast.success("Welcome back");
       }
-      // Encrypt any pre-existing plaintext rows now that we have the key.
       try { await runVaultMigration(userId); } catch (err) { console.error("vault migration", err); }
       setPassphrase(""); setConfirm("");
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "Could not unlock vault");
+      toast.error(err instanceof Error ? err.message : "Could not unlock");
     } finally {
       setBusy(false);
     }
@@ -48,16 +47,16 @@ export function VaultGate({ userId, children }: { userId: string; children: Reac
         <div className="flex items-center gap-2 text-accent">
           {status === "needs_setup" ? <ShieldCheck className="size-5" /> : <Lock className="size-5" />}
           <p className="font-hand text-2xl text-sepia">
-            {status === "needs_setup" ? "create your private vault" : "unlock your vault"}
+            {status === "needs_setup" ? "create your passphrase" : "enter your passphrase"}
           </p>
         </div>
         <h2 className="font-serif text-2xl text-primary">
-          {status === "needs_setup" ? "Pick a passphrase" : "Enter your passphrase"}
+          {status === "needs_setup" ? "Pick a passphrase" : "Welcome back"}
         </h2>
         <p className="text-sm text-muted-foreground">
-          Your diary entries and gallery photos are encrypted in this browser before they ever leave it.
-          The PaperVault team cannot read them and cannot recover this passphrase.{" "}
-          {status === "needs_setup" && "Choose something you'll remember."}
+          {status === "needs_setup"
+            ? "Choose a passphrase you'll remember. It protects your private diary and gallery."
+            : "Enter the passphrase you set for your private diary and gallery."}
         </p>
 
         <label className="block">
@@ -83,14 +82,8 @@ export function VaultGate({ userId, children }: { userId: string; children: Reac
 
         <button type="submit" disabled={busy}
           className="w-full rounded-md bg-primary px-4 py-2.5 text-primary-foreground hover:opacity-90 disabled:opacity-60">
-          {busy ? "Working..." : status === "needs_setup" ? "Create vault" : "Unlock"}
+          {busy ? "Working..." : status === "needs_setup" ? "Continue" : "Unlock"}
         </button>
-
-        {status === "needs_setup" && (
-          <p className="text-xs text-muted-foreground">
-            If you forget this passphrase, your encrypted entries cannot be recovered — by anyone.
-          </p>
-        )}
       </form>
     </div>
   );

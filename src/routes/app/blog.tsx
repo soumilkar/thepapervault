@@ -1,21 +1,41 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import {
   Trash2, Pencil, X, Check, BookOpen, Users, Heart, MessageCircle,
-  Bell, BellOff, ArrowUp, ArrowDown, CornerDownRight, Download,
+  Bell, BellOff, ArrowUp, ArrowDown, CornerDownRight, Download, ImagePlus,
 } from "lucide-react";
 import { MusicSearch, MusicPlayer, type SelectedTrack } from "@/components/MusicSearch";
 import { Markdown } from "@/components/Markdown";
 import { downloadTextFile } from "@/lib/download";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 
 export const Route = createFileRoute("/app/blog")({
   component: BlogPage,
 });
 
 type Tab = "mine" | "community";
+
+const MEDIA_BUCKET = "media";
+
+async function uploadMedia(userId: string, file: File): Promise<string> {
+  const ALLOWED: Record<string, string> = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif" };
+  const ext = ALLOWED[file.type];
+  if (!ext) throw new Error("Only JPEG, PNG, WebP, or GIF images are allowed");
+  if (file.size > 5 * 1024 * 1024) throw new Error("Image must be smaller than 5 MB");
+  const path = `${userId}/${crypto.randomUUID()}.${ext}`;
+  const { error } = await supabase.storage.from(MEDIA_BUCKET).upload(path, file, { contentType: file.type });
+  if (error) throw error;
+  return path;
+}
+
+async function getMediaUrl(path: string | null): Promise<string | null> {
+  if (!path) return null;
+  const { data } = await supabase.storage.from(MEDIA_BUCKET).createSignedUrl(path, 60 * 60);
+  return data?.signedUrl ?? null;
+}
 
 function BlogPage() {
   const { user } = Route.useRouteContext();
@@ -24,9 +44,18 @@ function BlogPage() {
   const [content, setContent] = useState("");
   const [tags, setTags] = useState("");
   const [music, setMusic] = useState<SelectedTrack | null>(null);
+  const [image, setImage] = useState<File | null>(null);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [notify, setNotify] = useState(true);
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<Tab>("mine");
+
+  useEffect(() => {
+    if (!image) { setImagePreview(null); return; }
+    const url = URL.createObjectURL(image);
+    setImagePreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [image]);
 
   const mine = useQuery({
     queryKey: ["blog", "mine", user.id],
@@ -58,10 +87,13 @@ function BlogPage() {
   const create = useMutation({
     mutationFn: async () => {
       const tagArr = tags.split(",").map((t) => t.trim()).filter(Boolean);
+      let imagePath: string | null = null;
+      if (image) imagePath = await uploadMedia(user.id, image);
       const { error } = await supabase.from("blog_posts").insert({
         user_id: user.id, title, content,
         tags: tagArr.length ? tagArr : null,
         notify_on_comment: notify,
+        image_url: imagePath,
         music_track_id: music?.music_track_id ?? null,
         music_track_name: music?.music_track_name ?? null,
         music_artist: music?.music_artist ?? null,
@@ -71,7 +103,7 @@ function BlogPage() {
       if (error) throw error;
     },
     onSuccess: () => {
-      setTitle(""); setContent(""); setTags(""); setMusic(null); setNotify(true); setOpen(false);
+      setTitle(""); setContent(""); setTags(""); setMusic(null); setImage(null); setNotify(true); setOpen(false);
       toast.success("Blog published");
       qc.invalidateQueries({ queryKey: ["blog"] });
       qc.invalidateQueries({ queryKey: ["dashboard-counts"] });
@@ -91,11 +123,14 @@ function BlogPage() {
   });
 
   const update = useMutation({
-    mutationFn: async (vars: { id: string; title: string; content: string; tags: string }) => {
+    mutationFn: async (vars: { id: string; title: string; content: string; tags: string; newImage?: File | null; clearImage?: boolean }) => {
       const tagArr = vars.tags.split(",").map((t) => t.trim()).filter(Boolean);
-      const { error } = await supabase.from("blog_posts")
-        .update({ title: vars.title, content: vars.content, tags: tagArr.length ? tagArr : null })
-        .eq("id", vars.id);
+      const patch: Record<string, unknown> = {
+        title: vars.title, content: vars.content, tags: tagArr.length ? tagArr : null,
+      };
+      if (vars.newImage) patch.image_url = await uploadMedia(user.id, vars.newImage);
+      else if (vars.clearImage) patch.image_url = null;
+      const { error } = await supabase.from("blog_posts").update(patch as never).eq("id", vars.id);
       if (error) throw error;
     },
     onSuccess: () => {
@@ -150,6 +185,30 @@ function BlogPage() {
             rows={12} required
             className="w-full resize-none bg-transparent leading-relaxed outline-none placeholder:text-muted-foreground/60"
           />
+          {imagePreview && (
+            <div className="relative inline-block">
+              <img src={imagePreview} alt="preview" className="max-h-56 rounded-md border border-border" />
+              <button type="button" onClick={() => setImage(null)}
+                className="absolute -right-2 -top-2 rounded-full bg-background p-1 shadow">
+                <X className="size-4" />
+              </button>
+            </div>
+          )}
+          <div className="flex flex-wrap gap-4">
+            <label className="flex cursor-pointer items-center gap-2 text-sm text-accent hover:text-primary">
+              <ImagePlus className="size-4" />
+              <span>{image ? "Change image" : "Attach an image"}</span>
+              <input type="file" accept="image/*" className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) {
+                    if (f.size > 5 * 1024 * 1024) toast.error("Image must be smaller than 5 MB");
+                    else setImage(f);
+                  }
+                  e.currentTarget.value = "";
+                }} />
+            </label>
+          </div>
           <MusicSearch selected={music} onChange={setMusic} />
           <label className="flex cursor-pointer items-center gap-2 text-sm text-muted-foreground">
             <input type="checkbox" checked={notify} onChange={(e) => setNotify(e.target.checked)} className="size-4 accent-primary" />
@@ -210,24 +269,43 @@ function TabBtn({ active, onClick, icon, label }: { active: boolean; onClick: ()
   );
 }
 
+function BlogImage({ path }: { path: string }) {
+  const [src, setSrc] = useState<string | null>(null);
+  useEffect(() => { let cancelled = false; getMediaUrl(path).then((u) => { if (!cancelled) setSrc(u); }); return () => { cancelled = true; }; }, [path]);
+  if (!src) return null;
+  return <img src={src} alt="" loading="lazy" className="mt-4 max-h-[28rem] w-full rounded-md border border-border object-contain" />;
+}
+
 function BlogCard({
   post: p, isOwner, author, currentUserId, onDelete, onSave,
 }: {
   post: any; isOwner: boolean; author?: string; currentUserId: string;
   onDelete?: () => void;
-  onSave?: (vals: { title: string; content: string; tags: string }) => void;
+  onSave?: (vals: { title: string; content: string; tags: string; newImage?: File | null; clearImage?: boolean }) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [eTitle, setETitle] = useState(p.title);
   const [eContent, setEContent] = useState(p.content);
   const [eTags, setETags] = useState((p.tags ?? []).join(", "));
+  const [eImage, setEImage] = useState<File | null>(null);
+  const [eImagePreview, setEImagePreview] = useState<string | null>(null);
+  const [eClearImage, setEClearImage] = useState(false);
   const [showComments, setShowComments] = useState(false);
+  const [confirmDel, setConfirmDel] = useState(false);
+
+  useEffect(() => {
+    if (!eImage) { setEImagePreview(null); return; }
+    const url = URL.createObjectURL(eImage);
+    setEImagePreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [eImage]);
 
   const preview = p.content.length > 220 ? p.content.slice(0, 220).trimEnd() + "…" : p.content;
 
   const startEdit = () => {
     setETitle(p.title); setEContent(p.content); setETags((p.tags ?? []).join(", "));
+    setEImage(null); setEClearImage(false);
     setEditing(true); setOpen(true);
   };
 
@@ -240,12 +318,36 @@ function BlogCard({
           className="w-full bg-transparent text-sm text-accent outline-none" />
         <textarea value={eContent} onChange={(e) => setEContent(e.target.value)} rows={10}
           className="w-full resize-none bg-transparent leading-relaxed outline-none" />
+
+        {eImagePreview ? (
+          <div className="relative inline-block">
+            <img src={eImagePreview} className="max-h-48 rounded-md border border-border" alt="" />
+            <button type="button" onClick={() => setEImage(null)} className="absolute -right-2 -top-2 rounded-full bg-background p-1 shadow"><X className="size-4" /></button>
+          </div>
+        ) : p.image_url && !eClearImage ? (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <span>Current image kept.</span>
+            <button type="button" onClick={() => setEClearImage(true)} className="text-destructive hover:underline">Remove</button>
+          </div>
+        ) : null}
+
+        <label className="flex cursor-pointer items-center gap-2 text-sm text-accent hover:text-primary">
+          <ImagePlus className="size-4" />
+          <span>{eImage ? "Change image" : (p.image_url && !eClearImage ? "Replace image" : "Attach image")}</span>
+          <input type="file" accept="image/*" className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) { if (f.size > 5 * 1024 * 1024) toast.error("Image must be smaller than 5 MB"); else { setEImage(f); setEClearImage(false); } }
+              e.currentTarget.value = "";
+            }} />
+        </label>
+
         <div className="flex justify-end gap-2">
           <button onClick={() => setEditing(false)} className="flex items-center gap-1 rounded-md border border-border px-3 py-1.5 text-sm">
             <X className="size-4" /> Cancel
           </button>
           <button
-            onClick={() => { onSave?.({ title: eTitle, content: eContent, tags: eTags }); setEditing(false); }}
+            onClick={() => { onSave?.({ title: eTitle, content: eContent, tags: eTags, newImage: eImage, clearImage: eClearImage }); setEditing(false); }}
             className="flex items-center gap-1 rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground"
           >
             <Check className="size-4" /> Save
@@ -268,7 +370,7 @@ function BlogCard({
               <button onClick={startEdit} className="text-muted-foreground hover:text-primary" aria-label="Edit">
                 <Pencil className="size-4" />
               </button>
-              <button onClick={onDelete} className="text-muted-foreground hover:text-destructive" aria-label="Delete">
+              <button onClick={() => setConfirmDel(true)} className="text-muted-foreground hover:text-destructive" aria-label="Delete">
                 <Trash2 className="size-4" />
               </button>
             </>
@@ -284,6 +386,7 @@ function BlogCard({
       <div className="mt-3">
         {open ? <Markdown>{p.content}</Markdown> : <p className="whitespace-pre-wrap leading-relaxed">{preview}</p>}
       </div>
+      {open && p.image_url && <BlogImage path={p.image_url} />}
       {p.content.length > 220 && (
         <button onClick={() => setOpen((o) => !o)} className="mt-2 text-sm text-accent hover:text-primary">
           {open ? "Show less" : "Read more"}
@@ -299,6 +402,14 @@ function BlogCard({
       </div>
 
       {showComments && <Comments postId={p.id} postAuthorId={p.user_id} currentUserId={currentUserId} />}
+
+      <ConfirmDialog
+        open={confirmDel} onOpenChange={setConfirmDel}
+        title="Delete this blog post?"
+        description="This can't be undone. Comments and likes on it will also be removed."
+        confirmText="Delete post"
+        onConfirm={() => { onDelete?.(); setConfirmDel(false); }}
+      />
     </article>
   );
 }
@@ -347,6 +458,7 @@ type CommentNode = {
   user_id: string;
   content: string;
   created_at: string;
+  updated_at?: string;
   parent_id: string | null;
   author: string;
   children: CommentNode[];
@@ -395,6 +507,15 @@ function Comments({ postId, postAuthorId, currentUserId }: { postId: string; pos
     onError: (e: Error) => toast.error(e.message),
   });
 
+  const edit = useMutation({
+    mutationFn: async (vars: { id: string; content: string }) => {
+      const { error } = await supabase.from("blog_comments").update({ content: vars.content.trim() }).eq("id", vars.id);
+      if (error) throw error;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["comments", postId] }),
+    onError: (e: Error) => toast.error(e.message),
+  });
+
   const del = useMutation({
     mutationFn: async (id: string) => {
       const { error } = await supabase.from("blog_comments").delete().eq("id", id);
@@ -409,6 +530,7 @@ function Comments({ postId, postAuthorId, currentUserId }: { postId: string; pos
       {tree.map((c) => (
         <CommentItem key={c.id} node={c} postAuthorId={postAuthorId} currentUserId={currentUserId} depth={0}
           onReply={(parentId, content) => add.mutate({ content, parent_id: parentId })}
+          onEdit={(id, content) => edit.mutate({ id, content })}
           onDelete={(id) => del.mutate(id)}
         />
       ))}
@@ -430,16 +552,22 @@ function Comments({ postId, postAuthorId, currentUserId }: { postId: string; pos
 }
 
 function CommentItem({
-  node: c, postAuthorId, currentUserId, depth, onReply, onDelete,
+  node: c, postAuthorId, currentUserId, depth, onReply, onEdit, onDelete,
 }: {
   node: CommentNode; postAuthorId: string; currentUserId: string; depth: number;
   onReply: (parentId: string, content: string) => void;
+  onEdit: (id: string, content: string) => void;
   onDelete: (id: string) => void;
 }) {
   const [replying, setReplying] = useState(false);
   const [replyText, setReplyText] = useState("");
+  const [editing, setEditing] = useState(false);
+  const [editText, setEditText] = useState(c.content);
+  const [confirmDel, setConfirmDel] = useState(false);
   const isAuthor = c.user_id === postAuthorId;
+  const isMine = c.user_id === currentUserId;
   const indent = Math.min(depth, 4) * 16;
+  const edited = c.updated_at && c.updated_at !== c.created_at;
 
   return (
     <div style={{ marginLeft: indent }} className="rounded-md bg-secondary/40 p-2.5">
@@ -447,17 +575,40 @@ function CommentItem({
         <p className="text-xs font-medium text-primary">
           {c.author}
           {isAuthor && <span className="text-accent">/Author</span>}
-          <span className="ml-2 font-normal text-muted-foreground">{new Date(c.created_at).toLocaleDateString()}</span>
+          <span className="ml-2 font-normal text-muted-foreground">
+            {new Date(c.created_at).toLocaleDateString()}{edited && " · edited"}
+          </span>
         </p>
-        {c.user_id === currentUserId && (
-          <button onClick={() => onDelete(c.id)} className="text-muted-foreground hover:text-destructive" aria-label="Delete comment">
-            <Trash2 className="size-3.5" />
-          </button>
+        {isMine && !editing && (
+          <div className="flex items-center gap-2">
+            <button onClick={() => { setEditText(c.content); setEditing(true); }} className="text-muted-foreground hover:text-primary" aria-label="Edit comment">
+              <Pencil className="size-3.5" />
+            </button>
+            <button onClick={() => setConfirmDel(true)} className="text-muted-foreground hover:text-destructive" aria-label="Delete comment">
+              <Trash2 className="size-3.5" />
+            </button>
+          </div>
         )}
       </div>
-      <div className="mt-1 text-sm">
-        <Markdown>{c.content}</Markdown>
-      </div>
+      {editing ? (
+        <form
+          onSubmit={(e) => { e.preventDefault(); if (editText.trim()) { onEdit(c.id, editText); setEditing(false); } }}
+          className="mt-1 space-y-2"
+        >
+          <textarea
+            value={editText} onChange={(e) => setEditText(e.target.value)} rows={2}
+            className="w-full resize-none rounded-md border border-input bg-card px-2 py-1 text-sm outline-none focus:border-ring"
+          />
+          <div className="flex justify-end gap-2">
+            <button type="button" onClick={() => setEditing(false)} className="rounded-md border border-border px-2.5 py-1 text-xs">Cancel</button>
+            <button type="submit" className="rounded-md bg-primary px-2.5 py-1 text-xs text-primary-foreground">Save</button>
+          </div>
+        </form>
+      ) : (
+        <div className="mt-1 text-sm">
+          <Markdown>{c.content}</Markdown>
+        </div>
+      )}
       <div className="mt-1.5 flex items-center gap-3">
         <CommentVotes commentId={c.id} currentUserId={currentUserId} />
         <button onClick={() => setReplying((r) => !r)} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-primary">
@@ -486,10 +637,16 @@ function CommentItem({
         <div className="mt-2 space-y-2">
           {c.children.map((child) => (
             <CommentItem key={child.id} node={child} postAuthorId={postAuthorId} currentUserId={currentUserId} depth={depth + 1}
-              onReply={onReply} onDelete={onDelete} />
+              onReply={onReply} onEdit={onEdit} onDelete={onDelete} />
           ))}
         </div>
       )}
+      <ConfirmDialog
+        open={confirmDel} onOpenChange={setConfirmDel}
+        title="Delete this comment?" description="This can't be undone."
+        confirmText="Delete"
+        onConfirm={() => { onDelete(c.id); setConfirmDel(false); }}
+      />
     </div>
   );
 }
