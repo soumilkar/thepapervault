@@ -130,7 +130,7 @@ function BlogPage() {
       };
       if (vars.newImage) patch.image_url = await uploadMedia(user.id, vars.newImage);
       else if (vars.clearImage) patch.image_url = null;
-      const { error } = await supabase.from("blog_posts").update(patch).eq("id", vars.id);
+      const { error } = await supabase.from("blog_posts").update(patch as never).eq("id", vars.id);
       if (error) throw error;
     },
     onSuccess: () => {
