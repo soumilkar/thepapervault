@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { useState } from "react";
-import { Sparkles, Send, Lock } from "lucide-react";
+import { Sparkles, Send } from "lucide-react";
 import { toast } from "sonner";
 import { askCompanion } from "@/lib/companion.functions";
 import { Markdown } from "@/components/Markdown";
@@ -9,12 +9,12 @@ import { supabase } from "@/integrations/supabase/client";
 import { useVault } from "@/lib/vault";
 import { decryptText } from "@/lib/crypto";
 
-
 export const Route = createFileRoute("/app/chat")({
   component: ChatPage,
 });
 
 type Msg = { role: "user" | "assistant"; content: string };
+type Source = "both" | "diary" | "blog";
 
 const PROMPTS = [
   "What recurring themes appear in my recent diary entries?",
@@ -23,36 +23,60 @@ const PROMPTS = [
   "What do I seem most grateful for?",
 ];
 
-async function buildContext(userId: string, key: CryptoKey): Promise<string> {
+function isoDay(d: Date) { return d.toISOString().slice(0, 10); }
+
+async function buildContext(
+  userId: string,
+  key: CryptoKey | null,
+  source: Source,
+  startDate: string,
+  endDate: string,
+): Promise<string> {
   type DiaryRow = { content: string; iv: string | null; entry_date: string };
   type BlogRow = { title: string; content: string; tags: string[] | null; created_at: string };
+  const startIso = new Date(startDate).toISOString();
+  const endIso = new Date(new Date(endDate).getTime() + 24 * 3600 * 1000 - 1).toISOString();
+
+  const wantsDiary = source !== "blog";
+  const wantsBlog = source !== "diary";
+
   const [diary, blog] = await Promise.all([
-    supabase.from("diary_entries").select("content,iv,entry_date" as never)
-      .eq("user_id", userId).order("entry_date", { ascending: false }).limit(50),
-    supabase.from("blog_posts").select("title,content,tags,created_at")
-      .eq("user_id", userId).order("created_at", { ascending: false }).limit(30),
+    wantsDiary
+      ? supabase.from("diary_entries").select("content,iv,entry_date" as never)
+          .eq("user_id", userId).gte("entry_date", startDate).lte("entry_date", endDate)
+          .order("entry_date", { ascending: false }).limit(100)
+      : Promise.resolve({ data: [] as unknown as DiaryRow[] }),
+    wantsBlog
+      ? supabase.from("blog_posts").select("title,content,tags,created_at")
+          .eq("user_id", userId).gte("created_at", startIso).lte("created_at", endIso)
+          .order("created_at", { ascending: false }).limit(60)
+      : Promise.resolve({ data: [] as unknown as BlogRow[] }),
   ]);
+
   const diaryRows = (diary.data ?? []) as unknown as DiaryRow[];
   const blogRows = (blog.data ?? []) as unknown as BlogRow[];
 
   const diaryDecoded: string[] = [];
   for (const row of diaryRows) {
-    if (row.iv) {
+    if (row.iv && key) {
       try {
         const plain = await decryptText(key, row.content, row.iv);
         const obj = JSON.parse(plain) as { t?: string; c?: string; m?: string };
         diaryDecoded.push(`[${row.entry_date}${obj.m ? ` · ${obj.m}` : ""}] ${obj.t || "Untitled"}\n${obj.c ?? ""}`);
       } catch { /* skip */ }
-    } else {
+    } else if (!row.iv) {
       diaryDecoded.push(`[${row.entry_date}] ${row.content}`);
     }
   }
-  const diaryText = diaryDecoded.join("\n\n---\n\n") || "(no diary entries)";
-  const blogText = blogRows.map((b) =>
-    `# ${b.title}${b.tags?.length ? ` (${b.tags.join(", ")})` : ""}\n${b.content}`
-  ).join("\n\n---\n\n") || "(no blog posts)";
+  const diaryText = wantsDiary ? (diaryDecoded.join("\n\n---\n\n") || "(no diary entries in this range)") : "";
+  const blogText = wantsBlog
+    ? (blogRows.map((b) => `# ${b.title}${b.tags?.length ? ` (${b.tags.join(", ")})` : ""}\n${b.content}`).join("\n\n---\n\n") || "(no blog posts in this range)")
+    : "";
 
-  return `=== DIARY ENTRIES ===\n${diaryText}\n\n=== BLOG POSTS ===\n${blogText}`;
+  const parts: string[] = [];
+  if (wantsDiary) parts.push(`=== DIARY ENTRIES (${startDate} → ${endDate}) ===\n${diaryText}`);
+  if (wantsBlog) parts.push(`=== BLOG POSTS (${startDate} → ${endDate}) ===\n${blogText}`);
+  return parts.join("\n\n");
 }
 
 function ChatPage() {
@@ -63,14 +87,19 @@ function ChatPage() {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
 
+  const today = new Date();
+  const monthAgo = new Date(today.getTime() - 30 * 24 * 3600 * 1000);
+  const [source, setSource] = useState<Source>("both");
+  const [startDate, setStartDate] = useState<string>(isoDay(monthAgo));
+  const [endDate, setEndDate] = useState<string>(isoDay(today));
+
   const send = async (question: string) => {
     if (!question.trim() || loading) return;
-    if (!key) { toast.error("Unlock your vault first"); return; }
     setMessages((m) => [...m, { role: "user", content: question }]);
     setInput("");
     setLoading(true);
     try {
-      const context = await buildContext(user.id, key);
+      const context = await buildContext(user.id, key, source, startDate, endDate);
       const name = user.user_metadata?.display_name || user.email?.split("@")[0] || "the writer";
       const res = await ask({ data: { question, context, name } });
       setMessages((m) => [...m, { role: "assistant", content: res.answer }]);
@@ -81,6 +110,12 @@ function ChatPage() {
     }
   };
 
+  const resetToDefault = () => {
+    setSource("both");
+    setStartDate(isoDay(monthAgo));
+    setEndDate(isoDay(today));
+  };
+
   return (
     <div className="space-y-6">
       <div>
@@ -88,9 +123,33 @@ function ChatPage() {
         <h1 className="font-serif text-4xl text-primary flex items-center gap-2">
           <Sparkles className="size-7 text-accent" /> Your companion
         </h1>
-        <p className="mt-2 flex items-center gap-1 text-sm text-muted-foreground">
-          <Lock className="size-3.5" /> Entries are decrypted in your browser and sent to the AI just for this answer. They aren't stored.
-        </p>
+      </div>
+
+      <div className="paper-card p-4 grid gap-3 sm:grid-cols-4">
+        <label className="text-sm">
+          <span className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">Source</span>
+          <select value={source} onChange={(e) => setSource(e.target.value as Source)}
+            className="w-full rounded-md border border-input bg-card px-2 py-1.5">
+            <option value="both">Diary + Blog</option>
+            <option value="diary">Diary only</option>
+            <option value="blog">Blog only</option>
+          </select>
+        </label>
+        <label className="text-sm">
+          <span className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">From</span>
+          <input type="date" value={startDate} max={endDate} onChange={(e) => setStartDate(e.target.value)}
+            className="w-full rounded-md border border-input bg-card px-2 py-1.5" />
+        </label>
+        <label className="text-sm">
+          <span className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">To</span>
+          <input type="date" value={endDate} min={startDate} onChange={(e) => setEndDate(e.target.value)}
+            className="w-full rounded-md border border-input bg-card px-2 py-1.5" />
+        </label>
+        <div className="flex items-end">
+          <button onClick={resetToDefault} className="w-full rounded-md border border-border bg-secondary/50 px-3 py-1.5 text-sm hover:bg-secondary">
+            Last 30 days
+          </button>
+        </div>
       </div>
 
       {messages.length === 0 && (
@@ -122,13 +181,12 @@ function ChatPage() {
           </div>
         ))}
         {loading && <p className="font-hand text-sepia">thinking...</p>}
-
       </div>
 
-      <div className="h-24" aria-hidden />
+      <div className="h-32" aria-hidden />
       <form
         onSubmit={(e) => { e.preventDefault(); send(input); }}
-        className="paper-card fixed bottom-4 left-4 right-4 z-30 mx-auto flex max-w-3xl items-center gap-2 p-2 shadow-lg"
+        className="glass-card fixed bottom-4 left-4 right-4 z-30 mx-auto flex max-w-3xl items-center gap-2 p-2"
       >
         <input
           value={input} onChange={(e) => setInput(e.target.value)}
