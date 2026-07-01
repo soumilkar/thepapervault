@@ -32,13 +32,13 @@
   --color-paper: var(--paper);
   --color-sepia: var(--sepia);
   --font-serif: var(--font-serif);
+  --font-body: var(--font-body);
   --font-hand: var(--font-hand);
 }
 
 :root {
   --radius: 0.5rem;
 
-  /* Warm journal palette */
   --paper: oklch(0.97 0.02 80);
   --ink: oklch(0.28 0.04 50);
   --sepia: oklch(0.55 0.10 55);
@@ -71,6 +71,7 @@
   --ring: oklch(0.55 0.10 55);
 
   --font-serif: "Cormorant Garamond", "Georgia", serif;
+  --font-body: "Lora", "Georgia", serif;
   --font-hand: "Caveat", "Bradley Hand", cursive;
 
   --shadow-paper: 0 1px 2px oklch(0.4 0.05 50 / 0.08), 0 8px 24px -8px oklch(0.4 0.05 50 / 0.12);
@@ -82,7 +83,7 @@
   html, body {
     background-color: var(--color-background);
     color: var(--color-foreground);
-    font-family: ui-sans-serif, system-ui, -apple-system, "Inter", sans-serif;
+    font-family: var(--font-body);
   }
 
   h1, h2, h3, h4 {
@@ -106,6 +107,17 @@
     border-radius: var(--radius);
     box-shadow: var(--shadow-paper);
   }
+  .glass-card {
+    background: color-mix(in oklch, var(--color-card) 55%, transparent);
+    border: 1px solid color-mix(in oklch, var(--color-border) 70%, transparent);
+    border-radius: calc(var(--radius) + 4px);
+    backdrop-filter: blur(14px) saturate(1.1);
+    -webkit-backdrop-filter: blur(14px) saturate(1.1);
+    box-shadow:
+      0 1px 0 rgba(255,255,255,0.4) inset,
+      0 10px 30px -10px oklch(0.4 0.05 50 / 0.2);
+  }
   .font-hand { font-family: var(--font-hand); }
   .font-serif { font-family: var(--font-serif); }
+  .font-body { font-family: var(--font-body); }
 }
