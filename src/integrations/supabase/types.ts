@@ -93,6 +93,7 @@ export type Database = {
           content: string
           created_at: string
           id: string
+          image_url: string | null
           music_artist: string | null
           music_artwork_url: string | null
           music_preview_url: string | null
@@ -108,6 +109,7 @@ export type Database = {
           content: string
           created_at?: string
           id?: string
+          image_url?: string | null
           music_artist?: string | null
           music_artwork_url?: string | null
           music_preview_url?: string | null
@@ -123,6 +125,7 @@ export type Database = {
           content?: string
           created_at?: string
           id?: string
+          image_url?: string | null
           music_artist?: string | null
           music_artwork_url?: string | null
           music_preview_url?: string | null
@@ -173,10 +176,17 @@ export type Database = {
           content: string
           created_at: string
           entry_date: string
+          folder_id: string | null
           id: string
           image_path: string | null
+          is_public: boolean
           iv: string | null
           mood: string | null
+          music_artist: string | null
+          music_artwork_url: string | null
+          music_preview_url: string | null
+          music_track_id: string | null
+          music_track_name: string | null
           title: string | null
           updated_at: string
           user_id: string
@@ -186,10 +196,17 @@ export type Database = {
           content: string
           created_at?: string
           entry_date?: string
+          folder_id?: string | null
           id?: string
           image_path?: string | null
+          is_public?: boolean
           iv?: string | null
           mood?: string | null
+          music_artist?: string | null
+          music_artwork_url?: string | null
+          music_preview_url?: string | null
+          music_track_id?: string | null
+          music_track_name?: string | null
           title?: string | null
           updated_at?: string
           user_id: string
@@ -199,14 +216,53 @@ export type Database = {
           content?: string
           created_at?: string
           entry_date?: string
+          folder_id?: string | null
           id?: string
           image_path?: string | null
+          is_public?: boolean
           iv?: string | null
           mood?: string | null
+          music_artist?: string | null
+          music_artwork_url?: string | null
+          music_preview_url?: string | null
+          music_track_id?: string | null
+          music_track_name?: string | null
           title?: string | null
           updated_at?: string
           user_id?: string
           visibility?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "diary_entries_folder_id_fkey"
+            columns: ["folder_id"]
+            isOneToOne: false
+            referencedRelation: "diary_folders"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      diary_folders: {
+        Row: {
+          created_at: string
+          id: string
+          name: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          name: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          name?: string
+          updated_at?: string
+          user_id?: string
         }
         Relationships: []
       }
@@ -242,6 +298,74 @@ export type Database = {
           user_id?: string
         }
         Relationships: []
+      }
+      note_folders: {
+        Row: {
+          created_at: string
+          id: string
+          name: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          name: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          name?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      notes: {
+        Row: {
+          content: string
+          created_at: string
+          folder_id: string | null
+          id: string
+          image_url: string | null
+          tags: string[] | null
+          title: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          content?: string
+          created_at?: string
+          folder_id?: string | null
+          id?: string
+          image_url?: string | null
+          tags?: string[] | null
+          title?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          content?: string
+          created_at?: string
+          folder_id?: string | null
+          id?: string
+          image_url?: string | null
+          tags?: string[] | null
+          title?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "notes_folder_id_fkey"
+            columns: ["folder_id"]
+            isOneToOne: false
+            referencedRelation: "note_folders"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       profiles: {
         Row: {
