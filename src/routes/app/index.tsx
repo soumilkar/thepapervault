@@ -1,7 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
-import { BookOpen, Image as ImageIcon, PenLine, Sparkles, Users, Lock } from "lucide-react";
+import { BookOpen, Image as ImageIcon, PenLine, Sparkles, Users } from "lucide-react";
 import { WelcomeTour } from "@/components/WelcomeTour";
 
 export const Route = createFileRoute("/app/")({
@@ -40,15 +40,12 @@ function Dashboard() {
         <div>
           <p className="font-hand text-2xl text-sepia">hello again</p>
           <h1 className="font-serif text-5xl text-primary">Welcome back, {name}.</h1>
-          <p className="mt-2 flex items-center gap-1 text-sm text-muted-foreground">
-            <Lock className="size-4 text-accent" /> Your diary and gallery are end-to-end encrypted. Only you can read them.
-          </p>
         </div>
         <div className="flex items-center gap-3 rounded-full border border-border bg-card/70 px-4 py-2 shadow-sm">
           <Users className="size-5 text-accent" />
           <div className="leading-tight">
             <div className="font-serif text-2xl text-primary">{totalUsers.data ?? "—"}</div>
-            <div className="text-[11px] uppercase tracking-wide text-muted-foreground">writers in the vault</div>
+            <div className="text-[11px] uppercase tracking-wide text-muted-foreground">writers here</div>
           </div>
         </div>
       </div>
