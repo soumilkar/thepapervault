@@ -17,7 +17,6 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as AppIndexRouteImport } from './routes/app/index'
 import { Route as AppNotesRouteImport } from './routes/app/notes'
 import { Route as AppGalleryRouteImport } from './routes/app/gallery'
-import { Route as AppFeedRouteImport } from './routes/app/feed'
 import { Route as AppDiaryRouteImport } from './routes/app/diary'
 import { Route as AppChatRouteImport } from './routes/app/chat'
 import { Route as AppBlogRouteImport } from './routes/app/blog'
@@ -62,11 +61,6 @@ const AppGalleryRoute = AppGalleryRouteImport.update({
   path: '/gallery',
   getParentRoute: () => AppRouteRoute,
 } as any)
-const AppFeedRoute = AppFeedRouteImport.update({
-  id: '/feed',
-  path: '/feed',
-  getParentRoute: () => AppRouteRoute,
-} as any)
 const AppDiaryRoute = AppDiaryRouteImport.update({
   id: '/diary',
   path: '/diary',
@@ -92,7 +86,6 @@ export interface FileRoutesByFullPath {
   '/app/blog': typeof AppBlogRoute
   '/app/chat': typeof AppChatRoute
   '/app/diary': typeof AppDiaryRoute
-  '/app/feed': typeof AppFeedRoute
   '/app/gallery': typeof AppGalleryRoute
   '/app/notes': typeof AppNotesRoute
   '/app/': typeof AppIndexRoute
@@ -105,7 +98,6 @@ export interface FileRoutesByTo {
   '/app/blog': typeof AppBlogRoute
   '/app/chat': typeof AppChatRoute
   '/app/diary': typeof AppDiaryRoute
-  '/app/feed': typeof AppFeedRoute
   '/app/gallery': typeof AppGalleryRoute
   '/app/notes': typeof AppNotesRoute
   '/app': typeof AppIndexRoute
@@ -120,7 +112,6 @@ export interface FileRoutesById {
   '/app/blog': typeof AppBlogRoute
   '/app/chat': typeof AppChatRoute
   '/app/diary': typeof AppDiaryRoute
-  '/app/feed': typeof AppFeedRoute
   '/app/gallery': typeof AppGalleryRoute
   '/app/notes': typeof AppNotesRoute
   '/app/': typeof AppIndexRoute
@@ -136,7 +127,6 @@ export interface FileRouteTypes {
     | '/app/blog'
     | '/app/chat'
     | '/app/diary'
-    | '/app/feed'
     | '/app/gallery'
     | '/app/notes'
     | '/app/'
@@ -149,7 +139,6 @@ export interface FileRouteTypes {
     | '/app/blog'
     | '/app/chat'
     | '/app/diary'
-    | '/app/feed'
     | '/app/gallery'
     | '/app/notes'
     | '/app'
@@ -163,7 +152,6 @@ export interface FileRouteTypes {
     | '/app/blog'
     | '/app/chat'
     | '/app/diary'
-    | '/app/feed'
     | '/app/gallery'
     | '/app/notes'
     | '/app/'
@@ -235,13 +223,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppGalleryRouteImport
       parentRoute: typeof AppRouteRoute
     }
-    '/app/feed': {
-      id: '/app/feed'
-      path: '/feed'
-      fullPath: '/app/feed'
-      preLoaderRoute: typeof AppFeedRouteImport
-      parentRoute: typeof AppRouteRoute
-    }
     '/app/diary': {
       id: '/app/diary'
       path: '/diary'
@@ -270,7 +251,6 @@ interface AppRouteRouteChildren {
   AppBlogRoute: typeof AppBlogRoute
   AppChatRoute: typeof AppChatRoute
   AppDiaryRoute: typeof AppDiaryRoute
-  AppFeedRoute: typeof AppFeedRoute
   AppGalleryRoute: typeof AppGalleryRoute
   AppNotesRoute: typeof AppNotesRoute
   AppIndexRoute: typeof AppIndexRoute
@@ -280,7 +260,6 @@ const AppRouteRouteChildren: AppRouteRouteChildren = {
   AppBlogRoute: AppBlogRoute,
   AppChatRoute: AppChatRoute,
   AppDiaryRoute: AppDiaryRoute,
-  AppFeedRoute: AppFeedRoute,
   AppGalleryRoute: AppGalleryRoute,
   AppNotesRoute: AppNotesRoute,
   AppIndexRoute: AppIndexRoute,
