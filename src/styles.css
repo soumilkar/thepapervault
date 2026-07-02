@@ -108,11 +108,10 @@
     box-shadow: var(--shadow-paper);
   }
   .glass-card {
-    background: color-mix(in oklch, var(--color-card) 55%, transparent);
+    background: color-mix(in oklch, var(--color-card) 40%, transparent);
     border: 1px solid color-mix(in oklch, var(--color-border) 70%, transparent);
     border-radius: calc(var(--radius) + 4px);
-    backdrop-filter: blur(14px) saturate(1.1);
-    -webkit-backdrop-filter: blur(14px) saturate(1.1);
+    backdrop-filter: blur(28px) saturate(1.4);
     box-shadow:
       0 1px 0 rgba(255,255,255,0.4) inset,
       0 10px 30px -10px oklch(0.4 0.05 50 / 0.2);
