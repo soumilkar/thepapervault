@@ -1,6 +1,6 @@
 import { createFileRoute, Outlet, redirect, Link, useRouter, useRouterState } from "@tanstack/react-router";
 import { supabase } from "@/integrations/supabase/client";
-import { BookOpen, Image as ImageIcon, PenLine, Sparkles, LogOut, Home, ChevronDown, Lock, StickyNote, Globe } from "lucide-react";
+import { BookOpen, Image as ImageIcon, PenLine, Sparkles, LogOut, Home, ChevronDown, Lock, StickyNote } from "lucide-react";
 import { VaultProvider, useVault } from "@/lib/vault";
 import { VaultGate } from "@/components/VaultGate";
 import {
@@ -26,7 +26,6 @@ const NAV: { to: string; icon: typeof Home; label: string; exact?: boolean }[] =
   { to: "/app/diary", icon: PenLine, label: "Diary" },
   { to: "/app/notes", icon: StickyNote, label: "Notes" },
   { to: "/app/blog", icon: BookOpen, label: "Blog" },
-  { to: "/app/feed", icon: Globe, label: "Feed" },
   { to: "/app/gallery", icon: ImageIcon, label: "Gallery" },
   { to: "/app/chat", icon: Sparkles, label: "Companion" },
 ];

@@ -97,9 +97,11 @@ function DiaryPage() {
           entry_date: row.entry_date, image_url,
           is_public: row.is_public, folder_id: row.folder_id,
           music: row.music_preview_url ? {
-            music_track_id: row.music_track_id, music_track_name: row.music_track_name,
-            music_artist: row.music_artist, music_preview_url: row.music_preview_url,
-            music_artwork_url: row.music_artwork_url,
+            music_track_id: row.music_track_id ?? "",
+            music_track_name: row.music_track_name ?? "",
+            music_artist: row.music_artist ?? "",
+            music_preview_url: row.music_preview_url,
+            music_artwork_url: row.music_artwork_url ?? "",
           } : null,
           created_at: row.created_at,
         });
