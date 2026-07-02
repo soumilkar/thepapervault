@@ -26,7 +26,6 @@ const NAV: { to: string; icon: typeof Home; label: string; exact?: boolean }[] =
   { to: "/app/diary", icon: PenLine, label: "Diary" },
   { to: "/app/notes", icon: StickyNote, label: "Notes" },
   { to: "/app/blog", icon: BookOpen, label: "Blog" },
-  { to: "/app/feed", icon: Globe, label: "Feed" },
   { to: "/app/gallery", icon: ImageIcon, label: "Gallery" },
   { to: "/app/chat", icon: Sparkles, label: "Companion" },
 ];
