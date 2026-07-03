@@ -6,6 +6,9 @@ import { BookOpen, Image as ImageIcon, PenLine, Sparkles, Users } from "lucide-r
 import { WelcomeTour } from "@/components/WelcomeTour";
 import { Markdown } from "@/components/Markdown";
 import { MusicPlayer } from "@/components/MusicSearch";
+import { WritingStreaks } from "@/components/WritingStreaks";
+import { EntryHeatmap } from "@/components/EntryHeatmap";
+import { MoodTimeline } from "@/components/MoodTimeline";
 
 export const Route = createFileRoute("/app/")({
   component: Dashboard,
