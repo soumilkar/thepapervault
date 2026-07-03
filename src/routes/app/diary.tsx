@@ -190,6 +190,9 @@ function DiaryPage() {
       qc.invalidateQueries({ queryKey: ["public-diary-feed"] });
       qc.invalidateQueries({ queryKey: ["dashboard-counts"] });
       qc.invalidateQueries({ queryKey: ["recent-diary"] });
+      qc.invalidateQueries({ queryKey: ["streak-diary"] });
+      qc.invalidateQueries({ queryKey: ["mood-timeline"] });
+      qc.invalidateQueries({ queryKey: ["heatmap-diary"] });
     },
     onError: (e: Error) => toast.error(e.message),
   });
