@@ -6,9 +6,6 @@ import { BookOpen, Image as ImageIcon, PenLine, Sparkles, Users } from "lucide-r
 import { WelcomeTour } from "@/components/WelcomeTour";
 import { Markdown } from "@/components/Markdown";
 import { MusicPlayer } from "@/components/MusicSearch";
-import { WritingStreaks } from "@/components/WritingStreaks";
-import { EntryHeatmap } from "@/components/EntryHeatmap";
-import { MoodTimeline } from "@/components/MoodTimeline";
 
 export const Route = createFileRoute("/app/")({
   component: Dashboard,
@@ -79,14 +76,6 @@ function Dashboard() {
         <StatCard to="/app/blog" icon={<BookOpen className="size-5" />} label="Your blog posts" value={counts.data?.blog ?? 0} />
         <StatCard to="/app/gallery" icon={<ImageIcon className="size-5" />} label="Your gallery photos" value={counts.data?.gallery ?? 0} />
         <StatCard to="/app/chat" icon={<Sparkles className="size-5" />} label="Talk to companion" value="→" />
-      </div>
-
-      <div className="space-y-6">
-        <WritingStreaks userId={user.id} />
-        <div className="grid gap-6 lg:grid-cols-2">
-          <EntryHeatmap userId={user.id} />
-          <MoodTimeline userId={user.id} />
-        </div>
       </div>
 
       <section className="space-y-4">
