@@ -35,6 +35,8 @@ type DiaryRowRaw = {
   music_artist: string | null;
   music_preview_url: string | null;
   music_artwork_url: string | null;
+  word_count: number | null;
+  mood_score: number | null;
   created_at: string;
 };
 type Entry = {
