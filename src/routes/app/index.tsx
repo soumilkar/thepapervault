@@ -81,6 +81,14 @@ function Dashboard() {
         <StatCard to="/app/chat" icon={<Sparkles className="size-5" />} label="Talk to companion" value="→" />
       </div>
 
+      <div className="space-y-6">
+        <WritingStreaks userId={user.id} />
+        <div className="grid gap-6 lg:grid-cols-2">
+          <EntryHeatmap userId={user.id} />
+          <MoodTimeline userId={user.id} />
+        </div>
+      </div>
+
       <section className="space-y-4">
         <div>
           <p className="font-hand text-2xl text-sepia">shared, softly</p>
