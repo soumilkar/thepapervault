@@ -10,6 +10,11 @@ import { useVault } from "@/lib/vault";
 import { decryptBytes, decryptText, encryptBlob, encryptText } from "@/lib/crypto";
 import { MusicSearch, MusicPlayer, type SelectedTrack } from "@/components/MusicSearch";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { moodScore } from "@/lib/mood-sentiment";
+
+function countWords(s: string) {
+  return s.trim().split(/\s+/).filter(Boolean).length;
+}
 
 export const Route = createFileRoute("/app/diary")({
   component: DiaryPage,
