@@ -46,9 +46,6 @@ function getStreaks(dates: string[]) {
   return { current, longest };
 }
 
-function wordCount(text: string) {
-  return text.trim().split(/\s+/).filter(Boolean).length;
-}
 
 export function WritingStreaks({ userId }: { userId: string }) {
   const diary = useQuery({
