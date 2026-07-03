@@ -139,6 +139,7 @@ function DiaryPage() {
         const { error } = await supabase.from("diary_entries").insert({
           user_id: user.id, title: title || null, content, mood: mood || null,
           is_public: true, folder_id: folderId, visibility: "public_anon",
+          word_count: countWords(content), mood_score: mood ? moodScore(mood) : null,
           ...musicPatch,
         } as never);
         if (error) throw error;
