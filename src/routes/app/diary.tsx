@@ -91,12 +91,20 @@ function DiaryPage() {
       const out: Entry[] = [];
       for (const row of rows) {
         let t = row.title ?? "", c = row.content, m = row.mood ?? "";
+        let decrypted = false;
         if (row.iv && key) {
           try {
             const plain = await decryptText(key, row.content, row.iv);
             const obj = JSON.parse(plain) as { t?: string; c?: string; m?: string };
             t = obj.t ?? ""; c = obj.c ?? ""; m = obj.m ?? "";
+            decrypted = true;
           } catch { c = "[Could not decrypt this entry]"; }
+        }
+        // Backfill insight metadata for legacy entries so charts don't need to decrypt.
+        if (decrypted && (row.word_count == null || row.word_count === 0) && c) {
+          const wc = countWords(c);
+          const ms = m ? moodScore(m) : null;
+          await supabase.from("diary_entries").update({ word_count: wc, mood_score: ms } as never).eq("id", row.id);
         }
         const image_url = row.image_path ? await loadImage(row.image_path, row.iv ? key : null) : null;
         out.push({
