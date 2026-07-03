@@ -66,7 +66,7 @@ export function MoodTimeline({ userId }: { userId: string }) {
                   formatter={(_, __, props: any) => {
                     const p = props?.payload;
                     if (!p) return [];
-                    return [`${p.mood} — ${p.title}`, "mood"];
+                    return [p.label, "mood"];
                   }}
                   labelFormatter={(label) => label}
                 />
