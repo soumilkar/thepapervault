@@ -46,9 +46,6 @@ function getStreaks(dates: string[]) {
   return { current, longest };
 }
 
-function wordCount(text: string) {
-  return text.trim().split(/\s+/).filter(Boolean).length;
-}
 
 export function WritingStreaks({ userId }: { userId: string }) {
   const diary = useQuery({
@@ -56,11 +53,11 @@ export function WritingStreaks({ userId }: { userId: string }) {
     queryFn: async () => {
       const { data, error } = await supabase
         .from("diary_entries")
-        .select("entry_date,content")
+        .select("entry_date,word_count")
         .eq("user_id", userId)
         .order("entry_date", { ascending: true });
       if (error) throw error;
-      return data ?? [];
+      return (data ?? []) as { entry_date: string; word_count: number | null }[];
     },
   });
 
@@ -71,12 +68,12 @@ export function WritingStreaks({ userId }: { userId: string }) {
     const date = new Date(d.entry_date);
     const now = new Date();
     if (date.getMonth() === now.getMonth() && date.getFullYear() === now.getFullYear()) {
-      return sum + wordCount(d.content ?? "");
+      return sum + (d.word_count ?? 0);
     }
     return sum;
   }, 0);
 
-  const totalWords = (diary.data ?? []).reduce((sum, d) => sum + wordCount(d.content ?? ""), 0);
+  const totalWords = (diary.data ?? []).reduce((sum, d) => sum + (d.word_count ?? 0), 0);
   const totalEntries = dates.length;
 
   const items = [

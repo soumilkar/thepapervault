@@ -10,6 +10,11 @@ import { useVault } from "@/lib/vault";
 import { decryptBytes, decryptText, encryptBlob, encryptText } from "@/lib/crypto";
 import { MusicSearch, MusicPlayer, type SelectedTrack } from "@/components/MusicSearch";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { moodScore } from "@/lib/mood-sentiment";
+
+function countWords(s: string) {
+  return s.trim().split(/\s+/).filter(Boolean).length;
+}
 
 export const Route = createFileRoute("/app/diary")({
   component: DiaryPage,
@@ -30,6 +35,8 @@ type DiaryRowRaw = {
   music_artist: string | null;
   music_preview_url: string | null;
   music_artwork_url: string | null;
+  word_count: number | null;
+  mood_score: number | null;
   created_at: string;
 };
 type Entry = {
@@ -84,12 +91,20 @@ function DiaryPage() {
       const out: Entry[] = [];
       for (const row of rows) {
         let t = row.title ?? "", c = row.content, m = row.mood ?? "";
+        let decrypted = false;
         if (row.iv && key) {
           try {
             const plain = await decryptText(key, row.content, row.iv);
             const obj = JSON.parse(plain) as { t?: string; c?: string; m?: string };
             t = obj.t ?? ""; c = obj.c ?? ""; m = obj.m ?? "";
+            decrypted = true;
           } catch { c = "[Could not decrypt this entry]"; }
+        }
+        // Backfill insight metadata for legacy entries so charts don't need to decrypt.
+        if (decrypted && (row.word_count == null || row.word_count === 0) && c) {
+          const wc = countWords(c);
+          const ms = m ? moodScore(m) : null;
+          await supabase.from("diary_entries").update({ word_count: wc, mood_score: ms } as never).eq("id", row.id);
         }
         const image_url = row.image_path ? await loadImage(row.image_path, row.iv ? key : null) : null;
         out.push({
@@ -134,6 +149,7 @@ function DiaryPage() {
         const { error } = await supabase.from("diary_entries").insert({
           user_id: user.id, title: title || null, content, mood: mood || null,
           is_public: true, folder_id: folderId, visibility: "public_anon",
+          word_count: countWords(content), mood_score: mood ? moodScore(mood) : null,
           ...musicPatch,
         } as never);
         if (error) throw error;
@@ -161,6 +177,7 @@ function DiaryPage() {
       const { error } = await supabase.from("diary_entries").insert({
         user_id: user.id, title: null, content: ct, mood: null, image_path: imagePath,
         visibility: "private", is_public: false, folder_id: folderId, iv,
+        word_count: countWords(content), mood_score: mood ? moodScore(mood) : null,
         ...musicPatch,
       } as never);
       if (error) throw error;
@@ -173,6 +190,9 @@ function DiaryPage() {
       qc.invalidateQueries({ queryKey: ["public-diary-feed"] });
       qc.invalidateQueries({ queryKey: ["dashboard-counts"] });
       qc.invalidateQueries({ queryKey: ["recent-diary"] });
+      qc.invalidateQueries({ queryKey: ["streak-diary"] });
+      qc.invalidateQueries({ queryKey: ["mood-timeline"] });
+      qc.invalidateQueries({ queryKey: ["heatmap-diary"] });
     },
     onError: (e: Error) => toast.error(e.message),
   });
@@ -191,13 +211,17 @@ function DiaryPage() {
         const plaintext = JSON.stringify({ t: vars.title, c: vars.content, m: vars.mood });
         const { ct, iv } = await encryptText(key, plaintext);
         const { error } = await supabase.from("diary_entries").update({
-          content: ct, iv, folder_id: vars.folder_id, ...musicPatch,
+          content: ct, iv, folder_id: vars.folder_id,
+          word_count: countWords(vars.content), mood_score: vars.mood ? moodScore(vars.mood) : null,
+          ...musicPatch,
         } as never).eq("id", vars.id);
         if (error) throw error;
       } else {
         const { error } = await supabase.from("diary_entries").update({
           title: vars.title || null, content: vars.content, mood: vars.mood || null,
-          folder_id: vars.folder_id, ...musicPatch,
+          folder_id: vars.folder_id,
+          word_count: countWords(vars.content), mood_score: vars.mood ? moodScore(vars.mood) : null,
+          ...musicPatch,
         } as never).eq("id", vars.id);
         if (error) throw error;
       }
@@ -206,6 +230,8 @@ function DiaryPage() {
       toast.success("Entry updated");
       qc.invalidateQueries({ queryKey: ["diary"] });
       qc.invalidateQueries({ queryKey: ["public-diary-feed"] });
+      qc.invalidateQueries({ queryKey: ["streak-diary"] });
+      qc.invalidateQueries({ queryKey: ["mood-timeline"] });
     },
     onError: (e: Error) => toast.error(e.message),
   });

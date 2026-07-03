@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
-import { moodScore, moodLabel, moodColor } from "@/lib/mood-sentiment";
+import { moodLabel, moodColor } from "@/lib/mood-sentiment";
 
 export function MoodTimeline({ userId }: { userId: string }) {
   const { data, isLoading } = useQuery({
@@ -10,28 +10,24 @@ export function MoodTimeline({ userId }: { userId: string }) {
     queryFn: async () => {
       const { data, error } = await supabase
         .from("diary_entries")
-        .select("entry_date,mood,title")
+        .select("entry_date,mood_score")
         .eq("user_id", userId)
-        .not("mood", "is", null)
+        .not("mood_score", "is", null)
         .order("entry_date", { ascending: true })
         .limit(90);
       if (error) throw error;
-      return (data ?? []) as { entry_date: string; mood: string; title: string | null }[];
+      return (data ?? []) as { entry_date: string; mood_score: number }[];
     },
   });
 
   const chartData = useMemo(() => {
     if (!data?.length) return [];
-    return data.map((d) => {
-      const score = moodScore(d.mood);
-      return {
-        date: new Date(d.entry_date).toLocaleDateString(undefined, { month: "short", day: "numeric" }),
-        score,
-        mood: d.mood,
-        title: d.title || "Untitled",
-        fullDate: d.entry_date,
-      };
-    });
+    return data.map((d) => ({
+      date: new Date(d.entry_date).toLocaleDateString(undefined, { month: "short", day: "numeric" }),
+      score: d.mood_score,
+      label: moodLabel(d.mood_score),
+      fullDate: d.entry_date,
+    }));
   }, [data]);
 
   const hasMoods = chartData.length > 0;
@@ -70,7 +66,7 @@ export function MoodTimeline({ userId }: { userId: string }) {
                   formatter={(_, __, props: any) => {
                     const p = props?.payload;
                     if (!p) return [];
-                    return [`${p.mood} — ${p.title}`, "mood"];
+                    return [p.label, "mood"];
                   }}
                   labelFormatter={(label) => label}
                 />
