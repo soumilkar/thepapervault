@@ -2,6 +2,10 @@ import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Flame, Trophy, PenLine, TrendingUp } from "lucide-react";
 
+function isoDay(d: Date) {
+  return d.toISOString().slice(0, 10);
+}
+
 function getStreaks(dates: string[]) {
   const sorted = Array.from(new Set(dates)).sort();
   if (!sorted.length) return { current: 0, longest: 0 };
@@ -10,9 +14,8 @@ function getStreaks(dates: string[]) {
   let current = 1;
   let run = 1;
 
-  const toDay = (s: string) => new Date(s).toISOString().slice(0, 10);
-  const today = toDay(new Date());
-  const yesterday = toDay(new Date(Date.now() - 86400000));
+  const today = isoDay(new Date());
+  const yesterday = isoDay(new Date(Date.now() - 86400000));
 
   for (let i = 1; i < sorted.length; i++) {
     const prev = new Date(sorted[i - 1]);
@@ -27,7 +30,7 @@ function getStreaks(dates: string[]) {
   }
 
   // Current streak from today/yesterday backwards
-  const last = toDay(sorted[sorted.length - 1]);
+  const last = sorted[sorted.length - 1];
   if (last !== today && last !== yesterday) {
     current = 0;
   } else {
