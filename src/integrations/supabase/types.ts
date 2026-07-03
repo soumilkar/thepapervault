@@ -182,6 +182,7 @@ export type Database = {
           is_public: boolean
           iv: string | null
           mood: string | null
+          mood_score: number | null
           music_artist: string | null
           music_artwork_url: string | null
           music_preview_url: string | null
@@ -191,6 +192,7 @@ export type Database = {
           updated_at: string
           user_id: string
           visibility: string
+          word_count: number
         }
         Insert: {
           content: string
@@ -202,6 +204,7 @@ export type Database = {
           is_public?: boolean
           iv?: string | null
           mood?: string | null
+          mood_score?: number | null
           music_artist?: string | null
           music_artwork_url?: string | null
           music_preview_url?: string | null
@@ -211,6 +214,7 @@ export type Database = {
           updated_at?: string
           user_id: string
           visibility?: string
+          word_count?: number
         }
         Update: {
           content?: string
@@ -222,6 +226,7 @@ export type Database = {
           is_public?: boolean
           iv?: string | null
           mood?: string | null
+          mood_score?: number | null
           music_artist?: string | null
           music_artwork_url?: string | null
           music_preview_url?: string | null
@@ -231,6 +236,7 @@ export type Database = {
           updated_at?: string
           user_id?: string
           visibility?: string
+          word_count?: number
         }
         Relationships: [
           {
