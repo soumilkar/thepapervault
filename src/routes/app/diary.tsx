@@ -230,6 +230,8 @@ function DiaryPage() {
       toast.success("Entry updated");
       qc.invalidateQueries({ queryKey: ["diary"] });
       qc.invalidateQueries({ queryKey: ["public-diary-feed"] });
+      qc.invalidateQueries({ queryKey: ["streak-diary"] });
+      qc.invalidateQueries({ queryKey: ["mood-timeline"] });
     },
     onError: (e: Error) => toast.error(e.message),
   });
