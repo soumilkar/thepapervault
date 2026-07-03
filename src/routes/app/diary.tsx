@@ -198,13 +198,17 @@ function DiaryPage() {
         const plaintext = JSON.stringify({ t: vars.title, c: vars.content, m: vars.mood });
         const { ct, iv } = await encryptText(key, plaintext);
         const { error } = await supabase.from("diary_entries").update({
-          content: ct, iv, folder_id: vars.folder_id, ...musicPatch,
+          content: ct, iv, folder_id: vars.folder_id,
+          word_count: countWords(vars.content), mood_score: vars.mood ? moodScore(vars.mood) : null,
+          ...musicPatch,
         } as never).eq("id", vars.id);
         if (error) throw error;
       } else {
         const { error } = await supabase.from("diary_entries").update({
           title: vars.title || null, content: vars.content, mood: vars.mood || null,
-          folder_id: vars.folder_id, ...musicPatch,
+          folder_id: vars.folder_id,
+          word_count: countWords(vars.content), mood_score: vars.mood ? moodScore(vars.mood) : null,
+          ...musicPatch,
         } as never).eq("id", vars.id);
         if (error) throw error;
       }
