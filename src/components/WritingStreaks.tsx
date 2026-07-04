@@ -94,12 +94,12 @@ export function WritingStreaks({ userId }: { userId: string }) {
       ) : totalEntries === 0 ? (
         <p className="text-sm text-muted-foreground">Start writing to see your streaks grow.</p>
       ) : (
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           {items.map((it) => (
-            <div key={it.label} className="rounded-lg bg-secondary/40 p-3 text-center">
+            <div key={it.label} className="min-w-0 rounded-lg bg-secondary/40 p-3 text-center">
               <div className="flex justify-center mb-1">{it.icon}</div>
-              <div className="font-serif text-2xl text-primary">{it.value}</div>
-              <div className="text-[11px] uppercase tracking-wide text-muted-foreground">{it.label}</div>
+              <div className="font-serif text-2xl text-primary truncate">{it.value}</div>
+              <div className="text-[11px] uppercase tracking-wide text-muted-foreground truncate">{it.label}</div>
             </div>
           ))}
         </div>
