@@ -88,7 +88,7 @@ export function EntryHeatmap({ userId }: { userId: string }) {
   const isLoading = diary.isLoading || blog.isLoading || notes.isLoading;
 
   return (
-    <div className="paper-card p-5">
+    <div className="paper-card p-5 overflow-hidden">
       <div className="flex items-center gap-2 text-accent mb-4">
         <h3 className="font-serif text-xl text-primary">Your year in writing</h3>
       </div>

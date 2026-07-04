@@ -33,7 +33,7 @@ export function MoodTimeline({ userId }: { userId: string }) {
   const hasMoods = chartData.length > 0;
 
   return (
-    <div className="paper-card p-5">
+    <div className="paper-card p-5 overflow-hidden">
       <div className="flex items-center gap-2 text-accent mb-4">
         <h3 className="font-serif text-xl text-primary">Mood over time</h3>
       </div>
