@@ -92,9 +92,6 @@ export function EntryHeatmap({ userId }: { userId: string }) {
       <div className="flex items-center gap-2 text-accent mb-4">
         <h3 className="font-serif text-xl text-primary">Your year in writing</h3>
       </div>
-      <div className="flex items-center gap-2 text-accent mb-4">
-        <h3 className="font-serif text-xl text-primary">Your year in writing</h3>
-      </div>
       {isLoading ? (
         <p className="text-sm text-muted-foreground">gathering days...</p>
       ) : counts.size === 0 ? (
