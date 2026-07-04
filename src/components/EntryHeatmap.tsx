@@ -3,60 +3,78 @@ import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 
 function isoDay(d: Date) {
-  return d.toISOString().slice(0, 10);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
-function getLast52Weeks(): Date[] {
-  const days: Date[] = [];
-  const today = new Date();
-  // Align to Sunday
-  const start = new Date(today);
-  start.setDate(today.getDate() - today.getDay() - 52 * 7 + 1);
-  start.setHours(0, 0, 0, 0);
-  for (let i = 0; i < 52 * 7; i++) {
-    const d = new Date(start);
-    d.setDate(start.getDate() + i);
-    days.push(d);
+function getYearGrid(year: number) {
+  // Build weeks (columns) starting Sunday, covering Jan 1 → Dec 31 of `year`.
+  const jan1 = new Date(year, 0, 1);
+  const dec31 = new Date(year, 11, 31);
+  const start = new Date(jan1);
+  start.setDate(jan1.getDate() - jan1.getDay()); // back up to Sunday
+  const end = new Date(dec31);
+  end.setDate(dec31.getDate() + (6 - dec31.getDay())); // forward to Saturday
+
+  const weeks: Date[][] = [];
+  const cursor = new Date(start);
+  while (cursor <= end) {
+    const week: Date[] = [];
+    for (let i = 0; i < 7; i++) {
+      week.push(new Date(cursor));
+      cursor.setDate(cursor.getDate() + 1);
+    }
+    weeks.push(week);
   }
-  return days;
+  return weeks;
 }
 
-function monthLabel(d: Date) {
-  return d.toLocaleDateString(undefined, { month: "short" });
-}
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 export function EntryHeatmap({ userId }: { userId: string }) {
+  const year = new Date().getFullYear();
+  const yearStart = `${year}-01-01`;
+  const yearEnd = `${year}-12-31`;
+
   const diary = useQuery({
-    queryKey: ["heatmap-diary", userId],
+    queryKey: ["heatmap-diary", userId, year],
     queryFn: async () => {
       const { data, error } = await supabase
         .from("diary_entries")
         .select("entry_date")
-        .eq("user_id", userId);
+        .eq("user_id", userId)
+        .gte("entry_date", yearStart)
+        .lte("entry_date", yearEnd);
       if (error) throw error;
       return (data ?? []).map((d) => d.entry_date as string);
     },
   });
 
   const blog = useQuery({
-    queryKey: ["heatmap-blog", userId],
+    queryKey: ["heatmap-blog", userId, year],
     queryFn: async () => {
       const { data, error } = await supabase
         .from("blog_posts")
         .select("created_at")
-        .eq("user_id", userId);
+        .eq("user_id", userId)
+        .gte("created_at", `${yearStart}T00:00:00Z`)
+        .lte("created_at", `${yearEnd}T23:59:59Z`);
       if (error) throw error;
       return (data ?? []).map((d) => isoDay(new Date(d.created_at as string)));
     },
   });
 
   const notes = useQuery({
-    queryKey: ["heatmap-notes", userId],
+    queryKey: ["heatmap-notes", userId, year],
     queryFn: async () => {
       const { data, error } = await supabase
         .from("notes")
         .select("created_at")
-        .eq("user_id", userId);
+        .eq("user_id", userId)
+        .gte("created_at", `${yearStart}T00:00:00Z`)
+        .lte("created_at", `${yearEnd}T23:59:59Z`);
       if (error) throw error;
       return (data ?? []).map((d) => isoDay(new Date(d.created_at as string)));
     },
@@ -70,36 +88,50 @@ export function EntryHeatmap({ userId }: { userId: string }) {
     return map;
   }, [diary.data, blog.data, notes.data]);
 
-  const days = getLast52Weeks();
-  const weeks: Date[][] = [];
-  for (let i = 0; i < days.length; i += 7) {
-    weeks.push(days.slice(i, i + 7));
-  }
-
+  const weeks = useMemo(() => getYearGrid(year), [year]);
   const maxCount = Math.max(1, ...Array.from(counts.values()));
 
-  const intensity = (c: number) => {
+  const intensity = (c: number, inYear: boolean) => {
+    if (!inYear) return "transparent";
     if (c === 0) return "oklch(0.90 0.02 80 / 0.35)";
     const t = c / maxCount;
-    // interpolate toward sepia-accented green
     return `oklch(${0.75 + t * 0.18} ${0.06 + t * 0.12} ${55 + t * 35} / ${0.35 + t * 0.65})`;
   };
+
+  // Month labels: place a label on the first week whose first day falls in that month
+  const monthColLabels = useMemo(() => {
+    const seen = new Set<number>();
+    return weeks.map((week) => {
+      const first = week[0];
+      if (first.getFullYear() !== year) return "";
+      const m = first.getMonth();
+      if (seen.has(m)) return "";
+      // only label if the month's 1st actually lies in this week
+      const containsFirstOfMonth = week.some(
+        (d) => d.getFullYear() === year && d.getDate() <= 7 && d.getMonth() === m
+      );
+      if (!containsFirstOfMonth) return "";
+      seen.add(m);
+      return MONTHS[m];
+    });
+  }, [weeks, year]);
 
   const isLoading = diary.isLoading || blog.isLoading || notes.isLoading;
 
   return (
     <div className="paper-card p-5 overflow-hidden">
-      <div className="flex items-center gap-2 text-accent mb-4">
+      <div className="flex items-center justify-between gap-2 text-accent mb-4">
         <h3 className="font-serif text-xl text-primary">Your year in writing</h3>
+        <span className="font-hand text-lg text-sepia">{year}</span>
       </div>
       {isLoading ? (
         <p className="text-sm text-muted-foreground">gathering days...</p>
       ) : counts.size === 0 ? (
-        <p className="text-sm text-muted-foreground">Nothing yet. Every blank square is waiting for you.</p>
+        <p className="text-sm text-muted-foreground">Nothing yet in {year}. Every blank square is waiting for you.</p>
       ) : (
         <div className="overflow-x-auto">
           <div className="flex gap-1 min-w-max">
-            {/* Month labels */}
+            {/* Day labels */}
             <div className="flex flex-col gap-1 mr-2">
               <div className="h-3" />
               {Array.from({ length: 7 }).map((_, i) => (
@@ -108,30 +140,26 @@ export function EntryHeatmap({ userId }: { userId: string }) {
                 </div>
               ))}
             </div>
-            {weeks.map((week, wi) => {
-              const firstDay = week[0];
-              const showMonth = firstDay.getDate() <= 7;
-              return (
-                <div key={wi} className="flex flex-col gap-1">
-                  {showMonth && (
-                    <div className="h-3 text-[9px] text-muted-foreground leading-3">{monthLabel(firstDay)}</div>
-                  )}
-                  {!showMonth && <div className="h-3" />}
-                  {week.map((day, di) => {
-                    const key = isoDay(day);
-                    const c = counts.get(key) ?? 0;
-                    return (
-                      <div
-                        key={di}
-                        title={`${key} — ${c} entries`}
-                        className="h-3 w-3 rounded-sm"
-                        style={{ backgroundColor: intensity(c) }}
-                      />
-                    );
-                  })}
+            {weeks.map((week, wi) => (
+              <div key={wi} className="flex flex-col gap-1">
+                <div className="h-3 text-[9px] text-muted-foreground leading-3">
+                  {monthColLabels[wi]}
                 </div>
-              );
-            })}
+                {week.map((day, di) => {
+                  const inYear = day.getFullYear() === year;
+                  const key = isoDay(day);
+                  const c = inYear ? counts.get(key) ?? 0 : 0;
+                  return (
+                    <div
+                      key={di}
+                      title={inYear ? `${key} — ${c} ${c === 1 ? "entry" : "entries"}` : ""}
+                      className="h-3 w-3 rounded-sm"
+                      style={{ backgroundColor: intensity(c, inYear) }}
+                    />
+                  );
+                })}
+              </div>
+            ))}
           </div>
         </div>
       )}
