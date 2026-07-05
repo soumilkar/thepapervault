@@ -8,6 +8,7 @@ import { Markdown } from "@/components/Markdown";
 import { supabase } from "@/integrations/supabase/client";
 import { useVault } from "@/lib/vault";
 import { decryptText } from "@/lib/crypto";
+import { AppSelect } from "@/components/AppSelect";
 
 export const Route = createFileRoute("/app/chat")({
   component: ChatPage,
@@ -95,13 +96,14 @@ function ChatPage() {
 
   const send = async (question: string) => {
     if (!question.trim() || loading) return;
+    const priorHistory = messages;
     setMessages((m) => [...m, { role: "user", content: question }]);
     setInput("");
     setLoading(true);
     try {
       const context = await buildContext(user.id, key, source, startDate, endDate);
       const name = user.user_metadata?.display_name || user.email?.split("@")[0] || "the writer";
-      const res = await ask({ data: { question, context, name } });
+      const res = await ask({ data: { question, context, name, history: priorHistory } });
       setMessages((m) => [...m, { role: "assistant", content: res.answer }]);
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : "Could not reach the companion");
@@ -128,12 +130,16 @@ function ChatPage() {
       <div className="paper-card p-4 grid gap-3 sm:grid-cols-4">
         <label className="text-sm">
           <span className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">Source</span>
-          <select value={source} onChange={(e) => setSource(e.target.value as Source)}
-            className="w-full rounded-md border border-input bg-card px-2 py-1.5">
-            <option value="both">Diary + Blog</option>
-            <option value="diary">Diary only</option>
-            <option value="blog">Blog only</option>
-          </select>
+          <AppSelect
+            value={source}
+            onValueChange={(v) => setSource(v as Source)}
+            triggerClassName="w-full h-9"
+            options={[
+              { value: "both", label: "Diary + Blog" },
+              { value: "diary", label: "Diary only" },
+              { value: "blog", label: "Blog only" },
+            ]}
+          />
         </label>
         <label className="text-sm">
           <span className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">From</span>

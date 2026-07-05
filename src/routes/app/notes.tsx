@@ -6,6 +6,9 @@ import { toast } from "sonner";
 import { ImagePlus, Trash2, X, Pencil, Check, FolderPlus, Folder } from "lucide-react";
 import { Markdown } from "@/components/Markdown";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { AppSelect } from "@/components/AppSelect";
+
+const NONE = "__none__";
 
 export const Route = createFileRoute("/app/notes")({
   component: NotesPage,
@@ -166,11 +169,14 @@ function NotesPage() {
           </label>
           <label className="flex items-center gap-2 text-sm">
             <span className="text-muted-foreground">Folder</span>
-            <select value={folderId ?? ""} onChange={(e) => setFolderId(e.target.value || null)}
-              className="rounded-md border border-input bg-card px-2 py-1">
-              <option value="">— none —</option>
-              {(folders.data ?? []).map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
-            </select>
+            <AppSelect
+              value={folderId ?? NONE}
+              onValueChange={(v) => setFolderId(v === NONE ? null : v)}
+              options={[
+                { value: NONE, label: "— none —" },
+                ...(folders.data ?? []).map((f) => ({ value: f.id, label: f.name })),
+              ]}
+            />
           </label>
           <button type="submit" disabled={create.isPending}
             className="rounded-md bg-primary px-5 py-2 text-sm text-primary-foreground disabled:opacity-50">
@@ -182,21 +188,27 @@ function NotesPage() {
       <div className="paper-card flex flex-wrap items-center gap-3 p-3 text-sm">
         <label className="flex items-center gap-2">
           <Folder className="size-4 text-muted-foreground" />
-          <select value={filterFolder} onChange={(e) => setFilterFolder(e.target.value as any)}
-            className="rounded-md border border-input bg-card px-2 py-1">
-            <option value="all">All notes</option>
-            <option value="none">No folder</option>
-            {(folders.data ?? []).map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
-          </select>
+          <AppSelect
+            value={filterFolder}
+            onValueChange={(v) => setFilterFolder(v)}
+            options={[
+              { value: "all", label: "All notes" },
+              { value: "none", label: "No folder" },
+              ...(folders.data ?? []).map((f) => ({ value: f.id, label: f.name })),
+            ]}
+          />
         </label>
         <label className="flex items-center gap-2">
           <span className="text-muted-foreground">Sort</span>
-          <select value={sort} onChange={(e) => setSort(e.target.value as Sort)}
-            className="rounded-md border border-input bg-card px-2 py-1">
-            <option value="newest">Most recent</option>
-            <option value="oldest">Oldest first</option>
-            <option value="title">Title A–Z</option>
-          </select>
+          <AppSelect
+            value={sort}
+            onValueChange={(v) => setSort(v as Sort)}
+            options={[
+              { value: "newest", label: "Most recent" },
+              { value: "oldest", label: "Oldest first" },
+              { value: "title", label: "Title A–Z" },
+            ]}
+          />
         </label>
         <form
           onSubmit={(e) => { e.preventDefault(); if (newFolder.trim()) createFolder.mutate(newFolder.trim()); }}
@@ -261,11 +273,14 @@ function NoteCard({
           className="w-full resize-none bg-transparent leading-relaxed outline-none" />
         <label className="flex items-center gap-2 text-sm">
           <span className="text-muted-foreground">Folder</span>
-          <select value={eFolder ?? ""} onChange={(e) => setEFolder(e.target.value || null)}
-            className="rounded-md border border-input bg-card px-2 py-1">
-            <option value="">— none —</option>
-            {folders.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
-          </select>
+          <AppSelect
+            value={eFolder ?? NONE}
+            onValueChange={(v) => setEFolder(v === NONE ? null : v)}
+            options={[
+              { value: NONE, label: "— none —" },
+              ...folders.map((f) => ({ value: f.id, label: f.name })),
+            ]}
+          />
         </label>
         <div className="flex justify-end gap-2">
           <button onClick={() => setEditing(false)} className="flex items-center gap-1 rounded-md border border-border px-3 py-1.5 text-sm">
