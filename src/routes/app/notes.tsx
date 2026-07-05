@@ -169,11 +169,14 @@ function NotesPage() {
           </label>
           <label className="flex items-center gap-2 text-sm">
             <span className="text-muted-foreground">Folder</span>
-            <select value={folderId ?? ""} onChange={(e) => setFolderId(e.target.value || null)}
-              className="rounded-md border border-input bg-card px-2 py-1">
-              <option value="">— none —</option>
-              {(folders.data ?? []).map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
-            </select>
+            <AppSelect
+              value={folderId ?? NONE}
+              onValueChange={(v) => setFolderId(v === NONE ? null : v)}
+              options={[
+                { value: NONE, label: "— none —" },
+                ...(folders.data ?? []).map((f) => ({ value: f.id, label: f.name })),
+              ]}
+            />
           </label>
           <button type="submit" disabled={create.isPending}
             className="rounded-md bg-primary px-5 py-2 text-sm text-primary-foreground disabled:opacity-50">
