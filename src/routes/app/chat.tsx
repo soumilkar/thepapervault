@@ -42,7 +42,12 @@ function ChatLayout() {
     setLoading(false);
   }, [user.id]);
 
-  useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => {
+    void refresh();
+    const h = () => { void refresh(); };
+    window.addEventListener(CHAT_SESSIONS_UPDATED, h);
+    return () => window.removeEventListener(CHAT_SESSIONS_UPDATED, h);
+  }, [refresh]);
 
   const startNew = async () => {
     const { data, error } = await supabase
