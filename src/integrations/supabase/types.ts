@@ -491,10 +491,7 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      prune_old_chat_sessions: {
-        Args: { _user_id: string }
-        Returns: undefined
-      }
+      [_ in never]: never
     }
     Enums: {
       [_ in never]: never
