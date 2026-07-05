@@ -8,6 +8,7 @@ import { Markdown } from "@/components/Markdown";
 import { supabase } from "@/integrations/supabase/client";
 import { useVault } from "@/lib/vault";
 import { decryptText } from "@/lib/crypto";
+import { AppSelect } from "@/components/AppSelect";
 
 export const Route = createFileRoute("/app/chat")({
   component: ChatPage,
