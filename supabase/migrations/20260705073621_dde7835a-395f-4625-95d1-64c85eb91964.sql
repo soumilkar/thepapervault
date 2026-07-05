@@ -1,0 +1,1 @@
+DROP FUNCTION IF EXISTS public.prune_old_chat_sessions(uuid);

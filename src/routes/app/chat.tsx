@@ -1,208 +1,142 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { useServerFn } from "@tanstack/react-start";
-import { useState } from "react";
-import { Sparkles, Send } from "lucide-react";
-import { toast } from "sonner";
-import { askCompanion } from "@/lib/companion.functions";
-import { Markdown } from "@/components/Markdown";
+import { createFileRoute, Outlet, Link, useNavigate, useRouterState } from "@tanstack/react-router";
+import { useEffect, useState, useCallback } from "react";
+import { Sparkles, Plus, Trash2, MessageSquare } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
-import { useVault } from "@/lib/vault";
-import { decryptText } from "@/lib/crypto";
-import { AppSelect } from "@/components/AppSelect";
+import { toast } from "sonner";
 
 export const Route = createFileRoute("/app/chat")({
-  component: ChatPage,
+  component: ChatLayout,
 });
 
-type Msg = { role: "user" | "assistant"; content: string };
-type Source = "both" | "diary" | "blog";
+type SessionRow = { id: string; title: string; last_message_at: string };
 
-const PROMPTS = [
-  "What recurring themes appear in my recent diary entries?",
-  "How has my mood shifted over the past few weeks?",
-  "Give me a journaling prompt based on what I've written lately.",
-  "What do I seem most grateful for?",
-];
+const MAX_SESSIONS = 7;
+const PRUNE_DAYS = 14;
+export const CHAT_SESSIONS_UPDATED = "chat-sessions-updated";
 
-function isoDay(d: Date) { return d.toISOString().slice(0, 10); }
-
-async function buildContext(
-  userId: string,
-  key: CryptoKey | null,
-  source: Source,
-  startDate: string,
-  endDate: string,
-): Promise<string> {
-  type DiaryRow = { content: string; iv: string | null; entry_date: string };
-  type BlogRow = { title: string; content: string; tags: string[] | null; created_at: string };
-  const startIso = new Date(startDate).toISOString();
-  const endIso = new Date(new Date(endDate).getTime() + 24 * 3600 * 1000 - 1).toISOString();
-
-  const wantsDiary = source !== "blog";
-  const wantsBlog = source !== "diary";
-
-  const [diary, blog] = await Promise.all([
-    wantsDiary
-      ? supabase.from("diary_entries").select("content,iv,entry_date" as never)
-          .eq("user_id", userId).gte("entry_date", startDate).lte("entry_date", endDate)
-          .order("entry_date", { ascending: false }).limit(100)
-      : Promise.resolve({ data: [] as unknown as DiaryRow[] }),
-    wantsBlog
-      ? supabase.from("blog_posts").select("title,content,tags,created_at")
-          .eq("user_id", userId).gte("created_at", startIso).lte("created_at", endIso)
-          .order("created_at", { ascending: false }).limit(60)
-      : Promise.resolve({ data: [] as unknown as BlogRow[] }),
-  ]);
-
-  const diaryRows = (diary.data ?? []) as unknown as DiaryRow[];
-  const blogRows = (blog.data ?? []) as unknown as BlogRow[];
-
-  const diaryDecoded: string[] = [];
-  for (const row of diaryRows) {
-    if (row.iv && key) {
-      try {
-        const plain = await decryptText(key, row.content, row.iv);
-        const obj = JSON.parse(plain) as { t?: string; c?: string; m?: string };
-        diaryDecoded.push(`[${row.entry_date}${obj.m ? ` · ${obj.m}` : ""}] ${obj.t || "Untitled"}\n${obj.c ?? ""}`);
-      } catch { /* skip */ }
-    } else if (!row.iv) {
-      diaryDecoded.push(`[${row.entry_date}] ${row.content}`);
-    }
-  }
-  const diaryText = wantsDiary ? (diaryDecoded.join("\n\n---\n\n") || "(no diary entries in this range)") : "";
-  const blogText = wantsBlog
-    ? (blogRows.map((b) => `# ${b.title}${b.tags?.length ? ` (${b.tags.join(", ")})` : ""}\n${b.content}`).join("\n\n---\n\n") || "(no blog posts in this range)")
-    : "";
-
-  const parts: string[] = [];
-  if (wantsDiary) parts.push(`=== DIARY ENTRIES (${startDate} → ${endDate}) ===\n${diaryText}`);
-  if (wantsBlog) parts.push(`=== BLOG POSTS (${startDate} → ${endDate}) ===\n${blogText}`);
-  return parts.join("\n\n");
-}
-
-function ChatPage() {
+function ChatLayout() {
   const { user } = Route.useRouteContext();
-  const { key } = useVault();
-  const ask = useServerFn(askCompanion);
-  const [messages, setMessages] = useState<Msg[]>([]);
-  const [input, setInput] = useState("");
-  const [loading, setLoading] = useState(false);
+  const navigate = useNavigate();
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const activeId = pathname.startsWith("/app/chat/") ? pathname.slice("/app/chat/".length) : null;
 
-  const today = new Date();
-  const monthAgo = new Date(today.getTime() - 30 * 24 * 3600 * 1000);
-  const [source, setSource] = useState<Source>("both");
-  const [startDate, setStartDate] = useState<string>(isoDay(monthAgo));
-  const [endDate, setEndDate] = useState<string>(isoDay(today));
+  const [sessions, setSessions] = useState<SessionRow[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  const send = async (question: string) => {
-    if (!question.trim() || loading) return;
-    const priorHistory = messages;
-    setMessages((m) => [...m, { role: "user", content: question }]);
-    setInput("");
-    setLoading(true);
-    try {
-      const context = await buildContext(user.id, key, source, startDate, endDate);
-      const name = user.user_metadata?.display_name || user.email?.split("@")[0] || "the writer";
-      const res = await ask({ data: { question, context, name, history: priorHistory } });
-      setMessages((m) => [...m, { role: "assistant", content: res.answer }]);
-    } catch (e: unknown) {
-      toast.error(e instanceof Error ? e.message : "Could not reach the companion");
-    } finally {
-      setLoading(false);
+  const refresh = useCallback(async () => {
+    // Prune anything older than 14 days
+    const cutoff = new Date(Date.now() - PRUNE_DAYS * 24 * 3600 * 1000).toISOString();
+    await supabase.from("chat_sessions").delete().eq("user_id", user.id).lt("last_message_at", cutoff);
+
+    const { data, error } = await supabase
+      .from("chat_sessions")
+      .select("id,title,last_message_at")
+      .eq("user_id", user.id)
+      .order("last_message_at", { ascending: false })
+      .limit(MAX_SESSIONS);
+    if (error) {
+      toast.error("Could not load conversations");
+      setSessions([]);
+    } else {
+      setSessions(data ?? []);
     }
+    setLoading(false);
+  }, [user.id]);
+
+  useEffect(() => {
+    void refresh();
+    const h = () => { void refresh(); };
+    window.addEventListener(CHAT_SESSIONS_UPDATED, h);
+    return () => window.removeEventListener(CHAT_SESSIONS_UPDATED, h);
+  }, [refresh]);
+
+  const startNew = async () => {
+    const { data, error } = await supabase
+      .from("chat_sessions")
+      .insert({ user_id: user.id, title: "New conversation" })
+      .select("id,title,last_message_at")
+      .single();
+    if (error || !data) {
+      toast.error("Could not start a new chat");
+      return;
+    }
+    setSessions((s) => [data, ...s].slice(0, MAX_SESSIONS));
+    navigate({ to: "/app/chat/$sessionId", params: { sessionId: data.id } });
   };
 
-  const resetToDefault = () => {
-    setSource("both");
-    setStartDate(isoDay(monthAgo));
-    setEndDate(isoDay(today));
+  const remove = async (id: string) => {
+    const prev = sessions;
+    setSessions((s) => s.filter((x) => x.id !== id));
+    const { error } = await supabase.from("chat_sessions").delete().eq("id", id);
+    if (error) {
+      setSessions(prev);
+      toast.error("Could not delete");
+      return;
+    }
+    if (activeId === id) navigate({ to: "/app/chat" });
   };
 
   return (
     <div className="space-y-6">
-      <div>
-        <p className="font-hand text-2xl text-sepia">a quiet conversation</p>
-        <h1 className="font-serif text-4xl text-primary flex items-center gap-2">
-          <Sparkles className="size-7 text-accent" /> Your companion
-        </h1>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="font-hand text-2xl text-sepia">a quiet conversation</p>
+          <h1 className="font-serif text-4xl text-primary flex items-center gap-2">
+            <Sparkles className="size-7 text-accent" /> Your companion
+          </h1>
+        </div>
       </div>
 
-      <div className="paper-card p-4 grid gap-3 sm:grid-cols-4">
-        <label className="text-sm">
-          <span className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">Source</span>
-          <AppSelect
-            value={source}
-            onValueChange={(v) => setSource(v as Source)}
-            triggerClassName="w-full h-9"
-            options={[
-              { value: "both", label: "Diary + Blog" },
-              { value: "diary", label: "Diary only" },
-              { value: "blog", label: "Blog only" },
-            ]}
-          />
-        </label>
-        <label className="text-sm">
-          <span className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">From</span>
-          <input type="date" value={startDate} max={endDate} onChange={(e) => setStartDate(e.target.value)}
-            className="w-full rounded-md border border-input bg-card px-2 py-1.5" />
-        </label>
-        <label className="text-sm">
-          <span className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">To</span>
-          <input type="date" value={endDate} min={startDate} onChange={(e) => setEndDate(e.target.value)}
-            className="w-full rounded-md border border-input bg-card px-2 py-1.5" />
-        </label>
-        <div className="flex items-end">
-          <button onClick={resetToDefault} className="w-full rounded-md border border-border bg-secondary/50 px-3 py-1.5 text-sm hover:bg-secondary">
-            Last 30 days
+      <div className="grid gap-4 lg:grid-cols-[16rem_1fr]">
+        <aside className="paper-card p-3 h-fit">
+          <button
+            onClick={startNew}
+            className="mb-3 flex w-full items-center justify-center gap-2 rounded-md bg-primary px-3 py-2 text-sm text-primary-foreground hover:opacity-90"
+          >
+            <Plus className="size-4" /> New chat
           </button>
+          <p className="mb-2 px-1 text-xs uppercase tracking-wide text-muted-foreground">
+            Recent (last {MAX_SESSIONS}, kept {PRUNE_DAYS} days)
+          </p>
+          {loading ? (
+            <p className="px-1 py-2 text-sm text-muted-foreground">Loading…</p>
+          ) : sessions.length === 0 ? (
+            <p className="px-1 py-2 text-sm text-muted-foreground">No conversations yet.</p>
+          ) : (
+            <ul className="space-y-1">
+              {sessions.map((s) => {
+                const isActive = s.id === activeId;
+                return (
+                  <li key={s.id} className="group flex items-center gap-1">
+                    <Link
+                      to="/app/chat/$sessionId"
+                      params={{ sessionId: s.id }}
+                      className={`flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-2 text-sm ${
+                        isActive ? "bg-secondary text-primary" : "text-foreground/80 hover:bg-secondary/60"
+                      }`}
+                    >
+                      <MessageSquare className="size-3.5 shrink-0 opacity-70" />
+                      <span className="truncate">{s.title || "Untitled"}</span>
+                    </Link>
+                    <button
+                      onClick={() => remove(s.id)}
+                      title="Delete"
+                      className="rounded-md p-1.5 text-muted-foreground opacity-0 hover:bg-secondary hover:text-destructive group-hover:opacity-100"
+                    >
+                      <Trash2 className="size-3.5" />
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </aside>
+
+        <div className="min-w-0">
+          <Outlet />
         </div>
       </div>
-
-      {messages.length === 0 && (
-        <div className="paper-card p-6">
-          <p className="text-sm text-muted-foreground mb-3">Try asking:</p>
-          <div className="flex flex-wrap gap-2">
-            {PROMPTS.map((p) => (
-              <button key={p} onClick={() => send(p)} className="rounded-full border border-border bg-secondary/60 px-3 py-1.5 text-sm text-secondary-foreground hover:bg-secondary">
-                {p}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      <div className="space-y-3">
-        {messages.map((m, i) => (
-          <div key={i} className={m.role === "user" ? "flex justify-end" : ""}>
-            {m.role === "user" ? (
-              <div className="max-w-[80%] rounded-2xl bg-primary px-4 py-2.5 text-primary-foreground">
-                <Markdown>{m.content}</Markdown>
-              </div>
-            ) : (
-              <div className="paper-card max-w-[90%] p-4">
-                <p className="mb-2 font-hand text-sepia text-lg leading-none">companion</p>
-                <Markdown>{m.content}</Markdown>
-              </div>
-            )}
-          </div>
-        ))}
-        {loading && <p className="font-hand text-sepia">thinking...</p>}
-      </div>
-
-      <div className="h-32" aria-hidden />
-      <form
-        onSubmit={(e) => { e.preventDefault(); send(input); }}
-        className="glass-card fixed bottom-4 left-4 right-4 z-30 mx-auto flex max-w-3xl items-center gap-2 p-2"
-      >
-        <input
-          value={input} onChange={(e) => setInput(e.target.value)}
-          placeholder="Ask about your story..."
-          className="flex-1 bg-transparent px-3 py-2 outline-none placeholder:text-muted-foreground/60"
-        />
-        <button type="submit" disabled={loading || !input.trim()} className="flex items-center gap-1 rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground disabled:opacity-50">
-          <Send className="size-4" /> Send
-        </button>
-      </form>
     </div>
   );
 }
+
