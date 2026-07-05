@@ -127,14 +127,12 @@ function ChatLayout() {
         </aside>
 
         <div className="min-w-0">
-          <Outlet context={{ refreshSessions: refresh, startNew, hasSessions: sessions.length > 0 }} />
+          <Outlet />
         </div>
       </div>
     </div>
   );
 }
 
-export function useChatOutlet() {
-  const params = useParams({ strict: false });
-  return params;
-}
+export const CHAT_SESSIONS_UPDATED = "chat-sessions-updated";
+
