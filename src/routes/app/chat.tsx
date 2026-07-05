@@ -96,13 +96,14 @@ function ChatPage() {
 
   const send = async (question: string) => {
     if (!question.trim() || loading) return;
+    const priorHistory = messages;
     setMessages((m) => [...m, { role: "user", content: question }]);
     setInput("");
     setLoading(true);
     try {
       const context = await buildContext(user.id, key, source, startDate, endDate);
       const name = user.user_metadata?.display_name || user.email?.split("@")[0] || "the writer";
-      const res = await ask({ data: { question, context, name } });
+      const res = await ask({ data: { question, context, name, history: priorHistory } });
       setMessages((m) => [...m, { role: "assistant", content: res.answer }]);
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : "Could not reach the companion");
