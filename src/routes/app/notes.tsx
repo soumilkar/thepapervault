@@ -6,6 +6,9 @@ import { toast } from "sonner";
 import { ImagePlus, Trash2, X, Pencil, Check, FolderPlus, Folder } from "lucide-react";
 import { Markdown } from "@/components/Markdown";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { AppSelect } from "@/components/AppSelect";
+
+const NONE = "__none__";
 
 export const Route = createFileRoute("/app/notes")({
   component: NotesPage,
