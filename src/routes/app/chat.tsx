@@ -12,6 +12,7 @@ type SessionRow = { id: string; title: string; last_message_at: string };
 
 const MAX_SESSIONS = 7;
 const PRUNE_DAYS = 14;
+export const CHAT_SESSIONS_UPDATED = "chat-sessions-updated";
 
 function ChatLayout() {
   const { user } = Route.useRouteContext();
