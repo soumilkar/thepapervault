@@ -337,19 +337,25 @@ function DiaryPage() {
         <div className="flex flex-wrap items-center gap-3 text-sm">
           <label className="flex items-center gap-2">
             <span className="text-muted-foreground">Visibility</span>
-            <select value={isPublic ? "public" : "private"} onChange={(e) => setIsPublic(e.target.value === "public")}
-              className="rounded-md border border-input bg-card px-2 py-1">
-              <option value="private">Private (encrypted)</option>
-              <option value="public">Public · anonymous</option>
-            </select>
+            <AppSelect
+              value={isPublic ? "public" : "private"}
+              onValueChange={(v) => setIsPublic(v === "public")}
+              options={[
+                { value: "private", label: "Private (encrypted)" },
+                { value: "public", label: "Public · anonymous" },
+              ]}
+            />
           </label>
           <label className="flex items-center gap-2">
             <span className="text-muted-foreground">Folder</span>
-            <select value={folderId ?? ""} onChange={(e) => setFolderId(e.target.value || null)}
-              className="rounded-md border border-input bg-card px-2 py-1">
-              <option value="">— none —</option>
-              {(folders.data ?? []).map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
-            </select>
+            <AppSelect
+              value={folderId ?? NONE}
+              onValueChange={(v) => setFolderId(v === NONE ? null : v)}
+              options={[
+                { value: NONE, label: "— none —" },
+                ...(folders.data ?? []).map((f) => ({ value: f.id, label: f.name })),
+              ]}
+            />
           </label>
         </div>
 
