@@ -12,6 +12,9 @@ import { MusicSearch, MusicPlayer, type SelectedTrack } from "@/components/Music
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { moodScore } from "@/lib/mood-sentiment";
 import { estimateMoodScores } from "@/lib/mood-estimate.functions";
+import { AppSelect } from "@/components/AppSelect";
+
+const NONE = "__none__";
 
 function countWords(s: string) {
   return s.trim().split(/\s+/).filter(Boolean).length;
