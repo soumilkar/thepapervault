@@ -140,5 +140,3 @@ function ChatLayout() {
   );
 }
 
-export const CHAT_SESSIONS_UPDATED = "chat-sessions-updated";
-
