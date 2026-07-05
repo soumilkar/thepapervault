@@ -20,6 +20,7 @@ import { Route as AppGalleryRouteImport } from './routes/app/gallery'
 import { Route as AppDiaryRouteImport } from './routes/app/diary'
 import { Route as AppChatRouteImport } from './routes/app/chat'
 import { Route as AppBlogRouteImport } from './routes/app/blog'
+import { Route as AppChatIndexRouteImport } from './routes/app/chat.index'
 
 const TermsRoute = TermsRouteImport.update({
   id: '/terms',
@@ -76,6 +77,11 @@ const AppBlogRoute = AppBlogRouteImport.update({
   path: '/blog',
   getParentRoute: () => AppRouteRoute,
 } as any)
+const AppChatIndexRoute = AppChatIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AppChatRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -84,11 +90,12 @@ export interface FileRoutesByFullPath {
   '/privacy': typeof PrivacyRoute
   '/terms': typeof TermsRoute
   '/app/blog': typeof AppBlogRoute
-  '/app/chat': typeof AppChatRoute
+  '/app/chat': typeof AppChatRouteWithChildren
   '/app/diary': typeof AppDiaryRoute
   '/app/gallery': typeof AppGalleryRoute
   '/app/notes': typeof AppNotesRoute
   '/app/': typeof AppIndexRoute
+  '/app/chat/': typeof AppChatIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -96,11 +103,11 @@ export interface FileRoutesByTo {
   '/privacy': typeof PrivacyRoute
   '/terms': typeof TermsRoute
   '/app/blog': typeof AppBlogRoute
-  '/app/chat': typeof AppChatRoute
   '/app/diary': typeof AppDiaryRoute
   '/app/gallery': typeof AppGalleryRoute
   '/app/notes': typeof AppNotesRoute
   '/app': typeof AppIndexRoute
+  '/app/chat': typeof AppChatIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -110,11 +117,12 @@ export interface FileRoutesById {
   '/privacy': typeof PrivacyRoute
   '/terms': typeof TermsRoute
   '/app/blog': typeof AppBlogRoute
-  '/app/chat': typeof AppChatRoute
+  '/app/chat': typeof AppChatRouteWithChildren
   '/app/diary': typeof AppDiaryRoute
   '/app/gallery': typeof AppGalleryRoute
   '/app/notes': typeof AppNotesRoute
   '/app/': typeof AppIndexRoute
+  '/app/chat/': typeof AppChatIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -130,6 +138,7 @@ export interface FileRouteTypes {
     | '/app/gallery'
     | '/app/notes'
     | '/app/'
+    | '/app/chat/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -137,11 +146,11 @@ export interface FileRouteTypes {
     | '/privacy'
     | '/terms'
     | '/app/blog'
-    | '/app/chat'
     | '/app/diary'
     | '/app/gallery'
     | '/app/notes'
     | '/app'
+    | '/app/chat'
   id:
     | '__root__'
     | '/'
@@ -155,6 +164,7 @@ export interface FileRouteTypes {
     | '/app/gallery'
     | '/app/notes'
     | '/app/'
+    | '/app/chat/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -244,12 +254,30 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppBlogRouteImport
       parentRoute: typeof AppRouteRoute
     }
+    '/app/chat/': {
+      id: '/app/chat/'
+      path: '/'
+      fullPath: '/app/chat/'
+      preLoaderRoute: typeof AppChatIndexRouteImport
+      parentRoute: typeof AppChatRoute
+    }
   }
 }
 
+interface AppChatRouteChildren {
+  AppChatIndexRoute: typeof AppChatIndexRoute
+}
+
+const AppChatRouteChildren: AppChatRouteChildren = {
+  AppChatIndexRoute: AppChatIndexRoute,
+}
+
+const AppChatRouteWithChildren =
+  AppChatRoute._addFileChildren(AppChatRouteChildren)
+
 interface AppRouteRouteChildren {
   AppBlogRoute: typeof AppBlogRoute
-  AppChatRoute: typeof AppChatRoute
+  AppChatRoute: typeof AppChatRouteWithChildren
   AppDiaryRoute: typeof AppDiaryRoute
   AppGalleryRoute: typeof AppGalleryRoute
   AppNotesRoute: typeof AppNotesRoute
@@ -258,7 +286,7 @@ interface AppRouteRouteChildren {
 
 const AppRouteRouteChildren: AppRouteRouteChildren = {
   AppBlogRoute: AppBlogRoute,
-  AppChatRoute: AppChatRoute,
+  AppChatRoute: AppChatRouteWithChildren,
   AppDiaryRoute: AppDiaryRoute,
   AppGalleryRoute: AppGalleryRoute,
   AppNotesRoute: AppNotesRoute,
