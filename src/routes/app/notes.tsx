@@ -188,21 +188,27 @@ function NotesPage() {
       <div className="paper-card flex flex-wrap items-center gap-3 p-3 text-sm">
         <label className="flex items-center gap-2">
           <Folder className="size-4 text-muted-foreground" />
-          <select value={filterFolder} onChange={(e) => setFilterFolder(e.target.value as any)}
-            className="rounded-md border border-input bg-card px-2 py-1">
-            <option value="all">All notes</option>
-            <option value="none">No folder</option>
-            {(folders.data ?? []).map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
-          </select>
+          <AppSelect
+            value={filterFolder}
+            onValueChange={(v) => setFilterFolder(v)}
+            options={[
+              { value: "all", label: "All notes" },
+              { value: "none", label: "No folder" },
+              ...(folders.data ?? []).map((f) => ({ value: f.id, label: f.name })),
+            ]}
+          />
         </label>
         <label className="flex items-center gap-2">
           <span className="text-muted-foreground">Sort</span>
-          <select value={sort} onChange={(e) => setSort(e.target.value as Sort)}
-            className="rounded-md border border-input bg-card px-2 py-1">
-            <option value="newest">Most recent</option>
-            <option value="oldest">Oldest first</option>
-            <option value="title">Title A–Z</option>
-          </select>
+          <AppSelect
+            value={sort}
+            onValueChange={(v) => setSort(v as Sort)}
+            options={[
+              { value: "newest", label: "Most recent" },
+              { value: "oldest", label: "Oldest first" },
+              { value: "title", label: "Title A–Z" },
+            ]}
+          />
         </label>
         <form
           onSubmit={(e) => { e.preventDefault(); if (newFolder.trim()) createFolder.mutate(newFolder.trim()); }}
