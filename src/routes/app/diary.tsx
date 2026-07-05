@@ -479,11 +479,14 @@ function DiaryCard({
         <MusicSearch selected={eMusic} onChange={setEMusic} />
         <label className="flex items-center gap-2 text-sm">
           <span className="text-muted-foreground">Folder</span>
-          <select value={eFolder ?? ""} onChange={(ev) => setEFolder(ev.target.value || null)}
-            className="rounded-md border border-input bg-card px-2 py-1">
-            <option value="">— none —</option>
-            {folders.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
-          </select>
+          <AppSelect
+            value={eFolder ?? NONE}
+            onValueChange={(v) => setEFolder(v === NONE ? null : v)}
+            options={[
+              { value: NONE, label: "— none —" },
+              ...folders.map((f) => ({ value: f.id, label: f.name })),
+            ]}
+          />
         </label>
         <div className="flex justify-end gap-2">
           <button onClick={() => setEditing(false)} className="flex items-center gap-1 rounded-md border border-border px-3 py-1.5 text-sm">
