@@ -4,12 +4,10 @@ import { Sparkles, Plus, Trash2, MessageSquare, Menu } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-  SheetTrigger,
-} from "@/components/ui/sheet";
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 
 export const Route = createFileRoute("/app/chat")({
   component: ChatLayout,
@@ -93,30 +91,38 @@ function ChatLayout() {
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-3">
-        <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
-          <SheetTrigger asChild>
+        <Popover open={menuOpen} onOpenChange={setMenuOpen}>
+          <PopoverTrigger asChild>
             <button
               aria-label="Open conversations menu"
-              className="mt-1 inline-flex size-10 items-center justify-center rounded-md border border-border bg-card text-foreground hover:bg-secondary"
+              className="mt-1 inline-flex size-10 items-center justify-center rounded-xl border border-primary/30 bg-primary/10 text-primary shadow-sm backdrop-blur-md transition hover:bg-primary/20"
             >
               <Menu className="size-5" />
             </button>
-          </SheetTrigger>
-          <SheetContent side="left" className="w-[86vw] max-w-sm p-0 sm:w-80">
-            <SheetHeader className="border-b border-border p-4">
-              <SheetTitle className="font-serif text-xl text-primary">Conversations</SheetTitle>
-            </SheetHeader>
-            <div className="flex h-full flex-col p-3">
+          </PopoverTrigger>
+          <PopoverContent
+            side="bottom"
+            align="start"
+            sideOffset={10}
+            className="w-[min(20rem,calc(100vw-1.5rem))] rounded-2xl border border-primary/25 bg-primary/15 p-0 text-foreground shadow-xl backdrop-blur-xl backdrop-saturate-150 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=open]:fade-in-0 data-[state=closed]:fade-out-0 data-[state=open]:zoom-in-95 data-[state=closed]:zoom-out-95 data-[state=open]:slide-in-from-top-2 data-[state=closed]:slide-out-to-top-2 data-[state=open]:duration-200 data-[state=closed]:duration-150"
+          >
+            <div className="flex items-center justify-between gap-2 border-b border-primary/20 px-4 py-3">
+              <p className="font-serif text-base text-primary">Conversations</p>
+              <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                {PRUNE_DAYS}d inactive prune
+              </span>
+            </div>
+            <div className="flex max-h-[min(70vh,26rem)] flex-col p-3">
               <button
                 onClick={startNew}
-                className="mb-3 flex w-full items-center justify-center gap-2 rounded-md bg-primary px-3 py-2 text-sm text-primary-foreground hover:opacity-90"
+                className="mb-3 flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-3 py-2 text-sm text-primary-foreground shadow-sm transition hover:opacity-90"
               >
                 <Plus className="size-4" /> New chat
               </button>
-              <p className="mb-2 px-1 text-xs uppercase tracking-wide text-muted-foreground">
-                Recent (up to {MAX_SESSIONS}, inactive {PRUNE_DAYS} days pruned)
+              <p className="mb-1.5 px-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+                Recent (up to {MAX_SESSIONS})
               </p>
-              <div className="min-h-0 flex-1 overflow-y-auto">
+              <div className="min-h-0 flex-1 overflow-y-auto pr-1">
                 {loading ? (
                   <p className="px-1 py-2 text-sm text-muted-foreground">Loading…</p>
                 ) : sessions.length === 0 ? (
@@ -130,8 +136,10 @@ function ChatLayout() {
                           <Link
                             to="/app/chat/$sessionId"
                             params={{ sessionId: s.id }}
-                            className={`flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-2 text-sm ${
-                              isActive ? "bg-secondary text-primary" : "text-foreground/80 hover:bg-secondary/60"
+                            className={`flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-sm transition ${
+                              isActive
+                                ? "bg-primary/25 text-primary"
+                                : "text-foreground/80 hover:bg-primary/10"
                             }`}
                           >
                             <MessageSquare className="size-3.5 shrink-0 opacity-70" />
@@ -141,7 +149,7 @@ function ChatLayout() {
                             onClick={() => remove(s.id)}
                             title="Delete"
                             aria-label="Delete conversation"
-                            className="rounded-md p-1.5 text-muted-foreground hover:bg-secondary hover:text-destructive"
+                            className="rounded-lg p-1.5 text-muted-foreground transition hover:bg-primary/15 hover:text-destructive"
                           >
                             <Trash2 className="size-3.5" />
                           </button>
@@ -152,8 +160,8 @@ function ChatLayout() {
                 )}
               </div>
             </div>
-          </SheetContent>
-        </Sheet>
+          </PopoverContent>
+        </Popover>
 
         <div className="min-w-0">
           <p className="font-hand text-2xl text-sepia">a quiet conversation</p>
