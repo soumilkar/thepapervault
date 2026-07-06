@@ -1,8 +1,15 @@
 import { createFileRoute, Outlet, Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import { useEffect, useState, useCallback } from "react";
-import { Sparkles, Plus, Trash2, MessageSquare } from "lucide-react";
+import { Sparkles, Plus, Trash2, MessageSquare, Menu } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from "@/components/ui/sheet";
 
 export const Route = createFileRoute("/app/chat")({
   component: ChatLayout,
@@ -22,9 +29,10 @@ function ChatLayout() {
 
   const [sessions, setSessions] = useState<SessionRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [menuOpen, setMenuOpen] = useState(false);
 
   const refresh = useCallback(async () => {
-    // Prune anything older than 14 days
+    // Prune inactive sessions (no activity for 14+ days)
     const cutoff = new Date(Date.now() - PRUNE_DAYS * 24 * 3600 * 1000).toISOString();
     await supabase.from("chat_sessions").delete().eq("user_id", user.id).lt("last_message_at", cutoff);
 
@@ -50,6 +58,11 @@ function ChatLayout() {
     return () => window.removeEventListener(CHAT_SESSIONS_UPDATED, h);
   }, [refresh]);
 
+  // Close side menu after navigation
+  useEffect(() => {
+    setMenuOpen(false);
+  }, [activeId]);
+
   const startNew = async () => {
     const { data, error } = await supabase
       .from("chat_sessions")
@@ -61,6 +74,7 @@ function ChatLayout() {
       return;
     }
     setSessions((s) => [data, ...s].slice(0, MAX_SESSIONS));
+    setMenuOpen(false);
     navigate({ to: "/app/chat/$sessionId", params: { sessionId: data.id } });
   };
 
@@ -77,66 +91,82 @@ function ChatLayout() {
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-start justify-between gap-3">
-        <div>
+    <div className="space-y-4">
+      <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-3">
+        <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
+          <SheetTrigger asChild>
+            <button
+              aria-label="Open conversations menu"
+              className="mt-1 inline-flex size-10 items-center justify-center rounded-md border border-border bg-card text-foreground hover:bg-secondary"
+            >
+              <Menu className="size-5" />
+            </button>
+          </SheetTrigger>
+          <SheetContent side="left" className="w-[86vw] max-w-sm p-0 sm:w-80">
+            <SheetHeader className="border-b border-border p-4">
+              <SheetTitle className="font-serif text-xl text-primary">Conversations</SheetTitle>
+            </SheetHeader>
+            <div className="flex h-full flex-col p-3">
+              <button
+                onClick={startNew}
+                className="mb-3 flex w-full items-center justify-center gap-2 rounded-md bg-primary px-3 py-2 text-sm text-primary-foreground hover:opacity-90"
+              >
+                <Plus className="size-4" /> New chat
+              </button>
+              <p className="mb-2 px-1 text-xs uppercase tracking-wide text-muted-foreground">
+                Recent (up to {MAX_SESSIONS}, inactive {PRUNE_DAYS} days pruned)
+              </p>
+              <div className="min-h-0 flex-1 overflow-y-auto">
+                {loading ? (
+                  <p className="px-1 py-2 text-sm text-muted-foreground">Loading…</p>
+                ) : sessions.length === 0 ? (
+                  <p className="px-1 py-2 text-sm text-muted-foreground">No conversations yet.</p>
+                ) : (
+                  <ul className="space-y-1">
+                    {sessions.map((s) => {
+                      const isActive = s.id === activeId;
+                      return (
+                        <li key={s.id} className="group flex items-center gap-1">
+                          <Link
+                            to="/app/chat/$sessionId"
+                            params={{ sessionId: s.id }}
+                            className={`flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-2 text-sm ${
+                              isActive ? "bg-secondary text-primary" : "text-foreground/80 hover:bg-secondary/60"
+                            }`}
+                          >
+                            <MessageSquare className="size-3.5 shrink-0 opacity-70" />
+                            <span className="truncate">{s.title || "Untitled"}</span>
+                          </Link>
+                          <button
+                            onClick={() => remove(s.id)}
+                            title="Delete"
+                            aria-label="Delete conversation"
+                            className="rounded-md p-1.5 text-muted-foreground hover:bg-secondary hover:text-destructive"
+                          >
+                            <Trash2 className="size-3.5" />
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </div>
+            </div>
+          </SheetContent>
+        </Sheet>
+
+        <div className="min-w-0">
           <p className="font-hand text-2xl text-sepia">a quiet conversation</p>
-          <h1 className="font-serif text-4xl text-primary flex items-center gap-2">
-            <Sparkles className="size-7 text-accent" /> Your companion
+          <h1 className="flex items-center gap-2 font-serif text-3xl text-primary sm:text-4xl">
+            <Sparkles className="size-6 shrink-0 text-accent sm:size-7" />
+            <span className="truncate">Your companion</span>
           </h1>
         </div>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-[16rem_1fr]">
-        <aside className="paper-card p-3 h-fit">
-          <button
-            onClick={startNew}
-            className="mb-3 flex w-full items-center justify-center gap-2 rounded-md bg-primary px-3 py-2 text-sm text-primary-foreground hover:opacity-90"
-          >
-            <Plus className="size-4" /> New chat
-          </button>
-          <p className="mb-2 px-1 text-xs uppercase tracking-wide text-muted-foreground">
-            Recent (last {MAX_SESSIONS}, kept {PRUNE_DAYS} days)
-          </p>
-          {loading ? (
-            <p className="px-1 py-2 text-sm text-muted-foreground">Loading…</p>
-          ) : sessions.length === 0 ? (
-            <p className="px-1 py-2 text-sm text-muted-foreground">No conversations yet.</p>
-          ) : (
-            <ul className="space-y-1">
-              {sessions.map((s) => {
-                const isActive = s.id === activeId;
-                return (
-                  <li key={s.id} className="group flex items-center gap-1">
-                    <Link
-                      to="/app/chat/$sessionId"
-                      params={{ sessionId: s.id }}
-                      className={`flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-2 text-sm ${
-                        isActive ? "bg-secondary text-primary" : "text-foreground/80 hover:bg-secondary/60"
-                      }`}
-                    >
-                      <MessageSquare className="size-3.5 shrink-0 opacity-70" />
-                      <span className="truncate">{s.title || "Untitled"}</span>
-                    </Link>
-                    <button
-                      onClick={() => remove(s.id)}
-                      title="Delete"
-                      className="rounded-md p-1.5 text-muted-foreground opacity-0 hover:bg-secondary hover:text-destructive group-hover:opacity-100"
-                    >
-                      <Trash2 className="size-3.5" />
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </aside>
-
-        <div className="min-w-0">
-          <Outlet />
-        </div>
+      <div className="min-w-0">
+        <Outlet />
       </div>
     </div>
   );
 }
-
