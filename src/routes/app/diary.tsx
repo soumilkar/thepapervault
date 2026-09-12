@@ -268,7 +268,7 @@ function DiaryPage() {
       if (error) throw error;
     },
     onSuccess: () => {
-      setTitle(""); setContent(""); setMood(""); setPhoto(null); setHandwritingFile(null); setMusic(null); setIsPublic(false); setFolderId(null);
+      setTitle(""); setContent(""); setMood(""); setPhoto(null); setHandwritingPages((pages) => { pages.forEach((p) => URL.revokeObjectURL(p.url)); return []; }); setMusic(null); setIsPublic(false); setFolderId(null);
       toast.success("Entry saved");
       qc.invalidateQueries({ queryKey: ["diary"] });
       qc.invalidateQueries({ queryKey: ["gallery"] });
@@ -378,16 +378,26 @@ function DiaryPage() {
           placeholder="Pour it out..." rows={6}
           className="w-full resize-none bg-transparent leading-relaxed outline-none placeholder:text-muted-foreground/60" />
 
-        {handwritingPreview && (
-          <div className="flex items-start gap-3 rounded-md border border-border bg-secondary/50 p-3">
-            <img src={handwritingPreview} alt="Handwritten page selected for conversion" className="h-20 w-16 rounded border border-border object-cover" />
-            <div className="min-w-0 flex-1 text-sm">
-              <p className="font-medium text-primary">{handwritingFile?.name}</p>
-              <p className="mt-1 text-muted-foreground">The converted text is in the box above. Please review it before saving.</p>
-            </div>
-            <button type="button" onClick={() => setHandwritingFile(null)} className="text-muted-foreground hover:text-primary" aria-label="Remove handwriting image">
-              <X className="size-4" />
-            </button>
+        {handwritingPages.length > 0 && (
+          <div className="space-y-2 rounded-md border border-border bg-secondary/50 p-3">
+            <p className="text-xs text-muted-foreground">Converted text is added to the box above, one page after another. Please review it before saving.</p>
+            {handwritingPages.map((page, i) => (
+              <div key={page.id} className="flex items-center gap-3">
+                <img src={page.url} alt={`Handwritten page ${i + 1}`} className="h-16 w-12 rounded border border-border object-cover" />
+                <div className="min-w-0 flex-1 text-sm">
+                  <p className="truncate font-medium text-primary">{page.file.name}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {page.status === "pending" && "Waiting..."}
+                    {page.status === "converting" && "Converting..."}
+                    {page.status === "done" && "Converted"}
+                    {page.status === "error" && "Could not convert"}
+                  </p>
+                </div>
+                <button type="button" onClick={() => removeHandwritingPage(page.id)} disabled={page.status === "converting"} className="text-muted-foreground hover:text-primary disabled:opacity-40" aria-label={`Remove ${page.file.name}`}>
+                  <X className="size-4" />
+                </button>
+              </div>
+            ))}
           </div>
         )}
 
@@ -447,14 +457,10 @@ function DiaryPage() {
             )}
             <label className="flex cursor-pointer items-center gap-2 text-sm text-accent hover:text-primary">
               <FileText className="size-4" />
-              <span>{handwriting ? "Converting..." : "Convert handwritten page"}</span>
-              <input type="file" accept="image/jpeg,image/png,image/webp" className="hidden" disabled={handwriting.isPending}
+              <span>{handwriting.isPending ? "Converting..." : "Convert handwritten pages"}</span>
+              <input type="file" accept="image/jpeg,image/png,image/webp" multiple className="hidden" disabled={handwriting.isPending}
                 onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) {
-                    if (f.size >= 5 * 1024 * 1024) toast.error("Handwritten image must be smaller than 5 MB");
-                    else { setHandwritingFile(f); handwriting.mutate(f); }
-                  }
+                  addHandwritingFiles(Array.from(e.target.files ?? []));
                   e.currentTarget.value = "";
                 }} />
             </label>
