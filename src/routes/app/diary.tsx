@@ -63,8 +63,8 @@ function DiaryPage() {
   const [music, setMusic] = useState<SelectedTrack | null>(null);
   const [photo, setPhoto] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
-  const [handwritingFile, setHandwritingFile] = useState<File | null>(null);
-  const [handwritingPreview, setHandwritingPreview] = useState<string | null>(null);
+  type HandwritingPage = { id: string; file: File; url: string; status: "pending" | "converting" | "done" | "error" };
+  const [handwritingPages, setHandwritingPages] = useState<HandwritingPage[]>([]);
   const [filterFolder, setFilterFolder] = useState<string | "all">("all");
   const [sort, setSort] = useState<Sort>("newest");
   const [newFolder, setNewFolder] = useState("");
