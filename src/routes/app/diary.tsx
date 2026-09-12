@@ -76,33 +76,58 @@ function DiaryPage() {
     return () => URL.revokeObjectURL(url);
   }, [photo]);
 
-  useEffect(() => {
-    if (!handwritingFile) { setHandwritingPreview(null); return; }
-    const url = URL.createObjectURL(handwritingFile);
-    setHandwritingPreview(url);
-    return () => URL.revokeObjectURL(url);
-  }, [handwritingFile]);
+  const readAsDataUrl = (file: File) => new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("Could not read that image"));
+    reader.onerror = () => reject(new Error("Could not read that image"));
+    reader.readAsDataURL(file);
+  });
+
+  const setPageStatus = (id: string, status: HandwritingPage["status"]) =>
+    setHandwritingPages((pages) => pages.map((p) => (p.id === id ? { ...p, status } : p)));
 
   const handwriting = useMutation({
-    mutationFn: async (file: File) => {
-      const imageDataUrl = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("Could not read that image"));
-        reader.onerror = () => reject(new Error("Could not read that image"));
-        reader.readAsDataURL(file);
-      });
-      return transcribeHandwriting({ data: { imageDataUrl, mimeType: file.type as "image/jpeg" | "image/png" | "image/webp" } });
-    },
-    onSuccess: ({ text }) => {
-      if (!text) {
-        toast.error("No handwriting was detected. Try a clearer photo.");
-        return;
+    mutationFn: async (pages: HandwritingPage[]) => {
+      let converted = 0;
+      for (const page of pages) {
+        setPageStatus(page.id, "converting");
+        try {
+          const imageDataUrl = await readAsDataUrl(page.file);
+          const { text } = await transcribeHandwriting({ data: { imageDataUrl, mimeType: page.file.type as "image/jpeg" | "image/png" | "image/webp" } });
+          if (!text) throw new Error("No handwriting was detected in one of the images. Try a clearer photo.");
+          setContent((current) => current.trim() ? `${current.trim()}\n\n${text}` : text);
+          setPageStatus(page.id, "done");
+          converted += 1;
+        } catch (err) {
+          setPageStatus(page.id, "error");
+          throw err;
+        }
       }
-      setContent((current) => current.trim() ? `${current.trim()}\n\n${text}` : text);
-      toast.success("Handwriting converted. Review the text before saving.");
+      return converted;
+    },
+    onSuccess: (converted) => {
+      toast.success(converted > 1 ? `${converted} pages converted. Review the text before saving.` : "Handwriting converted. Review the text before saving.");
     },
     onError: (error: Error) => toast.error(error.message),
   });
+
+  const addHandwritingFiles = (files: File[]) => {
+    const accepted: HandwritingPage[] = [];
+    for (const f of files) {
+      if (f.size >= 5 * 1024 * 1024) { toast.error(`"${f.name}" must be smaller than 5 MB`); continue; }
+      accepted.push({ id: crypto.randomUUID(), file: f, url: URL.createObjectURL(f), status: "pending" });
+    }
+    if (!accepted.length) return;
+    setHandwritingPages((pages) => [...pages, ...accepted]);
+    handwriting.mutate(accepted);
+  };
+
+  const removeHandwritingPage = (id: string) =>
+    setHandwritingPages((pages) => {
+      const page = pages.find((p) => p.id === id);
+      if (page) URL.revokeObjectURL(page.url);
+      return pages.filter((p) => p.id !== id);
+    });
 
   const folders = useQuery({
     queryKey: ["diary-folders", user.id],
