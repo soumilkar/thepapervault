@@ -63,8 +63,8 @@ function DiaryPage() {
   const [music, setMusic] = useState<SelectedTrack | null>(null);
   const [photo, setPhoto] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
-  const [handwritingFile, setHandwritingFile] = useState<File | null>(null);
-  const [handwritingPreview, setHandwritingPreview] = useState<string | null>(null);
+  type HandwritingPage = { id: string; file: File; url: string; status: "pending" | "converting" | "done" | "error" };
+  const [handwritingPages, setHandwritingPages] = useState<HandwritingPage[]>([]);
   const [filterFolder, setFilterFolder] = useState<string | "all">("all");
   const [sort, setSort] = useState<Sort>("newest");
   const [newFolder, setNewFolder] = useState("");
@@ -76,33 +76,58 @@ function DiaryPage() {
     return () => URL.revokeObjectURL(url);
   }, [photo]);
 
-  useEffect(() => {
-    if (!handwritingFile) { setHandwritingPreview(null); return; }
-    const url = URL.createObjectURL(handwritingFile);
-    setHandwritingPreview(url);
-    return () => URL.revokeObjectURL(url);
-  }, [handwritingFile]);
+  const readAsDataUrl = (file: File) => new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("Could not read that image"));
+    reader.onerror = () => reject(new Error("Could not read that image"));
+    reader.readAsDataURL(file);
+  });
+
+  const setPageStatus = (id: string, status: HandwritingPage["status"]) =>
+    setHandwritingPages((pages) => pages.map((p) => (p.id === id ? { ...p, status } : p)));
 
   const handwriting = useMutation({
-    mutationFn: async (file: File) => {
-      const imageDataUrl = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("Could not read that image"));
-        reader.onerror = () => reject(new Error("Could not read that image"));
-        reader.readAsDataURL(file);
-      });
-      return transcribeHandwriting({ data: { imageDataUrl, mimeType: file.type as "image/jpeg" | "image/png" | "image/webp" } });
-    },
-    onSuccess: ({ text }) => {
-      if (!text) {
-        toast.error("No handwriting was detected. Try a clearer photo.");
-        return;
+    mutationFn: async (pages: HandwritingPage[]) => {
+      let converted = 0;
+      for (const page of pages) {
+        setPageStatus(page.id, "converting");
+        try {
+          const imageDataUrl = await readAsDataUrl(page.file);
+          const { text } = await transcribeHandwriting({ data: { imageDataUrl, mimeType: page.file.type as "image/jpeg" | "image/png" | "image/webp" } });
+          if (!text) throw new Error("No handwriting was detected in one of the images. Try a clearer photo.");
+          setContent((current) => current.trim() ? `${current.trim()}\n\n${text}` : text);
+          setPageStatus(page.id, "done");
+          converted += 1;
+        } catch (err) {
+          setPageStatus(page.id, "error");
+          throw err;
+        }
       }
-      setContent((current) => current.trim() ? `${current.trim()}\n\n${text}` : text);
-      toast.success("Handwriting converted. Review the text before saving.");
+      return converted;
+    },
+    onSuccess: (converted) => {
+      toast.success(converted > 1 ? `${converted} pages converted. Review the text before saving.` : "Handwriting converted. Review the text before saving.");
     },
     onError: (error: Error) => toast.error(error.message),
   });
+
+  const addHandwritingFiles = (files: File[]) => {
+    const accepted: HandwritingPage[] = [];
+    for (const f of files) {
+      if (f.size >= 5 * 1024 * 1024) { toast.error(`"${f.name}" must be smaller than 5 MB`); continue; }
+      accepted.push({ id: crypto.randomUUID(), file: f, url: URL.createObjectURL(f), status: "pending" });
+    }
+    if (!accepted.length) return;
+    setHandwritingPages((pages) => [...pages, ...accepted]);
+    handwriting.mutate(accepted);
+  };
+
+  const removeHandwritingPage = (id: string) =>
+    setHandwritingPages((pages) => {
+      const page = pages.find((p) => p.id === id);
+      if (page) URL.revokeObjectURL(page.url);
+      return pages.filter((p) => p.id !== id);
+    });
 
   const folders = useQuery({
     queryKey: ["diary-folders", user.id],
@@ -243,7 +268,7 @@ function DiaryPage() {
       if (error) throw error;
     },
     onSuccess: () => {
-      setTitle(""); setContent(""); setMood(""); setPhoto(null); setHandwritingFile(null); setMusic(null); setIsPublic(false); setFolderId(null);
+      setTitle(""); setContent(""); setMood(""); setPhoto(null); setHandwritingPages((pages) => { pages.forEach((p) => URL.revokeObjectURL(p.url)); return []; }); setMusic(null); setIsPublic(false); setFolderId(null);
       toast.success("Entry saved");
       qc.invalidateQueries({ queryKey: ["diary"] });
       qc.invalidateQueries({ queryKey: ["gallery"] });
@@ -353,16 +378,26 @@ function DiaryPage() {
           placeholder="Pour it out..." rows={6}
           className="w-full resize-none bg-transparent leading-relaxed outline-none placeholder:text-muted-foreground/60" />
 
-        {handwritingPreview && (
-          <div className="flex items-start gap-3 rounded-md border border-border bg-secondary/50 p-3">
-            <img src={handwritingPreview} alt="Handwritten page selected for conversion" className="h-20 w-16 rounded border border-border object-cover" />
-            <div className="min-w-0 flex-1 text-sm">
-              <p className="font-medium text-primary">{handwritingFile?.name}</p>
-              <p className="mt-1 text-muted-foreground">The converted text is in the box above. Please review it before saving.</p>
-            </div>
-            <button type="button" onClick={() => setHandwritingFile(null)} className="text-muted-foreground hover:text-primary" aria-label="Remove handwriting image">
-              <X className="size-4" />
-            </button>
+        {handwritingPages.length > 0 && (
+          <div className="space-y-2 rounded-md border border-border bg-secondary/50 p-3">
+            <p className="text-xs text-muted-foreground">Converted text is added to the box above, one page after another. Please review it before saving.</p>
+            {handwritingPages.map((page, i) => (
+              <div key={page.id} className="flex items-center gap-3">
+                <img src={page.url} alt={`Handwritten page ${i + 1}`} className="h-16 w-12 rounded border border-border object-cover" />
+                <div className="min-w-0 flex-1 text-sm">
+                  <p className="truncate font-medium text-primary">{page.file.name}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {page.status === "pending" && "Waiting..."}
+                    {page.status === "converting" && "Converting..."}
+                    {page.status === "done" && "Converted"}
+                    {page.status === "error" && "Could not convert"}
+                  </p>
+                </div>
+                <button type="button" onClick={() => removeHandwritingPage(page.id)} disabled={page.status === "converting"} className="text-muted-foreground hover:text-primary disabled:opacity-40" aria-label={`Remove ${page.file.name}`}>
+                  <X className="size-4" />
+                </button>
+              </div>
+            ))}
           </div>
         )}
 
@@ -422,14 +457,10 @@ function DiaryPage() {
             )}
             <label className="flex cursor-pointer items-center gap-2 text-sm text-accent hover:text-primary">
               <FileText className="size-4" />
-              <span>{handwriting ? "Converting..." : "Convert handwritten page"}</span>
-              <input type="file" accept="image/jpeg,image/png,image/webp" className="hidden" disabled={handwriting.isPending}
+              <span>{handwriting.isPending ? "Converting..." : "Convert handwritten pages"}</span>
+              <input type="file" accept="image/jpeg,image/png,image/webp" multiple className="hidden" disabled={handwriting.isPending}
                 onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) {
-                    if (f.size >= 5 * 1024 * 1024) toast.error("Handwritten image must be smaller than 5 MB");
-                    else { setHandwritingFile(f); handwriting.mutate(f); }
-                  }
+                  addHandwritingFiles(Array.from(e.target.files ?? []));
                   e.currentTarget.value = "";
                 }} />
             </label>
