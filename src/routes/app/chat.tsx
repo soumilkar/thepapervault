@@ -16,7 +16,6 @@ export const Route = createFileRoute("/app/chat")({
 type SessionRow = { id: string; title: string; last_message_at: string };
 
 const MAX_SESSIONS = 7;
-const PRUNE_DAYS = 14;
 export const CHAT_SESSIONS_UPDATED = "chat-sessions-updated";
 
 function ChatLayout() {
@@ -30,10 +29,6 @@ function ChatLayout() {
   const [menuOpen, setMenuOpen] = useState(false);
 
   const refresh = useCallback(async () => {
-    // Prune inactive sessions (no activity for 14+ days)
-    const cutoff = new Date(Date.now() - PRUNE_DAYS * 24 * 3600 * 1000).toISOString();
-    await supabase.from("chat_sessions").delete().eq("user_id", user.id).lt("last_message_at", cutoff);
-
     const { data, error } = await supabase
       .from("chat_sessions")
       .select("id,title,last_message_at")
@@ -109,7 +104,7 @@ function ChatLayout() {
             <div className="flex items-center justify-between gap-2 border-b border-primary/20 px-4 py-3">
               <p className="font-serif text-base text-primary">Conversations</p>
               <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                {PRUNE_DAYS}d inactive prune
+                saved history
               </span>
             </div>
             <div className="flex max-h-[min(70vh,26rem)] flex-col p-3">
