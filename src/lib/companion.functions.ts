@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { z } from "zod";
+import { callGeminiWithFallback } from "./gemini.server";
 
 const MessageSchema = z.object({
   role: z.enum(["user", "assistant"]),
@@ -41,9 +42,6 @@ How to think:
 === WHAT YOU KNOW ABOUT ${data.name.toUpperCase()} (from their private writings) ===
 ${data.context || "(no entries shared yet)"}`;
 
-    const model = "gemini-2.5-flash";
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
-
     const contents = [
       ...data.history.map((m) => ({
         role: m.role === "assistant" ? "model" : "user",
@@ -52,23 +50,11 @@ ${data.context || "(no entries shared yet)"}`;
       { role: "user", parts: [{ text: data.question }] },
     ];
 
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: system }] },
-        contents,
-      }),
+    const { json } = await callGeminiWithFallback(key, {
+      systemInstruction: { parts: [{ text: system }] },
+      contents,
     });
 
-    if (!res.ok) {
-      const errText = await res.text();
-      throw new Error(`Gemini error ${res.status}: ${errText.slice(0, 300)}`);
-    }
-
-    const json = (await res.json()) as {
-      candidates?: { content?: { parts?: { text?: string }[] } }[];
-    };
     const answer =
       json.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ??
       "";
