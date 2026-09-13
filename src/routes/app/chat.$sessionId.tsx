@@ -1,9 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useServerFn } from "@tanstack/react-start";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Send } from "lucide-react";
 import { toast } from "sonner";
-import { askCompanion } from "@/lib/companion.functions";
 import { Markdown } from "@/components/Markdown";
 import { supabase } from "@/integrations/supabase/client";
 import { useVault } from "@/lib/vault";
@@ -85,7 +83,6 @@ function SessionChat() {
   const { user } = Route.useRouteContext();
   const { sessionId } = Route.useParams();
   const { key } = useVault();
-  const ask = useServerFn(askCompanion);
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -141,12 +138,43 @@ function SessionChat() {
 
       const context = await buildContext(user.id, key, source, startDate, endDate);
       const name = user.user_metadata?.display_name || user.email?.split("@")[0] || "the writer";
-      const res = await ask({ data: { question, context, name, history: priorHistory } });
-      const assistantMsg: Msg = { role: "assistant", content: res.answer };
-      setMessages((m) => [...m, assistantMsg]);
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData.session?.access_token;
+      if (!accessToken) throw new Error("Please sign in again to continue");
+
+      const response = await fetch("/api/companion-stream", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({ question, context, name, history: priorHistory }),
+      });
+      if (!response.ok) {
+        const message = await response.text();
+        throw new Error(message || "Could not reach the companion");
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error("The Companion returned an empty response");
+
+      const decoder = new TextDecoder();
+      let answer = "";
+      setMessages((current) => [...current, { role: "assistant", content: "" }]);
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        answer += decoder.decode(value, { stream: true });
+        setMessages((current) => [
+          ...current.slice(0, -1),
+          { role: "assistant", content: answer },
+        ]);
+      }
+      answer += decoder.decode();
+      if (!answer.trim()) throw new Error("The Companion returned an empty response");
 
       await supabase.from("chat_messages").insert({
-        session_id: sessionId, user_id: user.id, role: "assistant", content: res.answer,
+        session_id: sessionId, user_id: user.id, role: "assistant", content: answer,
       });
 
       // If this is the first exchange, title the session from the question
@@ -159,6 +187,12 @@ function SessionChat() {
       await supabase.from("chat_sessions").update(patch).eq("id", sessionId);
       window.dispatchEvent(new Event(CHAT_SESSIONS_UPDATED));
     } catch (e: unknown) {
+      setMessages((current) => {
+        const last = current.at(-1);
+        return last?.role === "assistant" && !priorHistory.includes(last)
+          ? current.slice(0, -1)
+          : current;
+      });
       toast.error(e instanceof Error ? e.message : "Could not reach the companion");
     } finally {
       setLoading(false);
@@ -234,7 +268,9 @@ function SessionChat() {
             )}
           </div>
         ))}
-        {loading && <p className="font-hand text-sepia">thinking...</p>}
+        {loading && messages.at(-1)?.role !== "assistant" && (
+          <p className="font-hand text-sepia">thinking...</p>
+        )}
       </div>
 
       <div className="h-32" aria-hidden />
