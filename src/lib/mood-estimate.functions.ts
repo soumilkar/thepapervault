@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { z } from "zod";
+import { callGeminiWithFallback } from "./gemini.server";
 
 // Estimate a 1–5 mood/sentiment score for a batch of decrypted entry snippets.
 // Runs on the server using Gemini; the client sends already-decrypted text
@@ -21,9 +22,6 @@ export const estimateMoodScores = createServerFn({ method: "POST" })
     const key = process.env.GEMINI_API_KEY;
     if (!key) throw new Error("AI is not configured");
 
-    const model = "gemini-2.5-flash";
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
-
     const numbered = data.items
       .map(
         (it, i) =>
@@ -41,29 +39,17 @@ Return ONLY valid JSON in the exact shape:
 {"scores":[{"id":"<id>","score":<1-5 integer>}, ...]}
 No prose, no code fences.`;
 
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: system }] },
-        contents: [
-          {
-            role: "user",
-            parts: [{ text: `Rate these entries:\n\n${numbered}` }],
-          },
-        ],
-        generationConfig: { responseMimeType: "application/json", temperature: 0.2 },
-      }),
+    const { json } = await callGeminiWithFallback(key, {
+      systemInstruction: { parts: [{ text: system }] },
+      contents: [
+        {
+          role: "user",
+          parts: [{ text: `Rate these entries:\n\n${numbered}` }],
+        },
+      ],
+      generationConfig: { responseMimeType: "application/json", temperature: 0.2 },
     });
 
-    if (!res.ok) {
-      const errText = await res.text();
-      throw new Error(`Gemini error ${res.status}: ${errText.slice(0, 300)}`);
-    }
-
-    const json = (await res.json()) as {
-      candidates?: { content?: { parts?: { text?: string }[] } }[];
-    };
     const raw = json.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
 
     let parsed: { scores?: { id?: string; score?: number }[] } = {};
