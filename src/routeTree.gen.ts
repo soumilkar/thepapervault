@@ -20,6 +20,7 @@ import { Route as AppGalleryRouteImport } from './routes/app/gallery'
 import { Route as AppDiaryRouteImport } from './routes/app/diary'
 import { Route as AppChatRouteImport } from './routes/app/chat'
 import { Route as AppBlogRouteImport } from './routes/app/blog'
+import { Route as ApiCompanionStreamRouteImport } from './routes/api/companion-stream'
 import { Route as AppChatIndexRouteImport } from './routes/app/chat.index'
 import { Route as AppChatSessionIdRouteImport } from './routes/app/chat.$sessionId'
 
@@ -78,6 +79,11 @@ const AppBlogRoute = AppBlogRouteImport.update({
   path: '/blog',
   getParentRoute: () => AppRouteRoute,
 } as any)
+const ApiCompanionStreamRoute = ApiCompanionStreamRouteImport.update({
+  id: '/api/companion-stream',
+  path: '/api/companion-stream',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AppChatIndexRoute = AppChatIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -95,6 +101,7 @@ export interface FileRoutesByFullPath {
   '/auth': typeof AuthRoute
   '/privacy': typeof PrivacyRoute
   '/terms': typeof TermsRoute
+  '/api/companion-stream': typeof ApiCompanionStreamRoute
   '/app/blog': typeof AppBlogRoute
   '/app/chat': typeof AppChatRouteWithChildren
   '/app/diary': typeof AppDiaryRoute
@@ -109,6 +116,7 @@ export interface FileRoutesByTo {
   '/auth': typeof AuthRoute
   '/privacy': typeof PrivacyRoute
   '/terms': typeof TermsRoute
+  '/api/companion-stream': typeof ApiCompanionStreamRoute
   '/app/blog': typeof AppBlogRoute
   '/app/diary': typeof AppDiaryRoute
   '/app/gallery': typeof AppGalleryRoute
@@ -124,6 +132,7 @@ export interface FileRoutesById {
   '/auth': typeof AuthRoute
   '/privacy': typeof PrivacyRoute
   '/terms': typeof TermsRoute
+  '/api/companion-stream': typeof ApiCompanionStreamRoute
   '/app/blog': typeof AppBlogRoute
   '/app/chat': typeof AppChatRouteWithChildren
   '/app/diary': typeof AppDiaryRoute
@@ -141,6 +150,7 @@ export interface FileRouteTypes {
     | '/auth'
     | '/privacy'
     | '/terms'
+    | '/api/companion-stream'
     | '/app/blog'
     | '/app/chat'
     | '/app/diary'
@@ -155,6 +165,7 @@ export interface FileRouteTypes {
     | '/auth'
     | '/privacy'
     | '/terms'
+    | '/api/companion-stream'
     | '/app/blog'
     | '/app/diary'
     | '/app/gallery'
@@ -169,6 +180,7 @@ export interface FileRouteTypes {
     | '/auth'
     | '/privacy'
     | '/terms'
+    | '/api/companion-stream'
     | '/app/blog'
     | '/app/chat'
     | '/app/diary'
@@ -185,6 +197,7 @@ export interface RootRouteChildren {
   AuthRoute: typeof AuthRoute
   PrivacyRoute: typeof PrivacyRoute
   TermsRoute: typeof TermsRoute
+  ApiCompanionStreamRoute: typeof ApiCompanionStreamRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -266,6 +279,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppBlogRouteImport
       parentRoute: typeof AppRouteRoute
     }
+    '/api/companion-stream': {
+      id: '/api/companion-stream'
+      path: '/api/companion-stream'
+      fullPath: '/api/companion-stream'
+      preLoaderRoute: typeof ApiCompanionStreamRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/app/chat/': {
       id: '/app/chat/'
       path: '/'
@@ -324,6 +344,7 @@ const rootRouteChildren: RootRouteChildren = {
   AuthRoute: AuthRoute,
   PrivacyRoute: PrivacyRoute,
   TermsRoute: TermsRoute,
+  ApiCompanionStreamRoute: ApiCompanionStreamRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
