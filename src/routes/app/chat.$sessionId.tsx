@@ -8,6 +8,7 @@ import { useVault } from "@/lib/vault";
 import { decryptText } from "@/lib/crypto";
 import { AppSelect } from "@/components/AppSelect";
 import { CHAT_SESSIONS_UPDATED } from "./chat";
+import { useBrowserDraft } from "@/lib/browser-drafts";
 
 export const Route = createFileRoute("/app/chat/$sessionId")({
   component: SessionChat,
@@ -84,7 +85,7 @@ function SessionChat() {
   const { sessionId } = Route.useParams();
   const { key } = useVault();
   const [messages, setMessages] = useState<Msg[]>([]);
-  const [input, setInput] = useState("");
+  const [input, setInput, clearDraft] = useBrowserDraft(`papervault:companion-draft:${user.id}:${sessionId}`, "");
   const [loading, setLoading] = useState(false);
   const [hydrating, setHydrating] = useState(true);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -128,13 +129,14 @@ function SessionChat() {
     const priorHistory = messages;
     const userMsg: Msg = { role: "user", content: question };
     setMessages((m) => [...m, userMsg]);
-    setInput("");
     setLoading(true);
     try {
       // Persist user message
-      await supabase.from("chat_messages").insert({
+      const { error: userMessageError } = await supabase.from("chat_messages").insert({
         session_id: sessionId, user_id: user.id, role: "user", content: question,
       });
+      if (userMessageError) throw userMessageError;
+      clearDraft();
 
       const context = await buildContext(user.id, key, source, startDate, endDate);
       const name = user.user_metadata?.display_name || user.email?.split("@")[0] || "the writer";
