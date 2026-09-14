@@ -53,7 +53,6 @@ function BlogPage() {
   const setNotify = (value: boolean) => setDraft((current) => ({ ...current, notify: value }));
   const [image, setImage] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
-  const [notify, setNotify] = useState(true);
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<Tab>("mine");
 
