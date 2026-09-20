@@ -1,6 +1,7 @@
 import { createFileRoute, Outlet, redirect, Link, useRouter, useRouterState } from "@tanstack/react-router";
 import { supabase } from "@/integrations/supabase/client";
-import { BookOpen, Image as ImageIcon, PenLine, Sparkles, LogOut, Home, ChevronDown, Lock, StickyNote } from "lucide-react";
+import { BookOpen, Image as ImageIcon, PenLine, Sparkles, LogOut, Home, ChevronDown, Lock, StickyNote, Moon, Sun } from "lucide-react";
+import { useEffect, useState } from "react";
 import { VaultProvider, useVault } from "@/lib/vault";
 import { VaultGate } from "@/components/VaultGate";
 import {
@@ -34,8 +35,23 @@ function AuthedLayout() {
   const router = useRouter();
   const { user } = Route.useRouteContext();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const [darkTheme, setDarkTheme] = useState(false);
   const current =
     NAV.find((n) => (n.exact ? pathname === n.to : pathname.startsWith(n.to))) ?? NAV[0];
+
+  useEffect(() => {
+    const saved = window.localStorage.getItem("papervault:theme");
+    const isDark = saved === "dark";
+    setDarkTheme(isDark);
+    document.documentElement.classList.toggle("dark", isDark);
+  }, []);
+
+  const toggleTheme = () => {
+    const next = !darkTheme;
+    setDarkTheme(next);
+    window.localStorage.setItem("papervault:theme", next ? "dark" : "light");
+    document.documentElement.classList.toggle("dark", next);
+  };
 
   const handleSignOut = async () => {
     await supabase.auth.signOut();
@@ -55,6 +71,7 @@ function AuthedLayout() {
               {NAV.map((n) => (
                 <NavLink key={n.to} to={n.to} exact={n.exact} icon={<n.icon className="size-4" />} label={n.label} />
               ))}
+              <ThemeButton dark={darkTheme} onClick={toggleTheme} />
               <VaultLockButton />
               <button onClick={handleSignOut} className="ml-2 flex items-center gap-1.5 rounded-md px-3 py-2 text-muted-foreground hover:text-primary">
                 <LogOut className="size-4" /> Sign out
@@ -77,6 +94,7 @@ function AuthedLayout() {
                     </DropdownMenuItem>
                   ))}
                   <DropdownMenuSeparator />
+                   <ThemeMenuItem dark={darkTheme} onClick={toggleTheme} />
                   <VaultLockMenuItem />
                   <DropdownMenuItem onClick={handleSignOut} className="text-muted-foreground">
                     <LogOut className="size-4" /> Sign out
@@ -93,6 +111,22 @@ function AuthedLayout() {
         </main>
       </div>
     </VaultProvider>
+  );
+}
+
+function ThemeButton({ dark, onClick }: { dark: boolean; onClick: () => void }) {
+  return (
+    <button onClick={onClick} className="ml-1 flex items-center gap-1.5 rounded-md px-3 py-2 text-muted-foreground hover:bg-secondary hover:text-primary" aria-label={dark ? "Use light theme" : "Use dark theme"} title={dark ? "Use light theme" : "Use dark theme"}>
+      {dark ? <Sun className="size-4" /> : <Moon className="size-4" />} {dark ? "Light" : "Dark"}
+    </button>
+  );
+}
+
+function ThemeMenuItem({ dark, onClick }: { dark: boolean; onClick: () => void }) {
+  return (
+    <DropdownMenuItem onClick={onClick}>
+      {dark ? <Sun className="size-4" /> : <Moon className="size-4" />} {dark ? "Light theme" : "Dark theme"}
+    </DropdownMenuItem>
   );
 }
 

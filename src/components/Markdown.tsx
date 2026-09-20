@@ -3,14 +3,14 @@ import remarkGfm from "remark-gfm";
 
 export function Markdown({ children, className = "" }: { children: string; className?: string }) {
   return (
-    <div className={`prose-paper ${className}`}>
+    <div className={`prose-paper min-w-0 ${className}`}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
           h1: ({ node, ...p }) => <h1 className="font-serif text-2xl text-primary mt-4 mb-2" {...p} />,
           h2: ({ node, ...p }) => <h2 className="font-serif text-xl text-primary mt-4 mb-2" {...p} />,
           h3: ({ node, ...p }) => <h3 className="font-serif text-lg text-primary mt-3 mb-1.5" {...p} />,
-          p: ({ node, ...p }) => <p className="leading-relaxed my-2" {...p} />,
+          p: ({ node, ...p }) => <p className="mb-3 whitespace-pre-wrap leading-relaxed last:mb-0" {...p} />,
           ul: ({ node, ...p }) => <ul className="my-2 list-disc pl-5 space-y-1" {...p} />,
           ol: ({ node, ...p }) => <ol className="my-2 list-decimal pl-5 space-y-1" {...p} />,
           li: ({ node, ...p }) => <li className="leading-relaxed" {...p} />,

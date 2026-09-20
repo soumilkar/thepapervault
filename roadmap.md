@@ -1,0 +1,6 @@
+- [ ] Preserve formatting in expanded diary, notes, and blog entries
+- [ ] Add Companion-generated editable diary drafts
+- [ ] Add a polished dark theme toggle
+- [ ] Scroll diary to the newest entry on open
+- [ ] Fix Mood Timeline refresh after diary changes
+- [ ] Verify build and live preview

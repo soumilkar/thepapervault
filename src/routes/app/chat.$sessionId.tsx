@@ -1,11 +1,11 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Send } from "lucide-react";
+import { Send, BookPlus } from "lucide-react";
 import { toast } from "sonner";
 import { Markdown } from "@/components/Markdown";
 import { supabase } from "@/integrations/supabase/client";
 import { useVault } from "@/lib/vault";
-import { decryptText } from "@/lib/crypto";
+import { decryptText, encryptText } from "@/lib/crypto";
 import { AppSelect } from "@/components/AppSelect";
 import { CHAT_SESSIONS_UPDATED } from "./chat";
 import { useBrowserDraft } from "@/lib/browser-drafts";
@@ -25,6 +25,7 @@ const PROMPTS = [
 ];
 
 function isoDay(d: Date) { return d.toISOString().slice(0, 10); }
+function countWords(s: string) { return s.trim().split(/\s+/).filter(Boolean).length; }
 
 async function buildContext(
   userId: string,
@@ -88,6 +89,7 @@ function SessionChat() {
   const [input, setInput, clearDraft] = useBrowserDraft(`papervault:companion-draft:${user.id}:${sessionId}`, "");
   const [loading, setLoading] = useState(false);
   const [hydrating, setHydrating] = useState(true);
+  const [autoDiary, setAutoDiary] = useState(true);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const today = useMemo(() => new Date(), []);
@@ -95,6 +97,35 @@ function SessionChat() {
   const [source, setSource] = useState<Source>("both");
   const [startDate, setStartDate] = useState<string>(isoDay(monthAgo));
   const [endDate, setEndDate] = useState<string>(isoDay(today));
+
+  useEffect(() => {
+    const saved = window.localStorage.getItem(`papervault:auto-diary:${user.id}`);
+    if (saved !== null) setAutoDiary(saved === "true");
+  }, [user.id]);
+
+  const toggleAutoDiary = (enabled: boolean) => {
+    setAutoDiary(enabled);
+    window.localStorage.setItem(`papervault:auto-diary:${user.id}`, String(enabled));
+  };
+
+  const saveCompanionDiary = async (question: string, answer: string) => {
+    if (!autoDiary || !key) return;
+    const content = `I asked Inkwell:\n\n${question.trim()}\n\nInkwell replied:\n\n${answer.trim()}`;
+    const { ct, iv } = await encryptText(key, JSON.stringify({ t: "A conversation with Inkwell", c: content, m: "" }));
+    const { error } = await supabase.from("diary_entries").insert({
+      user_id: user.id,
+      title: null,
+      content: ct,
+      mood: null,
+      entry_date: isoDay(new Date()),
+      is_public: false,
+      visibility: "private",
+      iv,
+      word_count: countWords(content),
+      mood_score: null,
+    } as never);
+    if (error) throw error;
+  };
 
   // Load prior messages for this session
   useEffect(() => {
@@ -179,6 +210,15 @@ function SessionChat() {
         session_id: sessionId, user_id: user.id, role: "assistant", content: answer,
       });
 
+       if (autoDiary) {
+         try {
+           await saveCompanionDiary(question, answer);
+           toast.success("Saved a private reflection to your Diary");
+         } catch {
+           toast.error("The reply arrived, but its Diary reflection could not be saved");
+         }
+       }
+
       // If this is the first exchange, title the session from the question
       const patch: { last_message_at: string; title?: string } = {
         last_message_at: new Date().toISOString(),
@@ -239,6 +279,11 @@ function SessionChat() {
             Last 30 days
           </button>
         </div>
+        <label className="flex items-center gap-2 text-sm text-muted-foreground sm:col-span-4">
+          <input type="checkbox" checked={autoDiary} onChange={(e) => toggleAutoDiary(e.target.checked)} className="size-4 accent-primary" />
+          <BookPlus className="size-4 text-accent" />
+          <span>Automatically keep private Companion reflections in Diary</span>
+        </label>
       </div>
 
       {!hydrating && messages.length === 0 && (
