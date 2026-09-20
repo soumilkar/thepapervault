@@ -393,9 +393,7 @@ function BlogCard({
           {p.tags.map((t: string) => <span key={t} className="rounded-full bg-secondary px-2 py-0.5 text-xs text-secondary-foreground">#{t}</span>)}
         </div>
       )}
-      <div className="mt-3">
-        {open ? <Markdown>{p.content}</Markdown> : <p className="whitespace-pre-wrap leading-relaxed">{preview}</p>}
-      </div>
+       <Markdown className="mt-3">{open ? p.content : preview}</Markdown>
       {open && p.image_url && <BlogImage path={p.image_url} />}
       {p.content.length > 220 && (
         <button onClick={() => setOpen((o) => !o)} className="mt-2 text-sm text-accent hover:text-primary">
