@@ -7,7 +7,6 @@ import { moodLabel, moodColor } from "@/lib/mood-sentiment";
 export function MoodTimeline({ userId }: { userId: string }) {
   const { data, isLoading } = useQuery({
     queryKey: ["mood-timeline", userId],
-    refetchOnMount: "always",
     queryFn: async () => {
       const { data, error } = await supabase
         .from("diary_entries")

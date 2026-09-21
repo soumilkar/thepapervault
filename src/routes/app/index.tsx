@@ -131,7 +131,7 @@ function FeedCard({ entry: e }: { entry: PublicDiary }) {
         <span className="font-hand text-sepia">{new Date(e.entry_date).toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" })}</span>
       </header>
       <p className="mt-1 text-sm text-accent">notes from a stranger{e.mood ? ` · feeling ${e.mood}` : ""}</p>
-       <Markdown className={open ? "mt-3" : "mt-3 line-clamp-6 overflow-hidden"}>{open ? e.content : preview}</Markdown>
+      {open ? <Markdown>{e.content}</Markdown> : <p className="mt-3 whitespace-pre-wrap leading-relaxed">{preview}</p>}
       {e.music_preview_url && (
         <MusicPlayer track={{
           music_track_name: e.music_track_name, music_artist: e.music_artist,

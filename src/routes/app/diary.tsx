@@ -213,8 +213,7 @@ function DiaryPage() {
                 )
               );
             }
-             await qc.invalidateQueries({ queryKey: ["mood-timeline", user.id] });
-             await qc.refetchQueries({ queryKey: ["mood-timeline", user.id] });
+            qc.invalidateQueries({ queryKey: ["mood-timeline"] });
           } catch {
             // silent — mood estimation is best-effort
           }
@@ -290,7 +289,7 @@ function DiaryPage() {
       qc.invalidateQueries({ queryKey: ["dashboard-counts"] });
       qc.invalidateQueries({ queryKey: ["recent-diary"] });
       qc.invalidateQueries({ queryKey: ["streak-diary"] });
-       qc.invalidateQueries({ queryKey: ["mood-timeline", user.id] });
+      qc.invalidateQueries({ queryKey: ["mood-timeline"] });
       qc.invalidateQueries({ queryKey: ["heatmap-diary"] });
     },
     onError: (e: Error) => toast.error(e.message),
@@ -344,9 +343,6 @@ function DiaryPage() {
       qc.invalidateQueries({ queryKey: ["diary"] });
       qc.invalidateQueries({ queryKey: ["public-diary-feed"] });
       qc.invalidateQueries({ queryKey: ["dashboard-counts"] });
-       qc.invalidateQueries({ queryKey: ["mood-timeline", user.id] });
-       qc.invalidateQueries({ queryKey: ["heatmap-diary", user.id] });
-       qc.invalidateQueries({ queryKey: ["streak-diary", user.id] });
     },
   });
 
@@ -530,13 +526,11 @@ function DiaryPage() {
       <div className="space-y-4">
         {entries.isLoading && <p className="font-hand text-sepia">opening your pages...</p>}
         {entries.data?.length === 0 && <p className="text-muted-foreground">Your diary is a blank page. Start above.</p>}
-         {filteredSorted.map((e) => (
-           <div key={e.id}>
-           <DiaryCard entry={e} folders={folders.data ?? []}
+        {filteredSorted.map((e) => (
+          <DiaryCard key={e.id} entry={e} folders={folders.data ?? []}
             onDelete={() => remove.mutate(e.id)}
             onSave={(v) => update.mutate({ id: e.id, ...v, wasPrivate: !e.is_public })}
           />
-           </div>
         ))}
       </div>
     </div>
@@ -633,7 +627,7 @@ function DiaryCard({
         </div>
       </header>
       {e.mood && <p className="mt-1 text-sm text-accent">Feeling: {e.mood}</p>}
-       <Markdown className={open ? "mt-3" : "mt-3 line-clamp-6 overflow-hidden"}>{open ? e.content : preview}</Markdown>
+      {open ? <Markdown>{e.content}</Markdown> : <p className="mt-3 whitespace-pre-wrap leading-relaxed">{preview}</p>}
       {open && e.image_url && (
         <img src={e.image_url} alt="" className="mt-4 max-h-96 rounded-md border border-border" loading="lazy" />
       )}
