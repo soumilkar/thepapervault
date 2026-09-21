@@ -89,13 +89,6 @@ function DiaryPage() {
     return () => URL.revokeObjectURL(url);
   }, [photo]);
 
-  useEffect(() => {
-    if (entries.isLoading || !filteredSorted.length) return;
-    window.requestAnimationFrame(() => {
-      document.getElementById("latest-diary-entry")?.scrollIntoView({ behavior: "smooth", block: "start" });
-    });
-  }, [entries.isLoading, filteredSorted.length]);
-
   const readAsDataUrl = (file: File) => new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("Could not read that image"));
@@ -537,8 +530,8 @@ function DiaryPage() {
       <div className="space-y-4">
         {entries.isLoading && <p className="font-hand text-sepia">opening your pages...</p>}
         {entries.data?.length === 0 && <p className="text-muted-foreground">Your diary is a blank page. Start above.</p>}
-         {filteredSorted.map((e, index) => (
-           <div key={e.id} id={index === 0 ? "latest-diary-entry" : undefined}>
+         {filteredSorted.map((e) => (
+           <div key={e.id}>
            <DiaryCard entry={e} folders={folders.data ?? []}
             onDelete={() => remove.mutate(e.id)}
             onSave={(v) => update.mutate({ id: e.id, ...v, wasPrivate: !e.is_public })}
