@@ -89,13 +89,6 @@ function DiaryPage() {
     return () => URL.revokeObjectURL(url);
   }, [photo]);
 
-  useEffect(() => {
-    if (entries.isLoading || !filteredSorted.length) return;
-    window.requestAnimationFrame(() => {
-      document.getElementById("latest-diary-entry")?.scrollIntoView({ behavior: "smooth", block: "start" });
-    });
-  }, [entries.isLoading, filteredSorted.length]);
-
   const readAsDataUrl = (file: File) => new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("Could not read that image"));

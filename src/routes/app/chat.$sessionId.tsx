@@ -91,6 +91,7 @@ function SessionChat() {
   const [hydrating, setHydrating] = useState(true);
   const [autoDiary, setAutoDiary] = useState(true);
   const inputRef = useRef<HTMLInputElement>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const today = useMemo(() => new Date(), []);
   const monthAgo = useMemo(() => new Date(today.getTime() - 30 * 24 * 3600 * 1000), [today]);
@@ -102,6 +103,13 @@ function SessionChat() {
     const saved = window.localStorage.getItem(`papervault:auto-diary:${user.id}`);
     if (saved !== null) setAutoDiary(saved === "true");
   }, [user.id]);
+
+  useEffect(() => {
+    if (hydrating) return;
+    window.requestAnimationFrame(() => {
+      messagesEndRef.current?.scrollIntoView({ behavior: loading ? "smooth" : "auto", block: "end" });
+    });
+  }, [messages, hydrating, loading]);
 
   const toggleAutoDiary = (enabled: boolean) => {
     setAutoDiary(enabled);
@@ -318,6 +326,7 @@ function SessionChat() {
         {loading && messages.at(-1)?.role !== "assistant" && (
           <p className="font-hand text-sepia">thinking...</p>
         )}
+        <div ref={messagesEndRef} aria-hidden="true" />
       </div>
 
       <div className="h-32" aria-hidden />
