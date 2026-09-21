@@ -2,5 +2,5 @@
 - [ ] Add Companion-generated editable diary drafts
 - [ ] Add a polished dark theme toggle
 - [x] Keep Diary stationary and scroll Companion to the newest message
-- [ ] Fix Mood Timeline refresh after diary changes
-- [ ] Verify build and live preview
+- [x] Fix Mood Timeline refresh after diary changes
+- [x] Verify build and live preview

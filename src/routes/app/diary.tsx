@@ -530,8 +530,8 @@ function DiaryPage() {
       <div className="space-y-4">
         {entries.isLoading && <p className="font-hand text-sepia">opening your pages...</p>}
         {entries.data?.length === 0 && <p className="text-muted-foreground">Your diary is a blank page. Start above.</p>}
-         {filteredSorted.map((e, index) => (
-           <div key={e.id} id={index === 0 ? "latest-diary-entry" : undefined}>
+         {filteredSorted.map((e) => (
+           <div key={e.id}>
            <DiaryCard entry={e} folders={folders.data ?? []}
             onDelete={() => remove.mutate(e.id)}
             onSave={(v) => update.mutate({ id: e.id, ...v, wasPrivate: !e.is_public })}
