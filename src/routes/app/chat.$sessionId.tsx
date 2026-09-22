@@ -266,7 +266,7 @@ function SessionChat() {
             <div key={i} className={m.role === "user" ? "flex justify-end" : ""}>
               {m.role === "user" ? (
                 <div className="max-w-[80%] rounded-2xl bg-chat-user px-4 py-2.5 text-chat-user-foreground">
-                  <Markdown>{m.content}</Markdown>
+                  <Markdown className="[&_h1]:text-inherit [&_h2]:text-inherit [&_h3]:text-inherit [&_strong]:text-inherit [&_a]:text-inherit">{m.content}</Markdown>
                 </div>
               ) : (
                 <div className="paper-card max-w-[90%] p-4">

@@ -1,6 +1,7 @@
 import { createFileRoute, Link, redirect } from "@tanstack/react-router";
 import { supabase } from "@/integrations/supabase/client";
 import { BookOpen, Image as ImageIcon, PenLine, Sparkles } from "lucide-react";
+import { ThemeToggle } from "@/components/ThemeToggle";
 
 export const Route = createFileRoute("/")({
   ssr: false,
@@ -25,9 +26,12 @@ function Landing() {
           <div className="flex min-w-0 items-center gap-2">
             <span className="truncate font-serif text-xl text-primary sm:text-2xl">The PaperVault</span>
           </div>
-          <Link to="/auth" className="ml-auto rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:opacity-90">
-            Sign in
-          </Link>
+          <div className="ml-auto flex items-center gap-2">
+            <ThemeToggle />
+            <Link to="/auth" className="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:opacity-90">
+              Sign in
+            </Link>
+          </div>
         </div>
       </header>
 
