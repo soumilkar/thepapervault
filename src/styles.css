@@ -31,6 +31,8 @@
   --color-ink: var(--ink);
   --color-paper: var(--paper);
   --color-sepia: var(--sepia);
+  --color-chat-user: var(--chat-user);
+  --color-chat-user-foreground: var(--chat-user-foreground);
   --font-serif: var(--font-serif);
   --font-body: var(--font-body);
   --font-hand: var(--font-hand);
@@ -42,6 +44,8 @@
   --paper: oklch(0.97 0.02 80);
   --ink: oklch(0.28 0.04 50);
   --sepia: oklch(0.55 0.10 55);
+  --chat-user: oklch(0.42 0.10 40);
+  --chat-user-foreground: oklch(0.97 0.02 80);
 
   --background: oklch(0.96 0.025 78);
   --foreground: oklch(0.28 0.04 50);
@@ -77,6 +81,38 @@
   --shadow-paper: 0 1px 2px oklch(0.4 0.05 50 / 0.08), 0 8px 24px -8px oklch(0.4 0.05 50 / 0.12);
 }
 
+.dark {
+  --paper: oklch(0.249 0.012 56);
+  --ink: oklch(0.934 0.017 76);
+  --sepia: oklch(0.75 0.08 62);
+
+  --background: oklch(0.204 0.008 48);
+  --foreground: oklch(0.934 0.017 76);
+
+  --card: oklch(0.249 0.012 56);
+  --card-foreground: oklch(0.934 0.017 76);
+  --popover: oklch(0.249 0.012 56);
+  --popover-foreground: oklch(0.934 0.017 76);
+
+  --primary: oklch(0.76 0.08 63);
+  --primary-foreground: oklch(0.204 0.008 48);
+  --secondary: oklch(0.292 0.018 57);
+  --secondary-foreground: oklch(0.91 0.02 76);
+  --muted: oklch(0.272 0.014 55);
+  --muted-foreground: oklch(0.72 0.025 72);
+  --accent: oklch(0.69 0.12 48);
+  --accent-foreground: oklch(0.97 0.015 76);
+  --destructive: oklch(0.66 0.18 27);
+  --destructive-foreground: oklch(0.96 0.015 76);
+
+  --border: oklch(0.322 0.019 57);
+  --input: oklch(0.35 0.02 57);
+  --ring: oklch(0.64 0.09 52);
+  --chat-user: oklch(0.462 0.115 41);
+  --chat-user-foreground: oklch(0.934 0.017 76);
+  --shadow-paper: 0 1px 0 oklch(0.1 0.01 48 / 0.3);
+}
+
 @layer base {
   * { border-color: var(--color-border); }
 
@@ -98,6 +134,10 @@
     background-attachment: fixed;
     min-height: 100vh;
   }
+
+  .dark body {
+    background-image: none;
+  }
 }
 
 @layer components {
@@ -113,7 +153,7 @@
     border-radius: calc(var(--radius) + 4px);
     backdrop-filter: blur(28px) saturate(1.4);
     box-shadow:
-      0 1px 0 rgba(255,255,255,0.4) inset,
+      0 1px 0 color-mix(in oklch, var(--color-foreground) 18%, transparent) inset,
       0 10px 30px -10px oklch(0.4 0.05 50 / 0.2);
   }
   .font-hand { font-family: var(--font-hand); }

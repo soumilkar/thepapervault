@@ -3,6 +3,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { BookOpen, Image as ImageIcon, PenLine, Sparkles, LogOut, Home, ChevronDown, Lock, StickyNote } from "lucide-react";
 import { VaultProvider, useVault } from "@/lib/vault";
 import { VaultGate } from "@/components/VaultGate";
+import { ThemeToggle } from "@/components/ThemeToggle";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -56,6 +57,7 @@ function AuthedLayout() {
                 <NavLink key={n.to} to={n.to} exact={n.exact} icon={<n.icon className="size-4" />} label={n.label} />
               ))}
               <VaultLockButton />
+              <ThemeToggle />
               <button onClick={handleSignOut} className="ml-2 flex items-center gap-1.5 rounded-md px-3 py-2 text-muted-foreground hover:text-primary">
                 <LogOut className="size-4" /> Sign out
               </button>
@@ -77,6 +79,9 @@ function AuthedLayout() {
                     </DropdownMenuItem>
                   ))}
                   <DropdownMenuSeparator />
+                  <DropdownMenuItem asChild>
+                    <ThemeToggle compact />
+                  </DropdownMenuItem>
                   <VaultLockMenuItem />
                   <DropdownMenuItem onClick={handleSignOut} className="text-muted-foreground">
                     <LogOut className="size-4" /> Sign out

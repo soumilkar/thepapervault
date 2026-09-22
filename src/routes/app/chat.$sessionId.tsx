@@ -9,6 +9,11 @@ import { decryptText } from "@/lib/crypto";
 import { AppSelect } from "@/components/AppSelect";
 import { CHAT_SESSIONS_UPDATED } from "./chat";
 import { useBrowserDraft } from "@/lib/browser-drafts";
+import {
+  Conversation,
+  ConversationContent,
+  ConversationScrollButton,
+} from "@/components/ai-elements/conversation";
 
 export const Route = createFileRoute("/app/chat/$sessionId")({
   component: SessionChat,
@@ -254,26 +259,29 @@ function SessionChat() {
         </div>
       )}
 
-      <div className="space-y-3">
-        {hydrating && <p className="font-hand text-sepia">loading conversation...</p>}
-        {messages.map((m, i) => (
-          <div key={i} className={m.role === "user" ? "flex justify-end" : ""}>
-            {m.role === "user" ? (
-              <div className="max-w-[80%] rounded-2xl bg-primary px-4 py-2.5 text-primary-foreground">
-                <Markdown>{m.content}</Markdown>
-              </div>
-            ) : (
-              <div className="paper-card max-w-[90%] p-4">
-                <p className="mb-2 font-hand text-sepia text-lg leading-none">companion</p>
-                <Markdown>{m.content}</Markdown>
-              </div>
-            )}
-          </div>
-        ))}
-        {loading && messages.at(-1)?.role !== "assistant" && (
-          <p className="font-hand text-sepia">thinking...</p>
-        )}
-      </div>
+      <Conversation className="min-h-80 max-h-[calc(100dvh-20rem)] overflow-y-auto rounded-md">
+        <ConversationContent className="gap-3 px-0 py-1">
+          {hydrating && <p className="font-hand text-sepia">loading conversation...</p>}
+          {messages.map((m, i) => (
+            <div key={i} className={m.role === "user" ? "flex justify-end" : ""}>
+              {m.role === "user" ? (
+                <div className="max-w-[80%] rounded-2xl bg-chat-user px-4 py-2.5 text-chat-user-foreground">
+                  <Markdown>{m.content}</Markdown>
+                </div>
+              ) : (
+                <div className="paper-card max-w-[90%] p-4">
+                  <p className="mb-2 font-hand text-sepia text-lg leading-none">companion</p>
+                  <Markdown>{m.content}</Markdown>
+                </div>
+              )}
+            </div>
+          ))}
+          {loading && messages.at(-1)?.role !== "assistant" && (
+            <p className="font-hand text-sepia">thinking...</p>
+          )}
+        </ConversationContent>
+        <ConversationScrollButton aria-label="Scroll to latest message" />
+      </Conversation>
 
       <div className="h-32" aria-hidden />
       <form

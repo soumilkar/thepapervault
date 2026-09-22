@@ -1,16 +1,17 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import remarkBreaks from "remark-breaks";
 
 export function Markdown({ children, className = "" }: { children: string; className?: string }) {
   return (
     <div className={`prose-paper ${className}`}>
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={[remarkGfm, remarkBreaks]}
         components={{
           h1: ({ node, ...p }) => <h1 className="font-serif text-2xl text-primary mt-4 mb-2" {...p} />,
           h2: ({ node, ...p }) => <h2 className="font-serif text-xl text-primary mt-4 mb-2" {...p} />,
           h3: ({ node, ...p }) => <h3 className="font-serif text-lg text-primary mt-3 mb-1.5" {...p} />,
-          p: ({ node, ...p }) => <p className="leading-relaxed my-2" {...p} />,
+          p: ({ node, ...p }) => <p className="my-2 whitespace-pre-wrap leading-relaxed" {...p} />,
           ul: ({ node, ...p }) => <ul className="my-2 list-disc pl-5 space-y-1" {...p} />,
           ol: ({ node, ...p }) => <ol className="my-2 list-decimal pl-5 space-y-1" {...p} />,
           li: ({ node, ...p }) => <li className="leading-relaxed" {...p} />,
