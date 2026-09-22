@@ -14,9 +14,12 @@ export function ThemeToggle({ compact = false }: { compact?: boolean }) {
 
   useEffect(() => {
     const saved = window.localStorage.getItem("papervault:theme");
-    const initial = saved === "dark" || saved === "light"
-      ? saved
-      : window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    const initial =
+      saved === "dark" || saved === "light"
+        ? saved
+        : window.matchMedia("(prefers-color-scheme: dark)").matches
+          ? "dark"
+          : "light";
     setTheme(initial);
     applyTheme(initial);
   }, []);
@@ -38,7 +41,11 @@ export function ThemeToggle({ compact = false }: { compact?: boolean }) {
       onClick={toggle}
       title={label}
       aria-label={label}
-      className={compact ? "w-full justify-start text-muted-foreground" : "shrink-0 text-muted-foreground hover:text-primary"}
+      className={
+        compact
+          ? "w-full justify-start text-muted-foreground"
+          : "shrink-0 text-muted-foreground hover:text-primary"
+      }
     >
       {theme === "dark" ? <Sun aria-hidden /> : <Moon aria-hidden />}
       {compact && <span>{theme === "dark" ? "Light theme" : "Dark theme"}</span>}

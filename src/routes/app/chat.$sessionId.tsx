@@ -29,7 +29,9 @@ const PROMPTS = [
   "What do I seem most grateful for?",
 ];
 
-function isoDay(d: Date) { return d.toISOString().slice(0, 10); }
+function isoDay(d: Date) {
+  return d.toISOString().slice(0, 10);
+}
 
 async function buildContext(
   userId: string,
@@ -48,14 +50,24 @@ async function buildContext(
 
   const [diary, blog] = await Promise.all([
     wantsDiary
-      ? supabase.from("diary_entries").select("content,iv,entry_date" as never)
-          .eq("user_id", userId).gte("entry_date", startDate).lte("entry_date", endDate)
-          .order("entry_date", { ascending: false }).limit(100)
+      ? supabase
+          .from("diary_entries")
+          .select("content,iv,entry_date" as never)
+          .eq("user_id", userId)
+          .gte("entry_date", startDate)
+          .lte("entry_date", endDate)
+          .order("entry_date", { ascending: false })
+          .limit(100)
       : Promise.resolve({ data: [] as unknown as DiaryRow[] }),
     wantsBlog
-      ? supabase.from("blog_posts").select("title,content,tags,created_at")
-          .eq("user_id", userId).gte("created_at", startIso).lte("created_at", endIso)
-          .order("created_at", { ascending: false }).limit(60)
+      ? supabase
+          .from("blog_posts")
+          .select("title,content,tags,created_at")
+          .eq("user_id", userId)
+          .gte("created_at", startIso)
+          .lte("created_at", endIso)
+          .order("created_at", { ascending: false })
+          .limit(60)
       : Promise.resolve({ data: [] as unknown as BlogRow[] }),
   ]);
 
@@ -68,15 +80,23 @@ async function buildContext(
       try {
         const plain = await decryptText(key, row.content, row.iv);
         const obj = JSON.parse(plain) as { t?: string; c?: string; m?: string };
-        diaryDecoded.push(`[${row.entry_date}${obj.m ? ` · ${obj.m}` : ""}] ${obj.t || "Untitled"}\n${obj.c ?? ""}`);
-      } catch { /* skip */ }
+        diaryDecoded.push(
+          `[${row.entry_date}${obj.m ? ` · ${obj.m}` : ""}] ${obj.t || "Untitled"}\n${obj.c ?? ""}`,
+        );
+      } catch {
+        /* skip */
+      }
     } else if (!row.iv) {
       diaryDecoded.push(`[${row.entry_date}] ${row.content}`);
     }
   }
-  const diaryText = wantsDiary ? (diaryDecoded.join("\n\n---\n\n") || "(no diary entries in this range)") : "";
+  const diaryText = wantsDiary
+    ? diaryDecoded.join("\n\n---\n\n") || "(no diary entries in this range)"
+    : "";
   const blogText = wantsBlog
-    ? (blogRows.map((b) => `# ${b.title}${b.tags?.length ? ` (${b.tags.join(", ")})` : ""}\n${b.content}`).join("\n\n---\n\n") || "(no blog posts in this range)")
+    ? blogRows
+        .map((b) => `# ${b.title}${b.tags?.length ? ` (${b.tags.join(", ")})` : ""}\n${b.content}`)
+        .join("\n\n---\n\n") || "(no blog posts in this range)"
     : "";
 
   const parts: string[] = [];
@@ -90,7 +110,10 @@ function SessionChat() {
   const { sessionId } = Route.useParams();
   const { key } = useVault();
   const [messages, setMessages] = useState<Msg[]>([]);
-  const [input, setInput, clearDraft] = useBrowserDraft(`papervault:companion-draft:${user.id}:${sessionId}`, "");
+  const [input, setInput, clearDraft] = useBrowserDraft(
+    `papervault:companion-draft:${user.id}:${sessionId}`,
+    "",
+  );
   const [loading, setLoading] = useState(false);
   const [hydrating, setHydrating] = useState(true);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -126,7 +149,9 @@ function SessionChat() {
       setHydrating(false);
       setTimeout(() => inputRef.current?.focus(), 0);
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [sessionId]);
 
   const send = async (question: string) => {
@@ -138,7 +163,10 @@ function SessionChat() {
     try {
       // Persist user message
       const { error: userMessageError } = await supabase.from("chat_messages").insert({
-        session_id: sessionId, user_id: user.id, role: "user", content: question,
+        session_id: sessionId,
+        user_id: user.id,
+        role: "user",
+        content: question,
       });
       if (userMessageError) throw userMessageError;
       clearDraft();
@@ -172,16 +200,16 @@ function SessionChat() {
         const { done, value } = await reader.read();
         if (done) break;
         answer += decoder.decode(value, { stream: true });
-        setMessages((current) => [
-          ...current.slice(0, -1),
-          { role: "assistant", content: answer },
-        ]);
+        setMessages((current) => [...current.slice(0, -1), { role: "assistant", content: answer }]);
       }
       answer += decoder.decode();
       if (!answer.trim()) throw new Error("The Companion returned an empty response");
 
       await supabase.from("chat_messages").insert({
-        session_id: sessionId, user_id: user.id, role: "assistant", content: answer,
+        session_id: sessionId,
+        user_id: user.id,
+        role: "assistant",
+        content: answer,
       });
 
       // If this is the first exchange, title the session from the question
@@ -217,7 +245,9 @@ function SessionChat() {
     <div className="space-y-4">
       <div className="paper-card p-4 grid gap-3 sm:grid-cols-4">
         <label className="text-sm">
-          <span className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">Source</span>
+          <span className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">
+            Source
+          </span>
           <AppSelect
             value={source}
             onValueChange={(v) => setSource(v as Source)}
@@ -230,17 +260,34 @@ function SessionChat() {
           />
         </label>
         <label className="text-sm">
-          <span className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">From</span>
-          <input type="date" value={startDate} max={endDate} onChange={(e) => setStartDate(e.target.value)}
-            className="w-full rounded-md border border-input bg-card px-2 py-1.5" />
+          <span className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">
+            From
+          </span>
+          <input
+            type="date"
+            value={startDate}
+            max={endDate}
+            onChange={(e) => setStartDate(e.target.value)}
+            className="w-full rounded-md border border-input bg-card px-2 py-1.5"
+          />
         </label>
         <label className="text-sm">
-          <span className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">To</span>
-          <input type="date" value={endDate} min={startDate} onChange={(e) => setEndDate(e.target.value)}
-            className="w-full rounded-md border border-input bg-card px-2 py-1.5" />
+          <span className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">
+            To
+          </span>
+          <input
+            type="date"
+            value={endDate}
+            min={startDate}
+            onChange={(e) => setEndDate(e.target.value)}
+            className="w-full rounded-md border border-input bg-card px-2 py-1.5"
+          />
         </label>
         <div className="flex items-end">
-          <button onClick={resetToDefault} className="w-full rounded-md border border-border bg-secondary/50 px-3 py-1.5 text-sm hover:bg-secondary">
+          <button
+            onClick={resetToDefault}
+            className="w-full rounded-md border border-border bg-secondary/50 px-3 py-1.5 text-sm hover:bg-secondary"
+          >
             Last 30 days
           </button>
         </div>
@@ -251,7 +298,11 @@ function SessionChat() {
           <p className="text-sm text-muted-foreground mb-3">Try asking:</p>
           <div className="flex flex-wrap gap-2">
             {PROMPTS.map((p) => (
-              <button key={p} onClick={() => send(p)} className="rounded-full border border-border bg-secondary/60 px-3 py-1.5 text-sm text-secondary-foreground hover:bg-secondary">
+              <button
+                key={p}
+                onClick={() => send(p)}
+                className="rounded-full border border-border bg-secondary/60 px-3 py-1.5 text-sm text-secondary-foreground hover:bg-secondary"
+              >
                 {p}
               </button>
             ))}
@@ -266,7 +317,9 @@ function SessionChat() {
             <div key={i} className={m.role === "user" ? "flex justify-end" : ""}>
               {m.role === "user" ? (
                 <div className="max-w-[80%] rounded-2xl bg-chat-user px-4 py-2.5 text-chat-user-foreground">
-                  <Markdown className="[&_h1]:text-inherit [&_h2]:text-inherit [&_h3]:text-inherit [&_strong]:text-inherit [&_a]:text-inherit">{m.content}</Markdown>
+                  <Markdown className="[&_h1]:text-inherit [&_h2]:text-inherit [&_h3]:text-inherit [&_strong]:text-inherit [&_a]:text-inherit">
+                    {m.content}
+                  </Markdown>
                 </div>
               ) : (
                 <div className="paper-card max-w-[90%] p-4">
@@ -285,16 +338,24 @@ function SessionChat() {
 
       <div className="h-32" aria-hidden />
       <form
-        onSubmit={(e) => { e.preventDefault(); send(input); }}
+        onSubmit={(e) => {
+          e.preventDefault();
+          send(input);
+        }}
         className="glass-card fixed bottom-4 left-4 right-4 z-30 mx-auto flex max-w-3xl items-center gap-2 p-2"
       >
         <input
           ref={inputRef}
-          value={input} onChange={(e) => setInput(e.target.value)}
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
           placeholder="Ask about your story..."
           className="flex-1 bg-transparent px-3 py-2 outline-none placeholder:text-muted-foreground/60"
         />
-        <button type="submit" disabled={loading || !input.trim()} className="flex items-center gap-1 rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground disabled:opacity-50">
+        <button
+          type="submit"
+          disabled={loading || !input.trim()}
+          className="flex items-center gap-1 rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground disabled:opacity-50"
+        >
           <Send className="size-4" /> Send
         </button>
       </form>
