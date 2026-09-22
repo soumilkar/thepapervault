@@ -1,6 +1,7 @@
 import { createFileRoute, Link, redirect } from "@tanstack/react-router";
 import { supabase } from "@/integrations/supabase/client";
 import { BookOpen, Image as ImageIcon, PenLine, Sparkles } from "lucide-react";
+import { ThemeToggle } from "@/components/ThemeToggle";
 
 export const Route = createFileRoute("/")({
   ssr: false,
@@ -11,7 +12,11 @@ export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
       { title: "The PaperVault — Your warm personal journal" },
-      { name: "description", content: "A private home for diaries, blogs, a personal gallery, and an AI companion that knows your story." },
+      {
+        name: "description",
+        content:
+          "A private home for diaries, blogs, a personal gallery, and an AI companion that knows your story.",
+      },
     ],
   }),
   component: Landing,
@@ -23,25 +28,38 @@ function Landing() {
       <header className="fixed top-4 left-4 right-4 z-50 rounded-2xl border border-border/60 bg-card/80 shadow-lg backdrop-blur sm:left-6 sm:right-6 lg:left-1/2 lg:right-auto lg:w-full lg:max-w-6xl lg:-translate-x-1/2">
         <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-3 sm:px-6 sm:py-4">
           <div className="flex min-w-0 items-center gap-2">
-            <span className="truncate font-serif text-xl text-primary sm:text-2xl">The PaperVault</span>
+            <span className="truncate font-serif text-xl text-primary sm:text-2xl">
+              The PaperVault
+            </span>
           </div>
-          <Link to="/auth" className="ml-auto rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:opacity-90">
-            Sign in
-          </Link>
+          <div className="ml-auto flex items-center gap-2">
+            <ThemeToggle />
+            <Link
+              to="/auth"
+              className="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:opacity-90"
+            >
+              Sign in
+            </Link>
+          </div>
         </div>
       </header>
 
       <section className="mx-auto max-w-3xl px-6 pt-32 pb-12 text-center sm:pt-36">
         <p className="font-hand text-2xl text-sepia">welcome to your quiet corner</p>
         <h1 className="mt-3 font-serif text-6xl leading-tight text-primary md:text-7xl">
-          A warm home for<br />the things you write.
+          A warm home for
+          <br />
+          the things you write.
         </h1>
         <p className="mx-auto mt-6 max-w-xl text-lg text-muted-foreground">
-          Private diary entries, thoughtful blogs, and a gallery of memories — all in one
-          place, with an AI companion that gently reflects on your story.
+          Private diary entries, thoughtful blogs, and a gallery of memories — all in one place,
+          with an AI companion that gently reflects on your story.
         </p>
         <div className="mt-8 flex justify-center gap-3">
-          <Link to="/auth" className="rounded-md bg-primary px-6 py-3 text-primary-foreground shadow-sm hover:opacity-90">
+          <Link
+            to="/auth"
+            className="rounded-md bg-primary px-6 py-3 text-primary-foreground shadow-sm hover:opacity-90"
+          >
             Start your journal
           </Link>
         </div>
