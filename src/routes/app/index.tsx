@@ -4,7 +4,8 @@ import { useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { BookOpen, Image as ImageIcon, PenLine, Sparkles, Users } from "lucide-react";
 import { WelcomeTour } from "@/components/WelcomeTour";
-import { Markdown } from "@/components/Markdown";
+import { DiaryText } from "@/components/DiaryText";
+import { DashboardWriting } from "@/components/DashboardWriting";
 import { MusicPlayer } from "@/components/MusicSearch";
 import { WritingStreaks } from "@/components/WritingStreaks";
 import { EntryHeatmap } from "@/components/EntryHeatmap";
@@ -93,6 +94,8 @@ function Dashboard() {
         </div>
       </div>
 
+      <DashboardWriting userId={user.id} />
+
       <section className="space-y-4">
         <div>
           <p className="font-hand text-2xl text-sepia">shared, softly</p>
@@ -121,17 +124,16 @@ function StatCard({ to, icon, label, value }: { to: string; icon: React.ReactNod
 function FeedCard({ entry: e }: { entry: PublicDiary }) {
   const [open, setOpen] = useState(false);
   const long = e.content.length > 220;
-  const preview = long ? e.content.slice(0, 220).trimEnd() + "…" : e.content;
   return (
     <article className="paper-card p-6">
-      <header className="flex items-baseline justify-between gap-3">
+      <header className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-baseline">
         <button onClick={() => setOpen((o) => !o)} className="text-left font-serif text-xl text-primary hover:underline underline-offset-4">
           {e.title || "Untitled"}
         </button>
         <span className="font-hand text-sepia">{new Date(e.entry_date).toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" })}</span>
       </header>
       <p className="mt-1 text-sm text-accent">notes from a stranger{e.mood ? ` · feeling ${e.mood}` : ""}</p>
-      {open ? <Markdown>{e.content}</Markdown> : <p className="mt-3 whitespace-pre-wrap leading-relaxed">{preview}</p>}
+      <DiaryText content={e.content} expanded={open} />
       {e.music_preview_url && (
         <MusicPlayer track={{
           music_track_name: e.music_track_name, music_artist: e.music_artist,
@@ -140,7 +142,7 @@ function FeedCard({ entry: e }: { entry: PublicDiary }) {
       )}
       {long && (
         <button onClick={() => setOpen((o) => !o)} className="mt-2 text-sm text-accent hover:text-primary">
-          {open ? "Show less" : "Read more"}
+          {open ? "Show less" : "Read more →"}
         </button>
       )}
     </article>

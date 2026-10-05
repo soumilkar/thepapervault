@@ -4,6 +4,8 @@ import { useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { Check, Pencil, Trash2, Upload, X, Lock } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { useVault } from "@/lib/vault";
 import { decryptBytes, decryptText, encryptBlob, encryptText } from "@/lib/crypto";
 
@@ -22,6 +24,7 @@ function GalleryPage() {
   const { key } = useVault();
   const qc = useQueryClient();
   const [caption, setCaption] = useState("");
+  const [selectedImage, setSelectedImage] = useState<Decoded | null>(null);
   const [uploading, setUploading] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftCaption, setDraftCaption] = useState("");
@@ -86,7 +89,7 @@ function GalleryPage() {
       });
       if (dbErr) throw dbErr;
       setCaption("");
-      toast.success("Photo added (encrypted)");
+      toast.success("Photo added");
       qc.invalidateQueries({ queryKey: ["gallery"] });
       qc.invalidateQueries({ queryKey: ["dashboard-counts"] });
     } catch (e: unknown) {
@@ -133,7 +136,6 @@ function GalleryPage() {
       <div>
         <p className="font-hand text-2xl text-sepia">moments worth keeping</p>
         <h1 className="font-serif text-4xl text-primary">Gallery</h1>
-        <p className="mt-1 flex items-center gap-1 text-xs text-muted-foreground"><Lock className="size-3" /> Photos are end-to-end encrypted with your vault passphrase.</p>
       </div>
 
       <div className="paper-card p-6">
@@ -144,7 +146,7 @@ function GalleryPage() {
         />
         <label className="flex cursor-pointer items-center justify-center gap-2 rounded-md border-2 border-dashed border-border bg-secondary/40 px-6 py-10 transition hover:border-ring hover:bg-secondary">
           <Upload className="size-5 text-accent" />
-          <span className="text-sm">{uploading ? "Encrypting & uploading..." : "Click to upload a photo"}</span>
+          <span className="text-sm">{uploading ? "Uploading..." : "Click to upload a photo"}</span>
           <input
             type="file" accept="image/jpeg,image/png,image/webp,image/gif" className="hidden" disabled={uploading}
             onChange={(e) => { const f = e.target.files?.[0]; if (f) upload(f); e.currentTarget.value = ""; }}
@@ -158,9 +160,9 @@ function GalleryPage() {
           const isEditing = editingId === img.id;
           return (
             <div key={img.id} className="paper-card group overflow-hidden">
-              <div className="aspect-square overflow-hidden bg-muted">
+              <Button variant="ghost" onClick={() => setSelectedImage(img)} aria-label={`View photo: ${img.caption || "Untitled"}`} className="block aspect-square h-auto w-full overflow-hidden rounded-none bg-muted p-0">
                 {img.url && <img src={img.url} alt={img.caption || ""} className="size-full object-cover transition group-hover:scale-105" loading="lazy" />}
-              </div>
+              </Button>
               <div className="flex items-start justify-between gap-2 p-3">
                 {isEditing ? (
                   <>
@@ -197,6 +199,13 @@ function GalleryPage() {
           );
         })}
       </div>
+      <Dialog open={!!selectedImage} onOpenChange={(open) => { if (!open) setSelectedImage(null); }}>
+        <DialogContent className="max-h-[90dvh] w-[calc(100%-2rem)] max-w-4xl rounded-2xl">
+          <DialogTitle className="pr-8 font-serif">{selectedImage?.caption || "Untitled memory"}</DialogTitle>
+          <DialogDescription>{selectedImage ? new Date(selectedImage.created_at).toLocaleDateString() : ""}</DialogDescription>
+          {selectedImage && <img src={selectedImage.url} alt={selectedImage.caption || "Memory"} className="max-h-[65dvh] w-full object-contain" />}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
