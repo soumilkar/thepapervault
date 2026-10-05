@@ -1,12 +1,10 @@
-import { pageMeta } from "@/lib/page-meta";
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
-import { ImagePlus, Trash2, X, Download, Pencil, Check, Globe, Lock, FolderPlus, Folder, FileText, Plus } from "lucide-react";
-import { DiaryText } from "@/components/DiaryText";
-import { Button } from "@/components/ui/button";
+import { ImagePlus, Trash2, X, Download, Pencil, Check, Globe, Lock, FolderPlus, Folder, FileText } from "lucide-react";
+import { Markdown } from "@/components/Markdown";
 import { downloadTextFile } from "@/lib/download";
 import { useVault } from "@/lib/vault";
 import { decryptBytes, decryptText, encryptBlob, encryptText } from "@/lib/crypto";
@@ -25,7 +23,6 @@ function countWords(s: string) {
 }
 
 export const Route = createFileRoute("/app/diary")({
-  head: () => pageMeta("Diary", "Your journal entries, moods and memories."),
   component: DiaryPage,
 });
 
@@ -383,7 +380,7 @@ function DiaryPage() {
 
       <form
         onSubmit={(e) => { e.preventDefault(); if (content.trim()) create.mutate(); }}
-        id="diary-composer" className="paper-card space-y-3 p-5 sm:p-6"
+        className="paper-card space-y-3 p-6"
       >
         <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Title (optional)"
           className="w-full bg-transparent font-serif text-2xl outline-none placeholder:text-muted-foreground/60" />
@@ -436,7 +433,7 @@ function DiaryPage() {
               value={isPublic ? "public" : "private"}
               onValueChange={(v) => setIsPublic(v === "public")}
               options={[
-                { value: "private", label: "Private" },
+                { value: "private", label: "Private (encrypted)" },
                 { value: "public", label: "Public · anonymous" },
               ]}
             />
@@ -536,7 +533,6 @@ function DiaryPage() {
           />
         ))}
       </div>
-      <Button className="fixed bottom-6 right-6 z-20 rounded-full shadow-lg" onClick={() => { document.getElementById("diary-composer")?.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth", block: "center" }); document.querySelector<HTMLInputElement>("#diary-composer input")?.focus({ preventScroll: true }); }}><Plus /> New Entry</Button>
     </div>
   );
 }
@@ -573,6 +569,7 @@ function DiaryCard({
   const [eMusic, setEMusic] = useState<SelectedTrack | null>(e.music);
   const [confirmDel, setConfirmDel] = useState(false);
   const long = e.content.length > 220 || !!e.image_url;
+  const preview = e.content.length > 220 ? e.content.slice(0, 220).trimEnd() + "…" : e.content;
 
   if (editing) {
     return (
@@ -611,12 +608,13 @@ function DiaryCard({
   }
 
   return (
-    <article className="paper-card diary-card p-5 transition-colors sm:p-6">
-      <header className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3">
-        <button onClick={() => setOpen((o) => !o)} className="min-w-0 break-words text-left font-serif text-xl text-foreground hover:underline underline-offset-4">
+    <article className="paper-card p-6">
+      <header className="flex items-baseline justify-between gap-3">
+        <button onClick={() => setOpen((o) => !o)} className="text-left font-serif text-xl text-primary hover:underline underline-offset-4">
           {e.title || "Untitled"}
         </button>
-        <div className="flex shrink-0 items-center gap-3">
+        <div className="flex items-center gap-3">
+          <span className="font-hand text-sepia">{new Date(e.entry_date).toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" })}</span>
           <span title={e.is_public ? "Public · anonymous" : "Private"} className="text-muted-foreground">
             {e.is_public ? <Globe className="size-4" /> : <Lock className="size-4" />}
           </span>
@@ -628,9 +626,8 @@ function DiaryCard({
           </button>
         </div>
       </header>
-      <p className="mt-2 text-xs text-muted-foreground">{new Date(`${e.entry_date}T12:00:00`).toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" })}</p>
-      {e.mood && <span className="mt-3 inline-flex rounded-full bg-mood/10 px-3 py-1 text-xs text-mood">Feeling: {e.mood}</span>}
-      <DiaryText content={e.content} expanded={open} />
+      {e.mood && <p className="mt-1 text-sm text-accent">Feeling: {e.mood}</p>}
+      {open ? <Markdown>{e.content}</Markdown> : <p className="mt-3 whitespace-pre-wrap leading-relaxed">{preview}</p>}
       {open && e.image_url && (
         <img src={e.image_url} alt="" className="mt-4 max-h-96 rounded-md border border-border" loading="lazy" />
       )}
@@ -642,7 +639,7 @@ function DiaryCard({
       )}
       {long && (
         <button onClick={() => setOpen((o) => !o)} className="mt-2 text-sm text-accent hover:text-primary">
-          {open ? "Show less" : "Read more →"}
+          {open ? "Show less" : "Read more"}
         </button>
       )}
       <ConfirmDialog

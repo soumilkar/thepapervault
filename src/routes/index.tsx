@@ -1,5 +1,3 @@
-import { ThemeToggle } from "@/components/ThemeToggle";
-import { pageMeta } from "@/lib/page-meta";
 import { createFileRoute, Link, redirect } from "@tanstack/react-router";
 import { supabase } from "@/integrations/supabase/client";
 import { BookOpen, Image as ImageIcon, PenLine, Sparkles } from "lucide-react";
@@ -10,28 +8,33 @@ export const Route = createFileRoute("/")({
     const { data } = await supabase.auth.getUser();
     if (data.user) throw redirect({ to: "/app" });
   },
-  head: () => pageMeta("The PaperVault", "A personal home for diaries, notes, blogs, photos and your AI companion."),
+  head: () => ({
+    meta: [
+      { title: "The PaperVault — Your warm personal journal" },
+      { name: "description", content: "A private home for diaries, blogs, a personal gallery, and an AI companion that knows your story." },
+    ],
+  }),
   component: Landing,
 });
 
 function Landing() {
   return (
     <div className="min-h-screen">
-      <header className="workspace-header fixed inset-x-0 top-0 z-50 border-b border-border">
+      <header className="fixed top-4 left-4 right-4 z-50 rounded-2xl border border-border/60 bg-card/80 shadow-lg backdrop-blur sm:left-6 sm:right-6 lg:left-1/2 lg:right-auto lg:w-full lg:max-w-6xl lg:-translate-x-1/2">
         <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-3 sm:px-6 sm:py-4">
           <div className="flex min-w-0 items-center gap-2">
             <span className="truncate font-serif text-xl text-primary sm:text-2xl">The PaperVault</span>
           </div>
-          <div className="ml-auto flex shrink-0 items-center gap-2"><ThemeToggle /><Link to="/auth" className=" rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:opacity-90">
+          <Link to="/auth" className="ml-auto rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:opacity-90">
             Sign in
-          </Link></div>
+          </Link>
         </div>
       </header>
 
       <section className="mx-auto max-w-3xl px-6 pt-32 pb-12 text-center sm:pt-36">
         <p className="font-hand text-2xl text-sepia">welcome to your quiet corner</p>
         <h1 className="mt-3 font-serif text-6xl leading-tight text-primary md:text-7xl">
-          The PaperVault
+          A warm home for<br />the things you write.
         </h1>
         <p className="mx-auto mt-6 max-w-xl text-lg text-muted-foreground">
           Private diary entries, thoughtful blogs, and a gallery of memories — all in one

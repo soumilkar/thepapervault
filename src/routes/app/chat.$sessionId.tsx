@@ -1,4 +1,3 @@
-import { pageMeta } from "@/lib/page-meta";
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Send } from "lucide-react";
@@ -12,7 +11,6 @@ import { CHAT_SESSIONS_UPDATED } from "./chat";
 import { useBrowserDraft } from "@/lib/browser-drafts";
 
 export const Route = createFileRoute("/app/chat/$sessionId")({
-  head: () => pageMeta("Conversation", "Continue your private conversation with the PaperVault Companion."),
   component: SessionChat,
 });
 
@@ -91,20 +89,6 @@ function SessionChat() {
   const [loading, setLoading] = useState(false);
   const [hydrating, setHydrating] = useState(true);
   const inputRef = useRef<HTMLInputElement>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (hydrating) return;
-    const frame = requestAnimationFrame(() => {
-      const end = messagesEndRef.current;
-      if (!end) return;
-      const composer = inputRef.current?.closest("form");
-      const boundary = composer?.getBoundingClientRect().top ?? window.innerHeight;
-      const target = Math.max(0, window.scrollY + end.getBoundingClientRect().bottom - boundary + 20);
-      window.scrollTo({ top: target, behavior: "instant" });
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [messages, hydrating, loading]);
 
   const today = useMemo(() => new Date(), []);
   const monthAgo = useMemo(() => new Date(today.getTime() - 30 * 24 * 3600 * 1000), [today]);
@@ -135,7 +119,7 @@ function SessionChat() {
         );
       }
       setHydrating(false);
-      setTimeout(() => inputRef.current?.focus({ preventScroll: true }), 0);
+      setTimeout(() => inputRef.current?.focus(), 0);
     })();
     return () => { cancelled = true; };
   }, [sessionId]);
@@ -214,7 +198,7 @@ function SessionChat() {
       toast.error(e instanceof Error ? e.message : "Could not reach the companion");
     } finally {
       setLoading(false);
-      setTimeout(() => inputRef.current?.focus({ preventScroll: true }), 0);
+      setTimeout(() => inputRef.current?.focus(), 0);
     }
   };
 
@@ -289,7 +273,6 @@ function SessionChat() {
         {loading && messages.at(-1)?.role !== "assistant" && (
           <p className="font-hand text-sepia">thinking...</p>
         )}
-        <div ref={messagesEndRef} aria-hidden />
       </div>
 
       <div className="h-32" aria-hidden />

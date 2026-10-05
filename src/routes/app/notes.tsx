@@ -1,11 +1,9 @@
-import { pageMeta } from "@/lib/page-meta";
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { ImagePlus, Trash2, X, Pencil, Check, FolderPlus, Folder } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import { Markdown } from "@/components/Markdown";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { AppSelect } from "@/components/AppSelect";
@@ -14,7 +12,6 @@ import { useBrowserDraft } from "@/lib/browser-drafts";
 const NONE = "__none__";
 
 export const Route = createFileRoute("/app/notes")({
-  head: () => pageMeta("Notes", "Your notes organized by folders and tags."),
   component: NotesPage,
 });
 
@@ -52,8 +49,6 @@ function NotesPage() {
   const [image, setImage] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [filterFolder, setFilterFolder] = useState<string | "all">("all");
-  const [filterTag, setFilterTag] = useState<string | null>(null);
-  const [previewing, setPreviewing] = useState(false);
   const [sort, setSort] = useState<Sort>("newest");
   const [newFolder, setNewFolder] = useState("");
 
@@ -84,7 +79,6 @@ function NotesPage() {
 
   const filtered = useMemo(() => {
     let rows = notes.data ?? [];
-    if (filterTag) rows = rows.filter(n => n.tags?.includes(filterTag));
     if (filterFolder !== "all") rows = rows.filter((n) => filterFolder === "none" ? !n.folder_id : n.folder_id === filterFolder);
     rows = [...rows].sort((a, b) => {
       if (sort === "title") return (a.title || "").localeCompare(b.title || "");
@@ -92,7 +86,7 @@ function NotesPage() {
       return sort === "newest" ? -cmp : cmp;
     });
     return rows;
-  }, [notes.data, filterFolder, sort, filterTag]);
+  }, [notes.data, filterFolder, sort]);
 
   const create = useMutation({
     mutationFn: async () => {
@@ -150,16 +144,6 @@ function NotesPage() {
         <h1 className="font-serif text-4xl text-primary">Notes</h1>
       </div>
 
-      <div className="grid gap-6 md:grid-cols-[220px_minmax(0,1fr)]">
-      <aside className="min-w-0 border-b border-border pb-5 md:border-b-0 md:border-r md:pr-5">
-        <h2 className="mb-3 text-lg text-foreground">Folders</h2>
-        <div className="flex flex-wrap gap-1 md:flex-col">
-          {[{ id: "all", name: "All notes" }, { id: "none", name: "No folder" }, ...(folders.data ?? [])].map(f => <Button key={f.id} variant={filterFolder === f.id ? "secondary" : "ghost"} className="justify-start" onClick={() => setFilterFolder(f.id)}><Folder /> <span className="truncate">{f.name}</span></Button>)}
-        </div>
-        <h2 className="mb-3 mt-6 text-lg text-foreground">Tags</h2>
-        <div className="flex flex-wrap gap-1"><Button variant={filterTag === null ? "secondary" : "ghost"} size="sm" onClick={() => setFilterTag(null)}>All</Button>{Array.from(new Set((notes.data ?? []).flatMap(n => n.tags ?? []))).map(t => <Button key={t} variant={filterTag === t ? "secondary" : "ghost"} size="sm" onClick={() => setFilterTag(t)}>#{t}</Button>)}</div>
-      </aside>
-      <div className="min-w-0 space-y-5">
       <form
         onSubmit={(e) => { e.preventDefault(); if (content.trim() || title.trim()) create.mutate(); }}
         className="paper-card space-y-3 p-6"
@@ -207,7 +191,7 @@ function NotesPage() {
         </div>
       </form>
 
-      <div className="flex flex-wrap items-center gap-3 border-y border-border py-3 text-sm">
+      <div className="paper-card flex flex-wrap items-center gap-3 p-3 text-sm">
         <label className="flex items-center gap-2">
           <Folder className="size-4 text-muted-foreground" />
           <AppSelect
@@ -234,10 +218,10 @@ function NotesPage() {
         </label>
         <form
           onSubmit={(e) => { e.preventDefault(); if (newFolder.trim()) createFolder.mutate(newFolder.trim()); }}
-          className="grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-1 lg:ml-auto lg:w-auto"
+          className="ml-auto flex items-center gap-1"
         >
           <input value={newFolder} onChange={(e) => setNewFolder(e.target.value)} placeholder="New folder"
-            className="w-full min-w-0 rounded-md border border-input bg-card px-2 py-1" />
+            className="rounded-md border border-input bg-card px-2 py-1" />
           <button type="submit" className="flex items-center gap-1 rounded-md bg-primary px-2.5 py-1 text-xs text-primary-foreground">
             <FolderPlus className="size-3.5" /> Add
           </button>
@@ -252,8 +236,6 @@ function NotesPage() {
             onDelete={() => remove.mutate(n.id)}
             onSave={(v) => update.mutate({ id: n.id, ...v })} />
         ))}
-      </div>
-      </div>
       </div>
     </div>
   );

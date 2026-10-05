@@ -1,4 +1,3 @@
-import { pageMeta } from "@/lib/page-meta";
 import { createFileRoute, Outlet, Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import { useEffect, useState, useCallback } from "react";
 import { Sparkles, Plus, Trash2, MessageSquare, Menu } from "lucide-react";
@@ -11,7 +10,6 @@ import {
 } from "@/components/ui/popover";
 
 export const Route = createFileRoute("/app/chat")({
-  head: () => pageMeta("Companion history", "Your saved conversations with the PaperVault Companion."),
   component: ChatLayout,
 });
 
