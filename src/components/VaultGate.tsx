@@ -43,7 +43,7 @@ export function VaultGate({ userId, children }: { userId: string; children: Reac
 
   return (
     <div className="flex min-h-[60vh] items-center justify-center px-4">
-      <form onSubmit={onSubmit} className="paper-card w-full max-w-md space-y-4 p-8">
+      <form onSubmit={onSubmit} className="glass-card w-full max-w-md space-y-4 p-6 sm:p-8">
         <div className="flex items-center gap-2 text-accent">
           {status === "needs_setup" ? <ShieldCheck className="size-5" /> : <Lock className="size-5" />}
           <p className="font-hand text-2xl text-sepia">

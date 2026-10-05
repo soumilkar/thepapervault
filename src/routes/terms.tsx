@@ -3,6 +3,8 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 export const Route = createFileRoute("/terms")({
   head: () => ({
     meta: [
+      { property: "og:type", content: "website" },
+      { name: "twitter:card", content: "summary_large_image" },
       { title: "Terms of Service — The PaperVault" },
       { name: "description", content: "Terms of Service for The PaperVault." },
       { property: "og:title", content: "Terms of Service — The PaperVault" },

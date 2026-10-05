@@ -1,3 +1,4 @@
+import { pageMeta } from "@/lib/page-meta";
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
@@ -14,6 +15,7 @@ import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { useBrowserDraft } from "@/lib/browser-drafts";
 
 export const Route = createFileRoute("/app/blog")({
+  head: () => pageMeta("Blog", "Your published essays and community stories."),
   component: BlogPage,
 });
 
@@ -387,6 +389,9 @@ function BlogCard({
           )}
         </div>
       </header>
+      <p className="mt-2 text-xs text-muted-foreground">{Math.max(1, Math.ceil(p.content.trim().split(/\s+/).length / 200))} min read</p>
+      {!p.image_url && <div className="mt-4 flex h-24 items-center justify-center rounded-lg border border-dashed border-border bg-secondary/30" aria-label="No cover image"><BookOpen className="size-7 text-muted-foreground/60" /></div>}
+      {p.image_url && <BlogImage path={p.image_url} />}
       {author && <p className="mt-1 text-sm text-accent">by {author}</p>}
       {p.tags && p.tags.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-2">
@@ -396,7 +401,6 @@ function BlogCard({
       <div className="mt-3">
         {open ? <Markdown>{p.content}</Markdown> : <p className="whitespace-pre-wrap leading-relaxed">{preview}</p>}
       </div>
-      {open && p.image_url && <BlogImage path={p.image_url} />}
       {p.content.length > 220 && (
         <button onClick={() => setOpen((o) => !o)} className="mt-2 text-sm text-accent hover:text-primary">
           {open ? "Show less" : "Read more"}

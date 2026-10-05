@@ -1,3 +1,6 @@
+import { ThemeToggle } from "@/components/ThemeToggle";
+import { Link } from "@tanstack/react-router";
+import { pageMeta } from "@/lib/page-meta";
 import { createFileRoute, redirect, useRouter } from "@tanstack/react-router";
 import { useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
@@ -10,7 +13,7 @@ export const Route = createFileRoute("/auth")({
     const { data } = await supabase.auth.getUser();
     if (data.user) throw redirect({ to: "/app" });
   },
-  head: () => ({ meta: [{ title: "Sign in · The PaperVault" }] }),
+  head: () => pageMeta("Sign in", "Sign in to your private PaperVault diary and workspace."),
   component: AuthPage,
 });
 
@@ -49,7 +52,8 @@ function AuthPage() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center px-4">
+    <div className="flex min-h-screen items-center justify-center px-4 pt-24 pb-8">
+      <header className="workspace-header fixed inset-x-0 top-0 z-50 border-b border-border"><div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4"><Link to="/" className="font-serif text-xl text-foreground">The PaperVault</Link><ThemeToggle /></div></header>
       <div className="paper-card w-full max-w-md p-8">
         <p className="font-hand text-2xl text-sepia text-center">welcome back</p>
         <h1 className="mt-1 text-center font-serif text-3xl text-primary">
