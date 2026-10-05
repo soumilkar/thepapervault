@@ -1,3 +1,4 @@
+import { pageMeta } from "@/lib/page-meta";
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
@@ -24,6 +25,7 @@ function countWords(s: string) {
 }
 
 export const Route = createFileRoute("/app/diary")({
+  head: () => pageMeta("Diary", "Your journal entries, moods and memories."),
   component: DiaryPage,
 });
 

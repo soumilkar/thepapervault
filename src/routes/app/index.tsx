@@ -1,3 +1,4 @@
+import { pageMeta } from "@/lib/page-meta";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
@@ -12,6 +13,7 @@ import { EntryHeatmap } from "@/components/EntryHeatmap";
 import { MoodTimeline } from "@/components/MoodTimeline";
 
 export const Route = createFileRoute("/app/")({
+  head: () => pageMeta("Home", "Your writing streaks, mood timeline and personal workspace overview."),
   component: Dashboard,
 });
 

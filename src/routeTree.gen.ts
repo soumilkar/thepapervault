@@ -11,11 +11,18 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as TermsRouteImport } from './routes/terms'
 import { Route as PrivacyRouteImport } from './routes/privacy'
+import { Route as NotesRouteImport } from './routes/notes'
+import { Route as LockRouteImport } from './routes/lock'
+import { Route as GalleryRouteImport } from './routes/gallery'
+import { Route as DiaryRouteImport } from './routes/diary'
+import { Route as CompanionRouteImport } from './routes/companion'
+import { Route as BlogRouteImport } from './routes/blog'
 import { Route as AuthRouteImport } from './routes/auth'
 import { Route as AppRouteRouteImport } from './routes/app/route'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AppIndexRouteImport } from './routes/app/index'
 import { Route as AppNotesRouteImport } from './routes/app/notes'
+import { Route as AppLockRouteImport } from './routes/app/lock'
 import { Route as AppGalleryRouteImport } from './routes/app/gallery'
 import { Route as AppDiaryRouteImport } from './routes/app/diary'
 import { Route as AppChatRouteImport } from './routes/app/chat'
@@ -32,6 +39,36 @@ const TermsRoute = TermsRouteImport.update({
 const PrivacyRoute = PrivacyRouteImport.update({
   id: '/privacy',
   path: '/privacy',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const NotesRoute = NotesRouteImport.update({
+  id: '/notes',
+  path: '/notes',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LockRoute = LockRouteImport.update({
+  id: '/lock',
+  path: '/lock',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const GalleryRoute = GalleryRouteImport.update({
+  id: '/gallery',
+  path: '/gallery',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DiaryRoute = DiaryRouteImport.update({
+  id: '/diary',
+  path: '/diary',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CompanionRoute = CompanionRouteImport.update({
+  id: '/companion',
+  path: '/companion',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const BlogRoute = BlogRouteImport.update({
+  id: '/blog',
+  path: '/blog',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AuthRoute = AuthRouteImport.update({
@@ -57,6 +94,11 @@ const AppIndexRoute = AppIndexRouteImport.update({
 const AppNotesRoute = AppNotesRouteImport.update({
   id: '/notes',
   path: '/notes',
+  getParentRoute: () => AppRouteRoute,
+} as any)
+const AppLockRoute = AppLockRouteImport.update({
+  id: '/lock',
+  path: '/lock',
   getParentRoute: () => AppRouteRoute,
 } as any)
 const AppGalleryRoute = AppGalleryRouteImport.update({
@@ -99,6 +141,12 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/app': typeof AppRouteRouteWithChildren
   '/auth': typeof AuthRoute
+  '/blog': typeof BlogRoute
+  '/companion': typeof CompanionRoute
+  '/diary': typeof DiaryRoute
+  '/gallery': typeof GalleryRoute
+  '/lock': typeof LockRoute
+  '/notes': typeof NotesRoute
   '/privacy': typeof PrivacyRoute
   '/terms': typeof TermsRoute
   '/api/companion-stream': typeof ApiCompanionStreamRoute
@@ -106,6 +154,7 @@ export interface FileRoutesByFullPath {
   '/app/chat': typeof AppChatRouteWithChildren
   '/app/diary': typeof AppDiaryRoute
   '/app/gallery': typeof AppGalleryRoute
+  '/app/lock': typeof AppLockRoute
   '/app/notes': typeof AppNotesRoute
   '/app/': typeof AppIndexRoute
   '/app/chat/$sessionId': typeof AppChatSessionIdRoute
@@ -114,12 +163,19 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/auth': typeof AuthRoute
+  '/blog': typeof BlogRoute
+  '/companion': typeof CompanionRoute
+  '/diary': typeof DiaryRoute
+  '/gallery': typeof GalleryRoute
+  '/lock': typeof LockRoute
+  '/notes': typeof NotesRoute
   '/privacy': typeof PrivacyRoute
   '/terms': typeof TermsRoute
   '/api/companion-stream': typeof ApiCompanionStreamRoute
   '/app/blog': typeof AppBlogRoute
   '/app/diary': typeof AppDiaryRoute
   '/app/gallery': typeof AppGalleryRoute
+  '/app/lock': typeof AppLockRoute
   '/app/notes': typeof AppNotesRoute
   '/app': typeof AppIndexRoute
   '/app/chat/$sessionId': typeof AppChatSessionIdRoute
@@ -130,6 +186,12 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/app': typeof AppRouteRouteWithChildren
   '/auth': typeof AuthRoute
+  '/blog': typeof BlogRoute
+  '/companion': typeof CompanionRoute
+  '/diary': typeof DiaryRoute
+  '/gallery': typeof GalleryRoute
+  '/lock': typeof LockRoute
+  '/notes': typeof NotesRoute
   '/privacy': typeof PrivacyRoute
   '/terms': typeof TermsRoute
   '/api/companion-stream': typeof ApiCompanionStreamRoute
@@ -137,6 +199,7 @@ export interface FileRoutesById {
   '/app/chat': typeof AppChatRouteWithChildren
   '/app/diary': typeof AppDiaryRoute
   '/app/gallery': typeof AppGalleryRoute
+  '/app/lock': typeof AppLockRoute
   '/app/notes': typeof AppNotesRoute
   '/app/': typeof AppIndexRoute
   '/app/chat/$sessionId': typeof AppChatSessionIdRoute
@@ -148,6 +211,12 @@ export interface FileRouteTypes {
     | '/'
     | '/app'
     | '/auth'
+    | '/blog'
+    | '/companion'
+    | '/diary'
+    | '/gallery'
+    | '/lock'
+    | '/notes'
     | '/privacy'
     | '/terms'
     | '/api/companion-stream'
@@ -155,6 +224,7 @@ export interface FileRouteTypes {
     | '/app/chat'
     | '/app/diary'
     | '/app/gallery'
+    | '/app/lock'
     | '/app/notes'
     | '/app/'
     | '/app/chat/$sessionId'
@@ -163,12 +233,19 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/auth'
+    | '/blog'
+    | '/companion'
+    | '/diary'
+    | '/gallery'
+    | '/lock'
+    | '/notes'
     | '/privacy'
     | '/terms'
     | '/api/companion-stream'
     | '/app/blog'
     | '/app/diary'
     | '/app/gallery'
+    | '/app/lock'
     | '/app/notes'
     | '/app'
     | '/app/chat/$sessionId'
@@ -178,6 +255,12 @@ export interface FileRouteTypes {
     | '/'
     | '/app'
     | '/auth'
+    | '/blog'
+    | '/companion'
+    | '/diary'
+    | '/gallery'
+    | '/lock'
+    | '/notes'
     | '/privacy'
     | '/terms'
     | '/api/companion-stream'
@@ -185,6 +268,7 @@ export interface FileRouteTypes {
     | '/app/chat'
     | '/app/diary'
     | '/app/gallery'
+    | '/app/lock'
     | '/app/notes'
     | '/app/'
     | '/app/chat/$sessionId'
@@ -195,6 +279,12 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AppRouteRoute: typeof AppRouteRouteWithChildren
   AuthRoute: typeof AuthRoute
+  BlogRoute: typeof BlogRoute
+  CompanionRoute: typeof CompanionRoute
+  DiaryRoute: typeof DiaryRoute
+  GalleryRoute: typeof GalleryRoute
+  LockRoute: typeof LockRoute
+  NotesRoute: typeof NotesRoute
   PrivacyRoute: typeof PrivacyRoute
   TermsRoute: typeof TermsRoute
   ApiCompanionStreamRoute: typeof ApiCompanionStreamRoute
@@ -214,6 +304,48 @@ declare module '@tanstack/react-router' {
       path: '/privacy'
       fullPath: '/privacy'
       preLoaderRoute: typeof PrivacyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/notes': {
+      id: '/notes'
+      path: '/notes'
+      fullPath: '/notes'
+      preLoaderRoute: typeof NotesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/lock': {
+      id: '/lock'
+      path: '/lock'
+      fullPath: '/lock'
+      preLoaderRoute: typeof LockRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/gallery': {
+      id: '/gallery'
+      path: '/gallery'
+      fullPath: '/gallery'
+      preLoaderRoute: typeof GalleryRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/diary': {
+      id: '/diary'
+      path: '/diary'
+      fullPath: '/diary'
+      preLoaderRoute: typeof DiaryRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/companion': {
+      id: '/companion'
+      path: '/companion'
+      fullPath: '/companion'
+      preLoaderRoute: typeof CompanionRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/blog': {
+      id: '/blog'
+      path: '/blog'
+      fullPath: '/blog'
+      preLoaderRoute: typeof BlogRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/auth': {
@@ -249,6 +381,13 @@ declare module '@tanstack/react-router' {
       path: '/notes'
       fullPath: '/app/notes'
       preLoaderRoute: typeof AppNotesRouteImport
+      parentRoute: typeof AppRouteRoute
+    }
+    '/app/lock': {
+      id: '/app/lock'
+      path: '/lock'
+      fullPath: '/app/lock'
+      preLoaderRoute: typeof AppLockRouteImport
       parentRoute: typeof AppRouteRoute
     }
     '/app/gallery': {
@@ -321,6 +460,7 @@ interface AppRouteRouteChildren {
   AppChatRoute: typeof AppChatRouteWithChildren
   AppDiaryRoute: typeof AppDiaryRoute
   AppGalleryRoute: typeof AppGalleryRoute
+  AppLockRoute: typeof AppLockRoute
   AppNotesRoute: typeof AppNotesRoute
   AppIndexRoute: typeof AppIndexRoute
 }
@@ -330,6 +470,7 @@ const AppRouteRouteChildren: AppRouteRouteChildren = {
   AppChatRoute: AppChatRouteWithChildren,
   AppDiaryRoute: AppDiaryRoute,
   AppGalleryRoute: AppGalleryRoute,
+  AppLockRoute: AppLockRoute,
   AppNotesRoute: AppNotesRoute,
   AppIndexRoute: AppIndexRoute,
 }
@@ -342,6 +483,12 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AppRouteRoute: AppRouteRouteWithChildren,
   AuthRoute: AuthRoute,
+  BlogRoute: BlogRoute,
+  CompanionRoute: CompanionRoute,
+  DiaryRoute: DiaryRoute,
+  GalleryRoute: GalleryRoute,
+  LockRoute: LockRoute,
+  NotesRoute: NotesRoute,
   PrivacyRoute: PrivacyRoute,
   TermsRoute: TermsRoute,
   ApiCompanionStreamRoute: ApiCompanionStreamRoute,

@@ -1,3 +1,4 @@
+import { pageMeta } from "@/lib/page-meta";
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
@@ -14,6 +15,7 @@ import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { useBrowserDraft } from "@/lib/browser-drafts";
 
 export const Route = createFileRoute("/app/blog")({
+  head: () => pageMeta("Blog", "Your published essays and community stories."),
   component: BlogPage,
 });
 

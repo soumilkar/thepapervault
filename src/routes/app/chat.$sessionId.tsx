@@ -1,3 +1,4 @@
+import { pageMeta } from "@/lib/page-meta";
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Send } from "lucide-react";
@@ -11,6 +12,7 @@ import { CHAT_SESSIONS_UPDATED } from "./chat";
 import { useBrowserDraft } from "@/lib/browser-drafts";
 
 export const Route = createFileRoute("/app/chat/$sessionId")({
+  head: () => pageMeta("Conversation", "Continue your private conversation with the PaperVault Companion."),
   component: SessionChat,
 });
 
