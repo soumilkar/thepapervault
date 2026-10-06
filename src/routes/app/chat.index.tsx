@@ -1,3 +1,4 @@
+import { pageMeta } from "@/lib/page-meta";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { Sparkles } from "lucide-react";
@@ -6,6 +7,7 @@ import { toast } from "sonner";
 import { CHAT_SESSIONS_UPDATED } from "./chat";
 
 export const Route = createFileRoute("/app/chat/")({
+  head: () => pageMeta('Open Companion', 'Return to your most recent PaperVault Companion conversation.'),
   component: ChatIndex,
 });
 

@@ -1,3 +1,4 @@
+import { pageMeta } from "@/lib/page-meta";
 import { ImageLinkButton } from "@/components/ImageLinkButton";
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -12,6 +13,7 @@ import { CHAT_SESSIONS_UPDATED } from "./chat";
 import { useBrowserDraft } from "@/lib/browser-drafts";
 
 export const Route = createFileRoute("/app/chat/$sessionId")({
+  head: () => pageMeta('Companion conversation', 'Continue a personal conversation with your PaperVault AI Companion.'),
   component: SessionChat,
 });
 
@@ -311,7 +313,7 @@ function SessionChat() {
           placeholder="Ask about your story..."
           className="min-w-0 flex-1 bg-transparent px-3 py-2 outline-none placeholder:text-muted-foreground/60"
         />
-        <ImageLinkButton onInsert={(image) => setInput(`${input}${input ? "\n\n" : ""}${image}`)} />
+        <ImageLinkButton compact onInsert={(image) => setInput(`${input}${input ? "\n\n" : ""}${image}`)} />
         <button type="submit" disabled={loading || !input.trim()} className="flex items-center gap-1 rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground disabled:opacity-50">
           <Send className="size-4" /> Send
         </button>

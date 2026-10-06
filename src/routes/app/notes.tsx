@@ -1,3 +1,4 @@
+import { pageMeta } from "@/lib/page-meta";
 import { ImageLinkButton } from "@/components/ImageLinkButton";
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -15,6 +16,7 @@ import { useBrowserDraft } from "@/lib/browser-drafts";
 const NONE = "__none__";
 
 export const Route = createFileRoute("/app/notes")({
+  head: () => pageMeta('Notes', 'Your notes, reminders, images, tags, and folders in The PaperVault.'),
   component: NotesPage,
 });
 

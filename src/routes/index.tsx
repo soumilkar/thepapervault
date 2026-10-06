@@ -1,3 +1,4 @@
+import { pageMeta } from "@/lib/page-meta";
 import { createFileRoute, Link, redirect } from "@tanstack/react-router";
 import { supabase } from "@/integrations/supabase/client";
 import { BookOpen, Image as ImageIcon, PenLine, Sparkles } from "lucide-react";
@@ -8,12 +9,7 @@ export const Route = createFileRoute("/")({
     const { data } = await supabase.auth.getUser();
     if (data.user) throw redirect({ to: "/app" });
   },
-  head: () => ({
-    meta: [
-      { title: "The PaperVault — Your warm personal journal" },
-      { name: "description", content: "A private home for diaries, blogs, a personal gallery, and an AI companion that knows your story." },
-    ],
-  }),
+  head: () => pageMeta('The PaperVault', 'A private home for diaries, blogs, photos, notes, and a personal AI companion.'),
   component: Landing,
 });
 

@@ -1,3 +1,4 @@
+import { pageMeta } from "@/lib/page-meta";
 import { ImageLinkButton } from "@/components/ImageLinkButton";
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -16,6 +17,7 @@ import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { useBrowserDraft } from "@/lib/browser-drafts";
 
 export const Route = createFileRoute("/app/blog")({
+  head: () => pageMeta('Blog', 'Write personal blogs and read stories from the PaperVault community.'),
   component: BlogPage,
 });
 
