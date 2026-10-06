@@ -1,3 +1,5 @@
+import { pageMeta } from "@/lib/page-meta";
+import { ImageLinkButton } from "@/components/ImageLinkButton";
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Send } from "lucide-react";
@@ -11,6 +13,7 @@ import { CHAT_SESSIONS_UPDATED } from "./chat";
 import { useBrowserDraft } from "@/lib/browser-drafts";
 
 export const Route = createFileRoute("/app/chat/$sessionId")({
+  head: () => pageMeta('Companion conversation', 'Continue a personal conversation with your PaperVault AI Companion.'),
   component: SessionChat,
 });
 
@@ -89,6 +92,10 @@ function SessionChat() {
   const [loading, setLoading] = useState(false);
   const [hydrating, setHydrating] = useState(true);
   const inputRef = useRef<HTMLInputElement>(null);
+  const conversationRef = useRef<HTMLDivElement>(null);
+  const endRef = useRef<HTMLDivElement>(null);
+  const followLatest = useRef(true);
+  const openedSession = useRef<string | null>(null);
 
   const today = useMemo(() => new Date(), []);
   const monthAgo = useMemo(() => new Date(today.getTime() - 30 * 24 * 3600 * 1000), [today]);
@@ -99,6 +106,7 @@ function SessionChat() {
   // Load prior messages for this session
   useEffect(() => {
     let cancelled = false;
+    followLatest.current = true;
     setHydrating(true);
     setMessages([]);
     (async () => {
@@ -119,13 +127,37 @@ function SessionChat() {
         );
       }
       setHydrating(false);
-      setTimeout(() => inputRef.current?.focus(), 0);
+      setTimeout(() => inputRef.current?.focus({ preventScroll: true }), 0);
     })();
     return () => { cancelled = true; };
   }, [sessionId]);
 
+  useEffect(() => {
+    const onScroll = () => {
+      followLatest.current = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 180;
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+
+  useEffect(() => {
+    if (hydrating) return;
+    const scrollLatest = () => {
+      if (openedSession.current !== sessionId) {
+        followLatest.current = true;
+        openedSession.current = sessionId;
+      }
+      if (followLatest.current) endRef.current?.scrollIntoView({ block: "end", behavior: "instant" });
+    };
+    const frame = requestAnimationFrame(scrollLatest);
+    const observer = new ResizeObserver(scrollLatest);
+    if (conversationRef.current) observer.observe(conversationRef.current);
+    return () => { cancelAnimationFrame(frame); observer.disconnect(); };
+  }, [hydrating, messages, sessionId]);
+
   const send = async (question: string) => {
     if (!question.trim() || loading) return;
+    followLatest.current = true;
     const priorHistory = messages;
     const userMsg: Msg = { role: "user", content: question };
     setMessages((m) => [...m, userMsg]);
@@ -198,7 +230,7 @@ function SessionChat() {
       toast.error(e instanceof Error ? e.message : "Could not reach the companion");
     } finally {
       setLoading(false);
-      setTimeout(() => inputRef.current?.focus(), 0);
+      setTimeout(() => inputRef.current?.focus({ preventScroll: true }), 0);
     }
   };
 
@@ -254,7 +286,7 @@ function SessionChat() {
         </div>
       )}
 
-      <div className="space-y-3">
+      <div ref={conversationRef} className="space-y-3">
         {hydrating && <p className="font-hand text-sepia">loading conversation...</p>}
         {messages.map((m, i) => (
           <div key={i} className={m.role === "user" ? "flex justify-end" : ""}>
@@ -275,7 +307,7 @@ function SessionChat() {
         )}
       </div>
 
-      <div className="h-32" aria-hidden />
+      <div ref={endRef} className="h-32" aria-hidden />
       <form
         onSubmit={(e) => { e.preventDefault(); send(input); }}
         className="glass-card fixed bottom-4 left-4 right-4 z-30 mx-auto flex max-w-3xl items-center gap-2 p-2"
@@ -284,8 +316,9 @@ function SessionChat() {
           ref={inputRef}
           value={input} onChange={(e) => setInput(e.target.value)}
           placeholder="Ask about your story..."
-          className="flex-1 bg-transparent px-3 py-2 outline-none placeholder:text-muted-foreground/60"
+          className="min-w-0 flex-1 bg-transparent px-3 py-2 outline-none placeholder:text-muted-foreground/60"
         />
+        <ImageLinkButton compact onInsert={(image) => setInput(`${input}${input ? "\n\n" : ""}${image}`)} />
         <button type="submit" disabled={loading || !input.trim()} className="flex items-center gap-1 rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground disabled:opacity-50">
           <Send className="size-4" /> Send
         </button>

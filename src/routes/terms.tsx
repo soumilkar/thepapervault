@@ -1,14 +1,8 @@
+import { pageMeta } from "@/lib/page-meta";
 import { createFileRoute, Link } from "@tanstack/react-router";
 
 export const Route = createFileRoute("/terms")({
-  head: () => ({
-    meta: [
-      { title: "Terms of Service — The PaperVault" },
-      { name: "description", content: "Terms of Service for The PaperVault." },
-      { property: "og:title", content: "Terms of Service — The PaperVault" },
-      { property: "og:description", content: "Terms of Service for The PaperVault." },
-    ],
-  }),
+  head: () => pageMeta('Terms of Service', 'Terms for using The PaperVault writing space.'),
   component: TermsPage,
 });
 

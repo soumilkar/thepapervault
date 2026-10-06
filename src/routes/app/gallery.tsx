@@ -1,3 +1,4 @@
+import { pageMeta } from "@/lib/page-meta";
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
@@ -8,6 +9,7 @@ import { useVault } from "@/lib/vault";
 import { decryptBytes, decryptText, encryptBlob, encryptText } from "@/lib/crypto";
 
 export const Route = createFileRoute("/app/gallery")({
+  head: () => pageMeta('Gallery', 'Your personal collection of photos and memories.'),
   component: GalleryPage,
 });
 
