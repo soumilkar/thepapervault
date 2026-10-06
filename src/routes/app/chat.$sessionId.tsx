@@ -95,6 +95,7 @@ function SessionChat() {
   const conversationRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const followLatest = useRef(true);
+  const openedSession = useRef<string | null>(null);
 
   const today = useMemo(() => new Date(), []);
   const monthAgo = useMemo(() => new Date(today.getTime() - 30 * 24 * 3600 * 1000), [today]);
@@ -142,6 +143,10 @@ function SessionChat() {
   useEffect(() => {
     if (hydrating) return;
     const scrollLatest = () => {
+      if (openedSession.current !== sessionId) {
+        followLatest.current = true;
+        openedSession.current = sessionId;
+      }
       if (followLatest.current) endRef.current?.scrollIntoView({ block: "end", behavior: "instant" });
     };
     const frame = requestAnimationFrame(scrollLatest);
