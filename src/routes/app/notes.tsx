@@ -1,10 +1,13 @@
+import { ImageLinkButton } from "@/components/ImageLinkButton";
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { ImagePlus, Trash2, X, Pencil, Check, FolderPlus, Folder } from "lucide-react";
-import { Markdown } from "@/components/Markdown";
+import { EntryContent } from "@/components/EntryContent";
+import { Button } from "@/components/ui/button";
+import { Maximize2, Minimize2 } from "lucide-react";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { AppSelect } from "@/components/AppSelect";
 import { useBrowserDraft } from "@/lib/browser-drafts";
@@ -155,6 +158,7 @@ function NotesPage() {
         <textarea value={content} onChange={(e) => setContent(e.target.value)} rows={5}
           placeholder="Jot something down... (markdown supported)"
           className="w-full resize-none bg-transparent leading-relaxed outline-none placeholder:text-muted-foreground/60" />
+        <ImageLinkButton onInsert={(image) => setContent(`${content}${content ? "\n\n" : ""}${image}`)} />
         {imagePreview && (
           <div className="relative inline-block">
             <img src={imagePreview} className="max-h-56 rounded-md border border-border" alt="" />
@@ -228,7 +232,7 @@ function NotesPage() {
         </form>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2">
+      <div className="columns-1 gap-4 md:columns-2 xl:columns-3">
         {notes.isLoading && <p className="font-hand text-sepia">gathering notes...</p>}
         {notes.data?.length === 0 && <p className="text-muted-foreground">No notes yet.</p>}
         {filtered.map((n) => (
@@ -262,6 +266,7 @@ function NoteCard({
   onSave: (v: { title: string; content: string; tags: string; folder_id: string | null }) => void;
 }) {
   const [editing, setEditing] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   const [eTitle, setETitle] = useState(n.title ?? "");
   const [eContent, setEContent] = useState(n.content);
   const [eTags, setETags] = useState((n.tags ?? []).join(", "));
@@ -270,13 +275,14 @@ function NoteCard({
 
   if (editing) {
     return (
-      <article className="paper-card space-y-2 p-4">
+      <article className="paper-card mb-4 break-inside-avoid space-y-2 p-4">
         <input value={eTitle} onChange={(e) => setETitle(e.target.value)} placeholder="Title"
           className="w-full bg-transparent font-serif text-xl outline-none" />
         <input value={eTags} onChange={(e) => setETags(e.target.value)} placeholder="tags, separated, by, commas"
           className="w-full bg-transparent text-sm text-accent outline-none" />
         <textarea value={eContent} onChange={(e) => setEContent(e.target.value)} rows={6}
           className="w-full resize-none bg-transparent leading-relaxed outline-none" />
+        <ImageLinkButton onInsert={(image) => setEContent(`${eContent}${eContent ? "\n\n" : ""}${image}`)} />
         <label className="flex items-center gap-2 text-sm">
           <span className="text-muted-foreground">Folder</span>
           <AppSelect
@@ -304,11 +310,12 @@ function NoteCard({
   }
 
   return (
-    <article className="paper-card p-4">
+    <article className="paper-card mb-4 break-inside-avoid p-4 transition-shadow hover:shadow-md">
       <header className="flex items-start justify-between gap-2">
-        <h3 className="font-serif text-lg text-primary">{n.title || "Untitled"}</h3>
-        <div className="flex items-center gap-2">
-          <button onClick={() => setEditing(true)} className="text-muted-foreground hover:text-primary"><Pencil className="size-4" /></button>
+        <h3 className="min-w-0 break-words font-serif text-lg text-primary"><Button variant="link" className="h-auto whitespace-normal p-0 text-left font-serif text-lg" onClick={() => setExpanded((value) => !value)} aria-expanded={expanded}>{n.title || "Untitled"}</Button></h3>
+        <div className="flex shrink-0 items-center gap-2">
+          <Button variant="ghost" size="icon" className="size-7" onClick={() => setExpanded((value) => !value)} title={expanded ? "Collapse note" : "Expand note"} aria-label={expanded ? "Collapse note" : "Expand note"} aria-expanded={expanded}>{expanded ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}</Button>
+          <button aria-label="Edit note" onClick={() => setEditing(true)} className="text-muted-foreground hover:text-primary"><Pencil className="size-4" /></button>
           <button onClick={() => setConfirmDel(true)} className="text-muted-foreground hover:text-destructive"><Trash2 className="size-4" /></button>
         </div>
       </header>
@@ -317,7 +324,8 @@ function NoteCard({
           {n.tags.map((t) => <span key={t} className="rounded-full bg-secondary px-2 py-0.5 text-[11px] text-secondary-foreground">#{t}</span>)}
         </div>
       )}
-      <div className="mt-2 text-sm"><Markdown>{n.content}</Markdown></div>
+      <div className="mt-2 text-sm"><EntryContent collapsed={!expanded}>{n.content}</EntryContent></div>
+      <Button variant="link" size="sm" className="mt-2 h-auto p-0 text-accent" onClick={() => setExpanded((value) => !value)} aria-expanded={expanded}>{expanded ? "Show less" : "Read more"}</Button>
       {n.image_url && <NoteImage path={n.image_url} />}
       <p className="mt-2 text-[11px] text-muted-foreground">{new Date(n.updated_at).toLocaleString()}</p>
       <ConfirmDialog

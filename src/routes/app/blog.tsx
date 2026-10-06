@@ -1,3 +1,4 @@
+import { ImageLinkButton } from "@/components/ImageLinkButton";
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
@@ -9,6 +10,7 @@ import {
 } from "lucide-react";
 import { MusicSearch, MusicPlayer, type SelectedTrack } from "@/components/MusicSearch";
 import { Markdown } from "@/components/Markdown";
+import { EntryContent } from "@/components/EntryContent";
 import { downloadTextFile } from "@/lib/download";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { useBrowserDraft } from "@/lib/browser-drafts";
@@ -195,6 +197,7 @@ function BlogPage() {
             rows={12} required
             className="w-full resize-none bg-transparent leading-relaxed outline-none placeholder:text-muted-foreground/60"
           />
+          <ImageLinkButton onInsert={(image) => setContent(`${content}${content ? "\n\n" : ""}${image}`)} />
           {imagePreview && (
             <div className="relative inline-block">
               <img src={imagePreview} alt="preview" className="max-h-56 rounded-md border border-border" />
@@ -311,7 +314,7 @@ function BlogCard({
     return () => URL.revokeObjectURL(url);
   }, [eImage]);
 
-  const preview = p.content.length > 220 ? p.content.slice(0, 220).trimEnd() + "…" : p.content;
+
 
   const startEdit = () => {
     setETitle(p.title); setEContent(p.content); setETags((p.tags ?? []).join(", "));
@@ -329,6 +332,7 @@ function BlogCard({
         <textarea value={eContent} onChange={(e) => setEContent(e.target.value)} rows={10}
           className="w-full resize-none bg-transparent leading-relaxed outline-none" />
 
+        <ImageLinkButton onInsert={(image) => setEContent(`${eContent}${eContent ? "\n\n" : ""}${image}`)} />
         {eImagePreview ? (
           <div className="relative inline-block">
             <img src={eImagePreview} className="max-h-48 rounded-md border border-border" alt="" />
@@ -394,10 +398,10 @@ function BlogCard({
         </div>
       )}
       <div className="mt-3">
-        {open ? <Markdown>{p.content}</Markdown> : <p className="whitespace-pre-wrap leading-relaxed">{preview}</p>}
+        <EntryContent collapsed={!open && p.content.length > 220}>{p.content}</EntryContent>
       </div>
       {open && p.image_url && <BlogImage path={p.image_url} />}
-      {p.content.length > 220 && (
+      {(p.content.length > 220 || p.image_url) && (
         <button onClick={() => setOpen((o) => !o)} className="mt-2 text-sm text-accent hover:text-primary">
           {open ? "Show less" : "Read more"}
         </button>
@@ -546,13 +550,14 @@ function Comments({ postId, postAuthorId, currentUserId }: { postId: string; pos
       ))}
       <form
         onSubmit={(e) => { e.preventDefault(); if (text.trim()) add.mutate({ content: text, parent_id: null }); }}
-        className="flex gap-2"
+        className="flex flex-wrap gap-2"
       >
         <input
           value={text} onChange={(e) => setText(e.target.value)}
           placeholder="Write a comment..."
           className="flex-1 rounded-md border border-input bg-card px-3 py-1.5 text-sm outline-none focus:border-ring"
         />
+        <ImageLinkButton onInsert={(image) => setText(`${text}${text ? "\n\n" : ""}${image}`)} />
         <button type="submit" disabled={!text.trim() || add.isPending} className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground disabled:opacity-50">
           Post
         </button>
@@ -609,6 +614,7 @@ function CommentItem({
             value={editText} onChange={(e) => setEditText(e.target.value)} rows={2}
             className="w-full resize-none rounded-md border border-input bg-card px-2 py-1 text-sm outline-none focus:border-ring"
           />
+          <ImageLinkButton onInsert={(image) => setEditText(`${editText}${editText ? "\n\n" : ""}${image}`)} />
           <div className="flex justify-end gap-2">
             <button type="button" onClick={() => setEditing(false)} className="rounded-md border border-border px-2.5 py-1 text-xs">Cancel</button>
             <button type="submit" className="rounded-md bg-primary px-2.5 py-1 text-xs text-primary-foreground">Save</button>
@@ -633,13 +639,14 @@ function CommentItem({
             onReply(c.id, replyText);
             setReplyText(""); setReplying(false);
           }}
-          className="mt-2 flex gap-2"
+          className="mt-2 flex flex-wrap gap-2"
         >
           <input
             autoFocus value={replyText} onChange={(e) => setReplyText(e.target.value)}
             placeholder={`Reply to ${c.author}...`}
             className="flex-1 rounded-md border border-input bg-card px-2 py-1 text-xs outline-none focus:border-ring"
           />
+          <ImageLinkButton onInsert={(image) => setReplyText(`${replyText}${replyText ? "\n\n" : ""}${image}`)} />
           <button type="submit" className="rounded-md bg-primary px-2.5 py-1 text-xs text-primary-foreground">Send</button>
         </form>
       )}

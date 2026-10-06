@@ -1,10 +1,11 @@
+import { ImageLinkButton } from "@/components/ImageLinkButton";
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { ImagePlus, Trash2, X, Download, Pencil, Check, Globe, Lock, FolderPlus, Folder, FileText } from "lucide-react";
-import { Markdown } from "@/components/Markdown";
+import { EntryContent } from "@/components/EntryContent";
 import { downloadTextFile } from "@/lib/download";
 import { useVault } from "@/lib/vault";
 import { decryptBytes, decryptText, encryptBlob, encryptText } from "@/lib/crypto";
@@ -391,6 +392,8 @@ function DiaryPage() {
           placeholder="Pour it out..." rows={6}
           className="w-full resize-none bg-transparent leading-relaxed outline-none placeholder:text-muted-foreground/60" />
 
+        <ImageLinkButton onInsert={(image) => setContent(`${content}${content ? "\n\n" : ""}${image}`)} />
+
         {handwritingPages.length > 0 && (
           <div className="space-y-2 rounded-md border border-border bg-secondary/50 p-3">
             <p className="text-xs text-muted-foreground">Converted text is added to the box above, one page after another. Please review it before saving.</p>
@@ -569,7 +572,7 @@ function DiaryCard({
   const [eMusic, setEMusic] = useState<SelectedTrack | null>(e.music);
   const [confirmDel, setConfirmDel] = useState(false);
   const long = e.content.length > 220 || !!e.image_url;
-  const preview = e.content.length > 220 ? e.content.slice(0, 220).trimEnd() + "…" : e.content;
+
 
   if (editing) {
     return (
@@ -580,6 +583,7 @@ function DiaryCard({
           className="w-full bg-transparent text-sm text-accent outline-none" />
         <textarea value={eContent} onChange={(ev) => setEContent(ev.target.value)} rows={8}
           className="w-full resize-none bg-transparent leading-relaxed outline-none" />
+        <ImageLinkButton onInsert={(image) => setEContent(`${eContent}${eContent ? "\n\n" : ""}${image}`)} />
         <MusicSearch selected={eMusic} onChange={setEMusic} />
         <label className="flex items-center gap-2 text-sm">
           <span className="text-muted-foreground">Folder</span>
@@ -627,7 +631,7 @@ function DiaryCard({
         </div>
       </header>
       {e.mood && <p className="mt-1 text-sm text-accent">Feeling: {e.mood}</p>}
-      {open ? <Markdown>{e.content}</Markdown> : <p className="mt-3 whitespace-pre-wrap leading-relaxed">{preview}</p>}
+      <div className="mt-3"><EntryContent collapsed={!open && long}>{e.content}</EntryContent></div>
       {open && e.image_url && (
         <img src={e.image_url} alt="" className="mt-4 max-h-96 rounded-md border border-border" loading="lazy" />
       )}
