@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
-export function ImageLinkButton({ onInsert }: { onInsert: (image: string) => void }) {
+export function ImageLinkButton({ onInsert, compact = false }: { onInsert: (image: string) => void; compact?: boolean }) {
   const [open, setOpen] = useState(false);
   const [url, setUrl] = useState("");
   const [alt, setAlt] = useState("");
@@ -20,7 +20,7 @@ export function ImageLinkButton({ onInsert }: { onInsert: (image: string) => voi
   };
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild><Button type="button" variant="ghost" size="sm" title="Insert image link" aria-label="Insert image link"><ImagePlus className="size-4" /> Image link</Button></PopoverTrigger>
+      <PopoverTrigger asChild><Button type="button" variant="ghost" size={compact ? "icon" : "sm"} title="Insert image link" aria-label="Insert image link"><ImagePlus className="size-4" />{!compact && "Image link"}</Button></PopoverTrigger>
       <PopoverContent className="w-80 max-w-[calc(100vw-2rem)] space-y-3" align="start">
         <p className="text-sm font-medium">Insert image link</p>
         <Input aria-label="Image URL" placeholder="https://…" value={url} onChange={(e) => { setUrl(e.target.value); setError(""); }} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); insert(); } }} />
