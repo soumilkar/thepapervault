@@ -1,18 +1,16 @@
-import { pageMeta } from "@/lib/page-meta";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { BookOpen, Image as ImageIcon, PenLine, Sparkles, Users } from "lucide-react";
 import { WelcomeTour } from "@/components/WelcomeTour";
-import { EntryContent } from "@/components/EntryContent";
+import { Markdown } from "@/components/Markdown";
 import { MusicPlayer } from "@/components/MusicSearch";
 import { WritingStreaks } from "@/components/WritingStreaks";
 import { EntryHeatmap } from "@/components/EntryHeatmap";
 import { MoodTimeline } from "@/components/MoodTimeline";
 
 export const Route = createFileRoute("/app/")({
-  head: () => pageMeta('Home', 'Your writing activity and anonymous community diary entries.'),
   component: Dashboard,
 });
 
@@ -123,7 +121,7 @@ function StatCard({ to, icon, label, value }: { to: string; icon: React.ReactNod
 function FeedCard({ entry: e }: { entry: PublicDiary }) {
   const [open, setOpen] = useState(false);
   const long = e.content.length > 220;
-
+  const preview = long ? e.content.slice(0, 220).trimEnd() + "…" : e.content;
   return (
     <article className="paper-card p-6">
       <header className="flex items-baseline justify-between gap-3">
@@ -133,7 +131,7 @@ function FeedCard({ entry: e }: { entry: PublicDiary }) {
         <span className="font-hand text-sepia">{new Date(e.entry_date).toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" })}</span>
       </header>
       <p className="mt-1 text-sm text-accent">notes from a stranger{e.mood ? ` · feeling ${e.mood}` : ""}</p>
-      <div className="mt-3"><EntryContent collapsed={!open && long}>{e.content}</EntryContent></div>
+      {open ? <Markdown>{e.content}</Markdown> : <p className="mt-3 whitespace-pre-wrap leading-relaxed">{preview}</p>}
       {e.music_preview_url && (
         <MusicPlayer track={{
           music_track_name: e.music_track_name, music_artist: e.music_artist,

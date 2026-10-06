@@ -1,8 +1,14 @@
-import { pageMeta } from "@/lib/page-meta";
 import { createFileRoute, Link } from "@tanstack/react-router";
 
 export const Route = createFileRoute("/privacy")({
-  head: () => pageMeta('Privacy Policy', 'How The PaperVault handles your personal information.'),
+  head: () => ({
+    meta: [
+      { title: "Privacy Policy — The PaperVault" },
+      { name: "description", content: "Privacy Policy for The PaperVault." },
+      { property: "og:title", content: "Privacy Policy — The PaperVault" },
+      { property: "og:description", content: "Privacy Policy for The PaperVault." },
+    ],
+  }),
   component: PrivacyPage,
 });
 

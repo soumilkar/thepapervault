@@ -1,4 +1,3 @@
-import { pageMeta } from "@/lib/page-meta";
 import { createFileRoute, redirect, useRouter } from "@tanstack/react-router";
 import { useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
@@ -11,7 +10,7 @@ export const Route = createFileRoute("/auth")({
     const { data } = await supabase.auth.getUser();
     if (data.user) throw redirect({ to: "/app" });
   },
-  head: () => pageMeta('Sign in', 'Sign in to your private PaperVault writing space.'),
+  head: () => ({ meta: [{ title: "Sign in · The PaperVault" }] }),
   component: AuthPage,
 });
 
