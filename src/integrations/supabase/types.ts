@@ -406,6 +406,39 @@ export type Database = {
         }
         Relationships: []
       }
+      life_goals: {
+        Row: {
+          created_at: string
+          deadline: string | null
+          id: string
+          mood: string | null
+          progress: number
+          title: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          deadline?: string | null
+          id?: string
+          mood?: string | null
+          progress?: number
+          title: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          deadline?: string | null
+          id?: string
+          mood?: string | null
+          progress?: number
+          title?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       note_folder_memberships: {
         Row: {
           created_at: string
