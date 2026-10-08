@@ -8,9 +8,21 @@ import { Markdown } from "@/components/Markdown";
 import { MusicPlayer } from "@/components/MusicSearch";
 import { WritingStreaks } from "@/components/WritingStreaks";
 import { EntryHeatmap } from "@/components/EntryHeatmap";
-import { MoodTimeline } from "@/components/MoodTimeline";
+import { GoalsWidget } from "@/components/GoalsWidget";
 
 export const Route = createFileRoute("/app/")({
+  head: () => ({
+    meta: [
+      { title: "Home — The PaperVault" },
+      { name: "description", content: "A private home for your writing practice, personal goals, and community notes." },
+      { property: "og:title", content: "Home — The PaperVault" },
+      { name: "og:description", content: "A private home for your writing practice, personal goals, and community notes." },
+      { property: "og:type", content: "website" },
+      { name: "twitter:card", content: "summary" },
+      { name: "twitter:title", content: "Home — The PaperVault" },
+      { name: "twitter:description", content: "A private home for your writing practice, personal goals, and community notes." },
+    ],
+  }),
   component: Dashboard,
 });
 
@@ -87,9 +99,7 @@ function Dashboard() {
           <div className="min-w-0">
             <EntryHeatmap userId={user.id} />
           </div>
-          <div className="min-w-0">
-            <MoodTimeline userId={user.id} />
-          </div>
+          <div className="min-w-0"><GoalsWidget userId={user.id} /></div>
         </div>
       </div>
 
