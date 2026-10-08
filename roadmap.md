@@ -1,3 +1,4 @@
+- [ ] Replace the Dashboard Mood Timeline with a private goals widget for progress, deadlines, and manually selected mood.
 # PaperVault task roadmap
 - [ ] Auto-scroll Companion to the latest message when a conversation opens.
 - [ ] Improve Notes layout and expand long notes; match Diary preview and expanded reading layouts.
