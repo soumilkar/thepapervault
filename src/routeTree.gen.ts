@@ -23,6 +23,7 @@ import { Route as AppBlogRouteImport } from './routes/app/blog'
 import { Route as ApiCompanionStreamRouteImport } from './routes/api/companion-stream'
 import { Route as AppChatIndexRouteImport } from './routes/app/chat.index'
 import { Route as AppChatSessionIdRouteImport } from './routes/app/chat.$sessionId'
+import { Route as ApiPublicTimezoneRouteImport } from './routes/api/public/timezone'
 
 const TermsRoute = TermsRouteImport.update({
   id: '/terms',
@@ -94,6 +95,11 @@ const AppChatSessionIdRoute = AppChatSessionIdRouteImport.update({
   path: '/$sessionId',
   getParentRoute: () => AppChatRoute,
 } as any)
+const ApiPublicTimezoneRoute = ApiPublicTimezoneRouteImport.update({
+  id: '/api/public/timezone',
+  path: '/api/public/timezone',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -108,6 +114,7 @@ export interface FileRoutesByFullPath {
   '/app/gallery': typeof AppGalleryRoute
   '/app/notes': typeof AppNotesRoute
   '/app/': typeof AppIndexRoute
+  '/api/public/timezone': typeof ApiPublicTimezoneRoute
   '/app/chat/$sessionId': typeof AppChatSessionIdRoute
   '/app/chat/': typeof AppChatIndexRoute
 }
@@ -122,6 +129,7 @@ export interface FileRoutesByTo {
   '/app/gallery': typeof AppGalleryRoute
   '/app/notes': typeof AppNotesRoute
   '/app': typeof AppIndexRoute
+  '/api/public/timezone': typeof ApiPublicTimezoneRoute
   '/app/chat/$sessionId': typeof AppChatSessionIdRoute
   '/app/chat': typeof AppChatIndexRoute
 }
@@ -139,6 +147,7 @@ export interface FileRoutesById {
   '/app/gallery': typeof AppGalleryRoute
   '/app/notes': typeof AppNotesRoute
   '/app/': typeof AppIndexRoute
+  '/api/public/timezone': typeof ApiPublicTimezoneRoute
   '/app/chat/$sessionId': typeof AppChatSessionIdRoute
   '/app/chat/': typeof AppChatIndexRoute
 }
@@ -157,6 +166,7 @@ export interface FileRouteTypes {
     | '/app/gallery'
     | '/app/notes'
     | '/app/'
+    | '/api/public/timezone'
     | '/app/chat/$sessionId'
     | '/app/chat/'
   fileRoutesByTo: FileRoutesByTo
@@ -171,6 +181,7 @@ export interface FileRouteTypes {
     | '/app/gallery'
     | '/app/notes'
     | '/app'
+    | '/api/public/timezone'
     | '/app/chat/$sessionId'
     | '/app/chat'
   id:
@@ -187,6 +198,7 @@ export interface FileRouteTypes {
     | '/app/gallery'
     | '/app/notes'
     | '/app/'
+    | '/api/public/timezone'
     | '/app/chat/$sessionId'
     | '/app/chat/'
   fileRoutesById: FileRoutesById
@@ -198,6 +210,7 @@ export interface RootRouteChildren {
   PrivacyRoute: typeof PrivacyRoute
   TermsRoute: typeof TermsRoute
   ApiCompanionStreamRoute: typeof ApiCompanionStreamRoute
+  ApiPublicTimezoneRoute: typeof ApiPublicTimezoneRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -300,6 +313,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppChatSessionIdRouteImport
       parentRoute: typeof AppChatRoute
     }
+    '/api/public/timezone': {
+      id: '/api/public/timezone'
+      path: '/api/public/timezone'
+      fullPath: '/api/public/timezone'
+      preLoaderRoute: typeof ApiPublicTimezoneRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -345,6 +365,7 @@ const rootRouteChildren: RootRouteChildren = {
   PrivacyRoute: PrivacyRoute,
   TermsRoute: TermsRoute,
   ApiCompanionStreamRoute: ApiCompanionStreamRoute,
+  ApiPublicTimezoneRoute: ApiPublicTimezoneRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

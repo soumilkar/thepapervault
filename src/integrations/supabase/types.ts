@@ -608,7 +608,14 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      delete_owned_folder: {
+        Args: { p_delete_items?: boolean; p_folder: string; p_kind: string }
+        Returns: undefined
+      }
+      set_item_folders: {
+        Args: { p_folders: string[]; p_item: string; p_kind: string }
+        Returns: undefined
+      }
     }
     Enums: {
       [_ in never]: never
