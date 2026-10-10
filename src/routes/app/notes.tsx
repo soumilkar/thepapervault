@@ -306,7 +306,7 @@ function NoteCard({
             <X className="size-4" /> Cancel
           </Button>
           <Button
-            onClick={() => { onSave({ title: eTitle, content: eContent, tags: eTags, folder_id: eFolder, Search, Pin, PinOff }); setEditing(false); }}
+            onClick={() => { onSave({ title: eTitle, content: eContent, tags: eTags, folder_id: eFolder }); setEditing(false); }}
             className="flex items-center gap-1 rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground"
           >
             <Check className="size-4" /> Save
