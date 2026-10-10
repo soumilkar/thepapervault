@@ -9,35 +9,25 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as TermsRouteImport } from './routes/terms'
-import { Route as PrivacyRouteImport } from './routes/privacy'
-import { Route as AuthRouteImport } from './routes/auth'
-import { Route as AppRouteRouteImport } from './routes/app/route'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as AppIndexRouteImport } from './routes/app/index'
-import { Route as AppNotesRouteImport } from './routes/app/notes'
-import { Route as AppGalleryRouteImport } from './routes/app/gallery'
-import { Route as AppDiaryRouteImport } from './routes/app/diary'
-import { Route as AppChatRouteImport } from './routes/app/chat'
-import { Route as AppBlogRouteImport } from './routes/app/blog'
+import { Route as AppRouteRouteImport } from './routes/app/route'
+import { Route as AuthRouteImport } from './routes/auth'
+import { Route as PrivacyRouteImport } from './routes/privacy'
+import { Route as TermsRouteImport } from './routes/terms'
 import { Route as ApiCompanionStreamRouteImport } from './routes/api/companion-stream'
+import { Route as AppIndexRouteImport } from './routes/app/index'
+import { Route as AppBlogRouteImport } from './routes/app/blog'
+import { Route as AppChatRouteImport } from './routes/app/chat'
+import { Route as AppDiaryRouteImport } from './routes/app/diary'
+import { Route as AppGalleryRouteImport } from './routes/app/gallery'
+import { Route as AppNotesRouteImport } from './routes/app/notes'
+import { Route as ApiPublicTimezoneRouteImport } from './routes/api/public/timezone'
 import { Route as AppChatIndexRouteImport } from './routes/app/chat.index'
 import { Route as AppChatSessionIdRouteImport } from './routes/app/chat.$sessionId'
-import { Route as ApiPublicTimezoneRouteImport } from './routes/api/public/timezone'
 
-const TermsRoute = TermsRouteImport.update({
-  id: '/terms',
-  path: '/terms',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const PrivacyRoute = PrivacyRouteImport.update({
-  id: '/privacy',
-  path: '/privacy',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AuthRoute = AuthRouteImport.update({
-  id: '/auth',
-  path: '/auth',
+const IndexRoute = IndexRouteImport.update({
+  id: '/',
+  path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AppRouteRoute = AppRouteRouteImport.update({
@@ -45,9 +35,24 @@ const AppRouteRoute = AppRouteRouteImport.update({
   path: '/app',
   getParentRoute: () => rootRouteImport,
 } as any)
-const IndexRoute = IndexRouteImport.update({
-  id: '/',
-  path: '/',
+const AuthRoute = AuthRouteImport.update({
+  id: '/auth',
+  path: '/auth',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PrivacyRoute = PrivacyRouteImport.update({
+  id: '/privacy',
+  path: '/privacy',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const TermsRoute = TermsRouteImport.update({
+  id: '/terms',
+  path: '/terms',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiCompanionStreamRoute = ApiCompanionStreamRouteImport.update({
+  id: '/api/companion-stream',
+  path: '/api/companion-stream',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AppIndexRoute = AppIndexRouteImport.update({
@@ -55,19 +60,9 @@ const AppIndexRoute = AppIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AppRouteRoute,
 } as any)
-const AppNotesRoute = AppNotesRouteImport.update({
-  id: '/notes',
-  path: '/notes',
-  getParentRoute: () => AppRouteRoute,
-} as any)
-const AppGalleryRoute = AppGalleryRouteImport.update({
-  id: '/gallery',
-  path: '/gallery',
-  getParentRoute: () => AppRouteRoute,
-} as any)
-const AppDiaryRoute = AppDiaryRouteImport.update({
-  id: '/diary',
-  path: '/diary',
+const AppBlogRoute = AppBlogRouteImport.update({
+  id: '/blog',
+  path: '/blog',
   getParentRoute: () => AppRouteRoute,
 } as any)
 const AppChatRoute = AppChatRouteImport.update({
@@ -75,14 +70,24 @@ const AppChatRoute = AppChatRouteImport.update({
   path: '/chat',
   getParentRoute: () => AppRouteRoute,
 } as any)
-const AppBlogRoute = AppBlogRouteImport.update({
-  id: '/blog',
-  path: '/blog',
+const AppDiaryRoute = AppDiaryRouteImport.update({
+  id: '/diary',
+  path: '/diary',
   getParentRoute: () => AppRouteRoute,
 } as any)
-const ApiCompanionStreamRoute = ApiCompanionStreamRouteImport.update({
-  id: '/api/companion-stream',
-  path: '/api/companion-stream',
+const AppGalleryRoute = AppGalleryRouteImport.update({
+  id: '/gallery',
+  path: '/gallery',
+  getParentRoute: () => AppRouteRoute,
+} as any)
+const AppNotesRoute = AppNotesRouteImport.update({
+  id: '/notes',
+  path: '/notes',
+  getParentRoute: () => AppRouteRoute,
+} as any)
+const ApiPublicTimezoneRoute = ApiPublicTimezoneRouteImport.update({
+  id: '/api/public/timezone',
+  path: '/api/public/timezone',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AppChatIndexRoute = AppChatIndexRouteImport.update({
@@ -94,11 +99,6 @@ const AppChatSessionIdRoute = AppChatSessionIdRouteImport.update({
   id: '/$sessionId',
   path: '/$sessionId',
   getParentRoute: () => AppChatRoute,
-} as any)
-const ApiPublicTimezoneRoute = ApiPublicTimezoneRouteImport.update({
-  id: '/api/public/timezone',
-  path: '/api/public/timezone',
-  getParentRoute: () => rootRouteImport,
 } as any)
 
 export interface FileRoutesByFullPath {
@@ -215,25 +215,11 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/terms': {
-      id: '/terms'
-      path: '/terms'
-      fullPath: '/terms'
-      preLoaderRoute: typeof TermsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/privacy': {
-      id: '/privacy'
-      path: '/privacy'
-      fullPath: '/privacy'
-      preLoaderRoute: typeof PrivacyRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/auth': {
-      id: '/auth'
-      path: '/auth'
-      fullPath: '/auth'
-      preLoaderRoute: typeof AuthRouteImport
+    '/': {
+      id: '/'
+      path: '/'
+      fullPath: '/'
+      preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/app': {
@@ -243,11 +229,32 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/': {
-      id: '/'
-      path: '/'
-      fullPath: '/'
-      preLoaderRoute: typeof IndexRouteImport
+    '/auth': {
+      id: '/auth'
+      path: '/auth'
+      fullPath: '/auth'
+      preLoaderRoute: typeof AuthRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/privacy': {
+      id: '/privacy'
+      path: '/privacy'
+      fullPath: '/privacy'
+      preLoaderRoute: typeof PrivacyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/terms': {
+      id: '/terms'
+      path: '/terms'
+      fullPath: '/terms'
+      preLoaderRoute: typeof TermsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/companion-stream': {
+      id: '/api/companion-stream'
+      path: '/api/companion-stream'
+      fullPath: '/api/companion-stream'
+      preLoaderRoute: typeof ApiCompanionStreamRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/app/': {
@@ -257,25 +264,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppIndexRouteImport
       parentRoute: typeof AppRouteRoute
     }
-    '/app/notes': {
-      id: '/app/notes'
-      path: '/notes'
-      fullPath: '/app/notes'
-      preLoaderRoute: typeof AppNotesRouteImport
-      parentRoute: typeof AppRouteRoute
-    }
-    '/app/gallery': {
-      id: '/app/gallery'
-      path: '/gallery'
-      fullPath: '/app/gallery'
-      preLoaderRoute: typeof AppGalleryRouteImport
-      parentRoute: typeof AppRouteRoute
-    }
-    '/app/diary': {
-      id: '/app/diary'
-      path: '/diary'
-      fullPath: '/app/diary'
-      preLoaderRoute: typeof AppDiaryRouteImport
+    '/app/blog': {
+      id: '/app/blog'
+      path: '/blog'
+      fullPath: '/app/blog'
+      preLoaderRoute: typeof AppBlogRouteImport
       parentRoute: typeof AppRouteRoute
     }
     '/app/chat': {
@@ -285,18 +278,32 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppChatRouteImport
       parentRoute: typeof AppRouteRoute
     }
-    '/app/blog': {
-      id: '/app/blog'
-      path: '/blog'
-      fullPath: '/app/blog'
-      preLoaderRoute: typeof AppBlogRouteImport
+    '/app/diary': {
+      id: '/app/diary'
+      path: '/diary'
+      fullPath: '/app/diary'
+      preLoaderRoute: typeof AppDiaryRouteImport
       parentRoute: typeof AppRouteRoute
     }
-    '/api/companion-stream': {
-      id: '/api/companion-stream'
-      path: '/api/companion-stream'
-      fullPath: '/api/companion-stream'
-      preLoaderRoute: typeof ApiCompanionStreamRouteImport
+    '/app/gallery': {
+      id: '/app/gallery'
+      path: '/gallery'
+      fullPath: '/app/gallery'
+      preLoaderRoute: typeof AppGalleryRouteImport
+      parentRoute: typeof AppRouteRoute
+    }
+    '/app/notes': {
+      id: '/app/notes'
+      path: '/notes'
+      fullPath: '/app/notes'
+      preLoaderRoute: typeof AppNotesRouteImport
+      parentRoute: typeof AppRouteRoute
+    }
+    '/api/public/timezone': {
+      id: '/api/public/timezone'
+      path: '/api/public/timezone'
+      fullPath: '/api/public/timezone'
+      preLoaderRoute: typeof ApiPublicTimezoneRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/app/chat/': {
@@ -312,13 +319,6 @@ declare module '@tanstack/react-router' {
       fullPath: '/app/chat/$sessionId'
       preLoaderRoute: typeof AppChatSessionIdRouteImport
       parentRoute: typeof AppChatRoute
-    }
-    '/api/public/timezone': {
-      id: '/api/public/timezone'
-      path: '/api/public/timezone'
-      fullPath: '/api/public/timezone'
-      preLoaderRoute: typeof ApiPublicTimezoneRouteImport
-      parentRoute: typeof rootRouteImport
     }
   }
 }
