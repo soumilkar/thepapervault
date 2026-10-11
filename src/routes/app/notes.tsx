@@ -7,7 +7,6 @@ import { ImagePlus, Trash2, X, Pencil, Check, FolderPlus, Folder } from "lucide-
 import { Markdown } from "@/components/Markdown";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { AppSelect } from "@/components/AppSelect";
-import { useBrowserDraft } from "@/lib/browser-drafts";
 
 const NONE = "__none__";
 
@@ -37,15 +36,10 @@ type Sort = "newest" | "oldest" | "title";
 function NotesPage() {
   const { user } = Route.useRouteContext();
   const qc = useQueryClient();
-  type NoteDraft = { title: string; content: string; tags: string; folderId: string | null };
-  const [draft, setDraft, clearDraft] = useBrowserDraft<NoteDraft>(`papervault:note-draft:${user.id}`, {
-    title: "", content: "", tags: "", folderId: null,
-  });
-  const { title, content, tags, folderId } = draft;
-  const setTitle = (value: string) => setDraft((current) => ({ ...current, title: value }));
-  const setContent = (value: string) => setDraft((current) => ({ ...current, content: value }));
-  const setTags = (value: string) => setDraft((current) => ({ ...current, tags: value }));
-  const setFolderId = (value: string | null) => setDraft((current) => ({ ...current, folderId: value }));
+  const [title, setTitle] = useState("");
+  const [content, setContent] = useState("");
+  const [tags, setTags] = useState("");
+  const [folderId, setFolderId] = useState<string | null>(null);
   const [image, setImage] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [filterFolder, setFilterFolder] = useState<string | "all">("all");
@@ -100,7 +94,7 @@ function NotesPage() {
       if (error) throw error;
     },
     onSuccess: () => {
-       clearDraft(); setImage(null);
+      setTitle(""); setContent(""); setTags(""); setImage(null); setFolderId(null);
       toast.success("Note saved");
       qc.invalidateQueries({ queryKey: ["notes"] });
     },

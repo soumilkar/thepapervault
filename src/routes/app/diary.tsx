@@ -14,7 +14,6 @@ import { moodScore } from "@/lib/mood-sentiment";
 import { estimateMoodScores } from "@/lib/mood-estimate.functions";
 import { transcribeHandwriting } from "@/lib/handwriting.functions";
 import { AppSelect } from "@/components/AppSelect";
-import { useBrowserDraft } from "@/lib/browser-drafts";
 
 const NONE = "__none__";
 
@@ -56,24 +55,12 @@ function DiaryPage() {
   const { user } = Route.useRouteContext();
   const { key } = useVault();
   const qc = useQueryClient();
-  type DiaryDraft = {
-    title: string;
-    content: string;
-    mood: string;
-    isPublic: boolean;
-    folderId: string | null;
-    music: SelectedTrack | null;
-  };
-  const [draft, setDraft, clearDraft] = useBrowserDraft<DiaryDraft>(`papervault:diary-draft:${user.id}`, {
-    title: "", content: "", mood: "", isPublic: false, folderId: null, music: null,
-  });
-  const { title, content, mood, isPublic, folderId, music } = draft;
-  const setTitle = (value: string) => setDraft((current) => ({ ...current, title: value }));
-  const setContent = (value: string) => setDraft((current) => ({ ...current, content: value }));
-  const setMood = (value: string) => setDraft((current) => ({ ...current, mood: value }));
-  const setIsPublic = (value: boolean) => setDraft((current) => ({ ...current, isPublic: value }));
-  const setFolderId = (value: string | null) => setDraft((current) => ({ ...current, folderId: value }));
-  const setMusic = (value: SelectedTrack | null) => setDraft((current) => ({ ...current, music: value }));
+  const [title, setTitle] = useState("");
+  const [content, setContent] = useState("");
+  const [mood, setMood] = useState("");
+  const [isPublic, setIsPublic] = useState(false);
+  const [folderId, setFolderId] = useState<string | null>(null);
+  const [music, setMusic] = useState<SelectedTrack | null>(null);
   const [photo, setPhoto] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   type HandwritingPage = { id: string; file: File; url: string; status: "pending" | "converting" | "done" | "error" };
@@ -108,7 +95,7 @@ function DiaryPage() {
           const imageDataUrl = await readAsDataUrl(page.file);
           const { text } = await transcribeHandwriting({ data: { imageDataUrl, mimeType: page.file.type as "image/jpeg" | "image/png" | "image/webp" } });
           if (!text) throw new Error("No handwriting was detected in one of the images. Try a clearer photo.");
-           setDraft((current) => ({ ...current, content: current.content.trim() ? `${current.content.trim()}\n\n${text}` : text }));
+          setContent((current) => current.trim() ? `${current.trim()}\n\n${text}` : text);
           setPageStatus(page.id, "done");
           converted += 1;
         } catch (err) {
@@ -281,7 +268,7 @@ function DiaryPage() {
       if (error) throw error;
     },
     onSuccess: () => {
-       clearDraft(); setPhoto(null); setHandwritingPages((pages) => { pages.forEach((p) => URL.revokeObjectURL(p.url)); return []; });
+      setTitle(""); setContent(""); setMood(""); setPhoto(null); setHandwritingPages((pages) => { pages.forEach((p) => URL.revokeObjectURL(p.url)); return []; }); setMusic(null); setIsPublic(false); setFolderId(null);
       toast.success("Entry saved");
       qc.invalidateQueries({ queryKey: ["diary"] });
       qc.invalidateQueries({ queryKey: ["gallery"] });
