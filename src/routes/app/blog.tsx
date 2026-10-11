@@ -11,6 +11,7 @@ import { MusicSearch, MusicPlayer, type SelectedTrack } from "@/components/Music
 import { Markdown } from "@/components/Markdown";
 import { downloadTextFile } from "@/lib/download";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { useBrowserDraft } from "@/lib/browser-drafts";
 
 export const Route = createFileRoute("/app/blog")({
   component: BlogPage,
@@ -40,15 +41,24 @@ async function getMediaUrl(path: string | null): Promise<string | null> {
 function BlogPage() {
   const { user } = Route.useRouteContext();
   const qc = useQueryClient();
-  const [title, setTitle] = useState("");
-  const [content, setContent] = useState("");
-  const [tags, setTags] = useState("");
-  const [music, setMusic] = useState<SelectedTrack | null>(null);
+  type BlogDraft = { title: string; content: string; tags: string; music: SelectedTrack | null; notify: boolean };
+  const [draft, setDraft, clearDraft, draftReady] = useBrowserDraft<BlogDraft>(`papervault:blog-draft:${user.id}`, {
+    title: "", content: "", tags: "", music: null, notify: true,
+  });
+  const { title, content, tags, music, notify } = draft;
+  const setTitle = (value: string) => setDraft((current) => ({ ...current, title: value }));
+  const setContent = (value: string) => setDraft((current) => ({ ...current, content: value }));
+  const setTags = (value: string) => setDraft((current) => ({ ...current, tags: value }));
+  const setMusic = (value: SelectedTrack | null) => setDraft((current) => ({ ...current, music: value }));
+  const setNotify = (value: boolean) => setDraft((current) => ({ ...current, notify: value }));
   const [image, setImage] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
-  const [notify, setNotify] = useState(true);
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<Tab>("mine");
+
+  useEffect(() => {
+    if (draftReady && (title.trim() || content.trim() || tags.trim())) setOpen(true);
+  }, [draftReady]);
 
   useEffect(() => {
     if (!image) { setImagePreview(null); return; }
@@ -103,7 +113,7 @@ function BlogPage() {
       if (error) throw error;
     },
     onSuccess: () => {
-      setTitle(""); setContent(""); setTags(""); setMusic(null); setImage(null); setNotify(true); setOpen(false);
+       clearDraft(); setImage(null); setOpen(false);
       toast.success("Blog published");
       qc.invalidateQueries({ queryKey: ["blog"] });
       qc.invalidateQueries({ queryKey: ["dashboard-counts"] });
