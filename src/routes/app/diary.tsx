@@ -3,17 +3,15 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
-import { ImagePlus, Trash2, X, Download, Pencil, Check, Globe, Lock, FolderPlus, Folder, FileText, Pin, PinOff, Search } from "lucide-react";
-import { WrittenText } from "@/components/WrittenText";
-import { Button } from "@/components/ui/button";
-import { FolderPicker, ItemFolderPicker, OpenFolderActions, itemFolders, saveItemFolders, useFolderMemberships } from "@/components/FolderTools";
-import { dayInZone, formatDate, useTimezone } from "@/lib/timezone";
-import { pageHead } from "@/lib/page-head";
+import { ImagePlus, Trash2, X, Download, Pencil, Check, Globe, Lock, FolderPlus, Folder, FileText } from "lucide-react";
+import { Markdown } from "@/components/Markdown";
 import { downloadTextFile } from "@/lib/download";
 import { useVault } from "@/lib/vault";
 import { decryptBytes, decryptText, encryptBlob, encryptText } from "@/lib/crypto";
 import { MusicSearch, MusicPlayer, type SelectedTrack } from "@/components/MusicSearch";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { moodScore } from "@/lib/mood-sentiment";
+import { estimateMoodScores } from "@/lib/mood-estimate.functions";
 import { transcribeHandwriting } from "@/lib/handwriting.functions";
 import { AppSelect } from "@/components/AppSelect";
 import { useBrowserDraft } from "@/lib/browser-drafts";
@@ -25,7 +23,6 @@ function countWords(s: string) {
 }
 
 export const Route = createFileRoute("/app/diary")({
-  head: () => pageHead("Diary", "Your private diary, anonymous entries, and personal writing folders."),
   component: DiaryPage,
 });
 
@@ -46,13 +43,12 @@ type DiaryRowRaw = {
   music_artwork_url: string | null;
   word_count: number | null;
   mood_score: number | null;
-  is_pinned: boolean;
   created_at: string;
 };
 type Entry = {
   id: string; title: string; content: string; mood: string; entry_date: string;
   image_url: string | null; is_public: boolean; folder_id: string | null;
-  music: SelectedTrack | null; created_at: string; is_pinned: boolean;
+  music: SelectedTrack | null; created_at: string;
 };
 type Sort = "newest" | "oldest" | "title";
 
@@ -66,7 +62,6 @@ function DiaryPage() {
     mood: string;
     isPublic: boolean;
     folderId: string | null;
-    folderIds?: string[];
     music: SelectedTrack | null;
   };
   const [draft, setDraft, clearDraft] = useBrowserDraft<DiaryDraft>(`papervault:diary-draft:${user.id}`, {
@@ -77,11 +72,7 @@ function DiaryPage() {
   const setContent = (value: string) => setDraft((current) => ({ ...current, content: value }));
   const setMood = (value: string) => setDraft((current) => ({ ...current, mood: value }));
   const setIsPublic = (value: boolean) => setDraft((current) => ({ ...current, isPublic: value }));
-  const selectedFolders = draft.folderIds ?? (folderId ? [folderId] : []);
-  const setSelectedFolders = (ids: string[]) => setDraft((current) => ({ ...current, folderIds: ids, folderId: ids[0] ?? null }));
-  const timezone = useTimezone();
-  const memberships = useFolderMemberships("diary", user.id);
-  const [search, setSearch] = useState("");
+  const setFolderId = (value: string | null) => setDraft((current) => ({ ...current, folderId: value }));
   const setMusic = (value: SelectedTrack | null) => setDraft((current) => ({ ...current, music: value }));
   const [photo, setPhoto] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
@@ -171,6 +162,7 @@ function DiaryPage() {
       if (error) throw error;
       const rows = (data ?? []) as unknown as DiaryRowRaw[];
       const out: Entry[] = [];
+      const needsAiMood: { id: string; text: string }[] = [];
       for (const row of rows) {
         let t = row.title ?? "", c = row.content, m = row.mood ?? "";
         let decrypted = false;
@@ -182,17 +174,22 @@ function DiaryPage() {
             decrypted = true;
           } catch { c = "[Could not decrypt this entry]"; }
         }
-        // Backfill word counts locally; journal text is never sent for background analysis.
+        // Backfill insight metadata for legacy entries so charts don't need to decrypt.
         const isReadable = decrypted || !row.iv;
         if (isReadable && (row.word_count == null || row.word_count === 0) && c) {
           const wc = countWords(c);
-          await supabase.from("diary_entries").update({ word_count: wc } as never).eq("id", row.id);
+          const ms = m ? moodScore(m) : null;
+          await supabase.from("diary_entries").update({ word_count: wc, mood_score: ms } as never).eq("id", row.id);
+        }
+        // Queue for AI mood estimation when no mood text was written.
+        if (isReadable && row.mood_score == null && !m && c && c.trim().length > 20 && c !== "[Could not decrypt this entry]") {
+          needsAiMood.push({ id: row.id, text: c });
         }
         const image_url = row.image_path ? await loadImage(row.image_path, row.iv ? key : null) : null;
         out.push({
           id: row.id, title: t, content: c, mood: m,
           entry_date: row.entry_date, image_url,
-          is_public: row.is_public, folder_id: row.folder_id, is_pinned: row.is_pinned,
+          is_public: row.is_public, folder_id: row.folder_id,
           music: row.music_preview_url ? {
             music_track_id: row.music_track_id ?? "",
             music_track_name: row.music_track_name ?? "",
@@ -203,23 +200,39 @@ function DiaryPage() {
           created_at: row.created_at,
         });
       }
+      // Fire-and-forget AI mood estimation for entries missing a score.
+      if (needsAiMood.length > 0) {
+        (async () => {
+          try {
+            for (let i = 0; i < needsAiMood.length; i += 10) {
+              const batch = needsAiMood.slice(i, i + 10);
+              const { scores } = await estimateMoodScores({ data: { items: batch } });
+              await Promise.all(
+                scores.map((s) =>
+                  supabase.from("diary_entries").update({ mood_score: s.score } as never).eq("id", s.id)
+                )
+              );
+            }
+            qc.invalidateQueries({ queryKey: ["mood-timeline"] });
+          } catch {
+            // silent — mood estimation is best-effort
+          }
+        })();
+      }
       return out;
     },
   });
 
   const filteredSorted = useMemo(() => {
     let rows = entries.data ?? [];
-    if (filterFolder !== "all") rows = rows.filter((e) => { const ids = itemFolders(e.id, e.folder_id, memberships.data); return filterFolder === "none" ? ids.length === 0 : ids.includes(filterFolder); });
-    const query = search.trim().toLocaleLowerCase();
-    if (query) rows = rows.filter((e) => `${e.title} ${e.content} ${e.mood}`.toLocaleLowerCase().includes(query));
+    if (filterFolder !== "all") rows = rows.filter((e) => (filterFolder === "none" ? !e.folder_id : e.folder_id === filterFolder));
     rows = [...rows].sort((a, b) => {
-      if (a.is_pinned !== b.is_pinned) return a.is_pinned ? -1 : 1;
       if (sort === "title") return (a.title || "").localeCompare(b.title || "");
       const cmp = new Date(a.entry_date).getTime() - new Date(b.entry_date).getTime();
       return sort === "newest" ? -cmp : cmp;
     });
     return rows;
-  }, [entries.data, filterFolder, sort, search, memberships.data]);
+  }, [entries.data, filterFolder, sort]);
 
   const create = useMutation({
     mutationFn: async () => {
@@ -231,14 +244,13 @@ function DiaryPage() {
         music_artwork_url: music?.music_artwork_url ?? null,
       };
       if (isPublic) {
-        const { data: saved, error } = await supabase.from("diary_entries").insert({
+        const { error } = await supabase.from("diary_entries").insert({
           user_id: user.id, title: title || null, content, mood: mood || null,
           is_public: true, folder_id: folderId, visibility: "public_anon",
-          word_count: countWords(content), entry_date: dayInZone(new Date(), timezone),
+          word_count: countWords(content), mood_score: mood ? moodScore(mood) : null,
           ...musicPatch,
-        } as never).select("id").single();
+        } as never);
         if (error) throw error;
-        await saveItemFolders("diary", saved.id, selectedFolders);
         return;
       }
       if (!key) throw new Error("Vault is locked");
@@ -260,17 +272,15 @@ function DiaryPage() {
       }
       const plaintext = JSON.stringify({ t: title, c: content, m: mood });
       const { ct, iv } = await encryptText(key, plaintext);
-      const { data: saved, error } = await supabase.from("diary_entries").insert({
+      const { error } = await supabase.from("diary_entries").insert({
         user_id: user.id, title: null, content: ct, mood: null, image_path: imagePath,
-        visibility: "private", is_public: false, folder_id: folderId, iv, entry_date: dayInZone(new Date(), timezone),
-        word_count: countWords(content),
+        visibility: "private", is_public: false, folder_id: folderId, iv,
+        word_count: countWords(content), mood_score: mood ? moodScore(mood) : null,
         ...musicPatch,
-      } as never).select("id").single();
+      } as never);
       if (error) throw error;
-      await saveItemFolders("diary", saved.id, selectedFolders);
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["folder-memberships", "diary"] });
        clearDraft(); setPhoto(null); setHandwritingPages((pages) => { pages.forEach((p) => URL.revokeObjectURL(p.url)); return []; });
       toast.success("Entry saved");
       qc.invalidateQueries({ queryKey: ["diary"] });
@@ -279,6 +289,7 @@ function DiaryPage() {
       qc.invalidateQueries({ queryKey: ["dashboard-counts"] });
       qc.invalidateQueries({ queryKey: ["recent-diary"] });
       qc.invalidateQueries({ queryKey: ["streak-diary"] });
+      qc.invalidateQueries({ queryKey: ["mood-timeline"] });
       qc.invalidateQueries({ queryKey: ["heatmap-diary"] });
     },
     onError: (e: Error) => toast.error(e.message),
@@ -299,7 +310,7 @@ function DiaryPage() {
         const { ct, iv } = await encryptText(key, plaintext);
         const { error } = await supabase.from("diary_entries").update({
           content: ct, iv, folder_id: vars.folder_id,
-          word_count: countWords(vars.content),
+          word_count: countWords(vars.content), mood_score: vars.mood ? moodScore(vars.mood) : null,
           ...musicPatch,
         } as never).eq("id", vars.id);
         if (error) throw error;
@@ -307,7 +318,7 @@ function DiaryPage() {
         const { error } = await supabase.from("diary_entries").update({
           title: vars.title || null, content: vars.content, mood: vars.mood || null,
           folder_id: vars.folder_id,
-          word_count: countWords(vars.content),
+          word_count: countWords(vars.content), mood_score: vars.mood ? moodScore(vars.mood) : null,
           ...musicPatch,
         } as never).eq("id", vars.id);
         if (error) throw error;
@@ -318,7 +329,7 @@ function DiaryPage() {
       qc.invalidateQueries({ queryKey: ["diary"] });
       qc.invalidateQueries({ queryKey: ["public-diary-feed"] });
       qc.invalidateQueries({ queryKey: ["streak-diary"] });
-      qc.invalidateQueries({ queryKey: ["heatmap-diary"] });
+      qc.invalidateQueries({ queryKey: ["mood-timeline"] });
     },
     onError: (e: Error) => toast.error(e.message),
   });
@@ -351,7 +362,7 @@ function DiaryPage() {
           <p className="font-hand text-2xl text-sepia">today's page</p>
           <h1 className="font-serif text-4xl text-primary">Diary</h1>
         </div>
-        <Button
+        <button
           type="button"
           onClick={() => {
             const rows = entries.data ?? [];
@@ -364,7 +375,7 @@ function DiaryPage() {
           className="flex shrink-0 items-center gap-1.5 rounded-md border border-border bg-card px-3 py-2 text-sm text-primary hover:bg-secondary"
         >
           <Download className="size-4" /> Export
-        </Button>
+        </button>
       </div>
 
       <form
@@ -395,9 +406,9 @@ function DiaryPage() {
                     {page.status === "error" && "Could not convert"}
                   </p>
                 </div>
-                <Button type="button" onClick={() => removeHandwritingPage(page.id)} disabled={page.status === "converting"} className="text-muted-foreground hover:text-primary disabled:opacity-40" aria-label={`Remove ${page.file.name}`}>
+                <button type="button" onClick={() => removeHandwritingPage(page.id)} disabled={page.status === "converting"} className="text-muted-foreground hover:text-primary disabled:opacity-40" aria-label={`Remove ${page.file.name}`}>
                   <X className="size-4" />
-                </Button>
+                </button>
               </div>
             ))}
           </div>
@@ -406,10 +417,10 @@ function DiaryPage() {
         {photoPreview && !isPublic && (
           <div className="relative inline-block">
             <img src={photoPreview} alt="preview" className="max-h-56 rounded-md border border-border" />
-            <Button type="button" onClick={() => setPhoto(null)}
+            <button type="button" onClick={() => setPhoto(null)}
               className="absolute -right-2 -top-2 rounded-full bg-background p-1 shadow">
               <X className="size-4" />
-            </Button>
+            </button>
           </div>
         )}
 
@@ -422,12 +433,22 @@ function DiaryPage() {
               value={isPublic ? "public" : "private"}
               onValueChange={(v) => setIsPublic(v === "public")}
               options={[
-                { value: "private", label: "Private" },
+                { value: "private", label: "Private (encrypted)" },
                 { value: "public", label: "Public · anonymous" },
               ]}
             />
           </label>
-          <FolderPicker folders={folders.data ?? []} selected={selectedFolders} onChange={setSelectedFolders} />
+          <label className="flex items-center gap-2">
+            <span className="text-muted-foreground">Folder</span>
+            <AppSelect
+              value={folderId ?? NONE}
+              onValueChange={(v) => setFolderId(v === NONE ? null : v)}
+              options={[
+                { value: NONE, label: "— none —" },
+                ...(folders.data ?? []).map((f) => ({ value: f.id, label: f.name })),
+              ]}
+            />
+          </label>
         </div>
 
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -458,16 +479,14 @@ function DiaryPage() {
             </label>
           </div>
           {isPublic && <span className="text-xs text-muted-foreground">Public entries appear anonymously in the community Feed.</span>}
-          <Button type="submit" disabled={!content.trim() || create.isPending}
+          <button type="submit" disabled={!content.trim() || create.isPending}
             className="rounded-md bg-primary px-5 py-2 text-sm text-primary-foreground disabled:opacity-50">
             {create.isPending ? "Saving..." : "Save entry"}
-          </Button>
+          </button>
         </div>
       </form>
 
-      <div className="flex flex-wrap items-center gap-3 text-sm">
-        <label className="flex min-w-0 flex-1 items-center gap-2 rounded-md border border-input bg-card px-3 py-2"><Search className="size-4 shrink-0 text-muted-foreground" /><input aria-label="Search diary" placeholder="Search diary" value={search} onChange={(e) => setSearch(e.target.value)} className="min-w-0 w-full bg-transparent outline-none" /></label>
-        {folders.data?.find((f) => f.id === filterFolder) && <OpenFolderActions kind="diary" folder={folders.data.find((f) => f.id === filterFolder) as { id: string; name: string }} onDeleted={() => setFilterFolder("all")} />}
+      <div className="paper-card flex flex-wrap items-center gap-3 p-3 text-sm">
         <label className="flex items-center gap-2">
           <Folder className="size-4 text-muted-foreground" />
           <AppSelect
@@ -494,24 +513,21 @@ function DiaryPage() {
         </label>
         <form
           onSubmit={(e) => { e.preventDefault(); if (newFolder.trim()) createFolder.mutate(newFolder.trim()); }}
-          className="flex min-w-0 items-center gap-1"
+          className="ml-auto flex items-center gap-1"
         >
           <input value={newFolder} onChange={(e) => setNewFolder(e.target.value)} placeholder="New folder"
-            className="min-w-0 w-36 rounded-md border border-input bg-card px-2 py-1" />
-          <Button type="submit" className="flex items-center gap-1 rounded-md bg-primary px-2.5 py-1 text-xs text-primary-foreground">
+            className="rounded-md border border-input bg-card px-2 py-1" />
+          <button type="submit" className="flex items-center gap-1 rounded-md bg-primary px-2.5 py-1 text-xs text-primary-foreground">
             <FolderPlus className="size-3.5" /> Add
-          </Button>
+          </button>
         </form>
       </div>
 
       <div className="space-y-4">
         {entries.isLoading && <p className="font-hand text-sepia">opening your pages...</p>}
         {entries.data?.length === 0 && <p className="text-muted-foreground">Your diary is a blank page. Start above.</p>}
-        {!entries.isLoading && filteredSorted.length === 0 && (entries.data?.length ?? 0) > 0 && <p className="text-muted-foreground">No matching entries.</p>}
         {filteredSorted.map((e) => (
           <DiaryCard key={e.id} entry={e} folders={folders.data ?? []}
-            folderIds={itemFolders(e.id, e.folder_id, memberships.data)}
-            onPin={async () => { const { error } = await supabase.from("diary_entries").update({ is_pinned: !e.is_pinned }).eq("id", e.id); if (error) toast.error(error.message); else qc.invalidateQueries({ queryKey: ["diary"] }); }}
             onDelete={() => remove.mutate(e.id)}
             onSave={(v) => update.mutate({ id: e.id, ...v, wasPrivate: !e.is_public })}
           />
@@ -537,16 +553,13 @@ async function loadImage(path: string, key: CryptoKey | null): Promise<string | 
 }
 
 function DiaryCard({
-  entry: e, folders, folderIds, onPin, onDelete, onSave,
+  entry: e, folders, onDelete, onSave,
 }: {
   entry: Entry;
   folders: { id: string; name: string }[];
-  folderIds: string[];
-  onPin: () => void;
   onDelete: () => void;
   onSave: (v: { title: string; content: string; mood: string; folder_id: string | null; music: SelectedTrack | null }) => void;
 }) {
-  const timezone = useTimezone();
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [eTitle, setETitle] = useState(e.title);
@@ -580,15 +593,15 @@ function DiaryCard({
           />
         </label>
         <div className="flex justify-end gap-2">
-          <Button onClick={() => setEditing(false)} className="flex items-center gap-1 rounded-md border border-border px-3 py-1.5 text-sm">
+          <button onClick={() => setEditing(false)} className="flex items-center gap-1 rounded-md border border-border px-3 py-1.5 text-sm">
             <X className="size-4" /> Cancel
-          </Button>
-          <Button
+          </button>
+          <button
             onClick={() => { onSave({ title: eTitle, content: eContent, mood: eMood, folder_id: eFolder, music: eMusic }); setEditing(false); }}
             className="flex items-center gap-1 rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground"
           >
             <Check className="size-4" /> Save
-          </Button>
+          </button>
         </div>
       </article>
     );
@@ -596,27 +609,25 @@ function DiaryCard({
 
   return (
     <article className="paper-card p-6">
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <Button onClick={() => setOpen((o) => !o)} className="text-left font-serif text-xl text-primary hover:underline underline-offset-4">
+      <header className="flex items-baseline justify-between gap-3">
+        <button onClick={() => setOpen((o) => !o)} className="text-left font-serif text-xl text-primary hover:underline underline-offset-4">
           {e.title || "Untitled"}
-        </Button>
-        <div className="flex flex-wrap items-center justify-end gap-2">
-          <Button variant="ghost" size="icon" aria-label={e.is_pinned ? "Unpin entry" : "Pin entry"} title={e.is_pinned ? "Unpin entry" : "Pin entry"} onClick={onPin}>{e.is_pinned ? <PinOff /> : <Pin />}</Button>
-          <span className="font-hand text-sepia">{formatDate(e.entry_date, timezone)}</span>
+        </button>
+        <div className="flex items-center gap-3">
+          <span className="font-hand text-sepia">{new Date(e.entry_date).toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" })}</span>
           <span title={e.is_public ? "Public · anonymous" : "Private"} className="text-muted-foreground">
             {e.is_public ? <Globe className="size-4" /> : <Lock className="size-4" />}
           </span>
-          <Button onClick={() => { setETitle(e.title); setEContent(e.content); setEMood(e.mood); setEFolder(e.folder_id); setEMusic(e.music); setEditing(true); }} className="text-muted-foreground hover:text-primary" aria-label="Edit">
+          <button onClick={() => { setETitle(e.title); setEContent(e.content); setEMood(e.mood); setEFolder(e.folder_id); setEMusic(e.music); setEditing(true); }} className="text-muted-foreground hover:text-primary" aria-label="Edit">
             <Pencil className="size-4" />
-          </Button>
-          <Button onClick={() => setConfirmDel(true)} className="text-muted-foreground hover:text-destructive" aria-label="Delete">
+          </button>
+          <button onClick={() => setConfirmDel(true)} className="text-muted-foreground hover:text-destructive" aria-label="Delete">
             <Trash2 className="size-4" />
-          </Button>
+          </button>
         </div>
       </header>
       {e.mood && <p className="mt-1 text-sm text-accent">Feeling: {e.mood}</p>}
-      <WrittenText className="mt-3">{open ? e.content : preview}</WrittenText>
-      <div className="mt-3"><ItemFolderPicker kind="diary" itemId={e.id} selected={folderIds} folders={folders} /></div>
+      {open ? <Markdown>{e.content}</Markdown> : <p className="mt-3 whitespace-pre-wrap leading-relaxed">{preview}</p>}
       {open && e.image_url && (
         <img src={e.image_url} alt="" className="mt-4 max-h-96 rounded-md border border-border" loading="lazy" />
       )}
@@ -627,9 +638,9 @@ function DiaryCard({
         }} />
       )}
       {long && (
-        <Button onClick={() => setOpen((o) => !o)} className="mt-2 text-sm text-accent hover:text-primary">
+        <button onClick={() => setOpen((o) => !o)} className="mt-2 text-sm text-accent hover:text-primary">
           {open ? "Show less" : "Read more"}
-        </Button>
+        </button>
       )}
       <ConfirmDialog
         open={confirmDel} onOpenChange={setConfirmDel}

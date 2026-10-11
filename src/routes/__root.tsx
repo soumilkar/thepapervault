@@ -10,7 +10,6 @@ import {
 import { useEffect, type ReactNode } from "react";
 import { Toaster } from "sonner";
 import { ScrollToTop } from "@/components/ScrollToTop";
-import { TimezoneProvider } from "@/lib/timezone";
 
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
@@ -59,6 +58,8 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { name: "twitter:title", content: "The PaperVault — Your personal journal" },
       { property: "og:description", content: "A warm, private space for your diary, blog, gallery, and an AI companion that knows your story." },
       { name: "twitter:description", content: "A warm, private space for your diary, blog, gallery, and an AI companion that knows your story." },
+      { property: "og:image", content: "https://storage.googleapis.com/gpt-engineer-file-uploads/attachments/og-images/1430fae1-cc9e-4a3a-87be-a6694be59784" },
+      { name: "twitter:image", content: "https://storage.googleapis.com/gpt-engineer-file-uploads/attachments/og-images/1430fae1-cc9e-4a3a-87be-a6694be59784" },
       { name: "twitter:card", content: "summary_large_image" },
       { property: "og:type", content: "website" },
     ],
@@ -99,7 +100,7 @@ function RootComponent() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <TimezoneProvider><Outlet /></TimezoneProvider>
+      <Outlet />
       <Toaster richColors position="top-center" />
       <ScrollToTop />
     </QueryClientProvider>

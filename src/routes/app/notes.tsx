@@ -3,12 +3,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
-import { ImagePlus, Trash2, X, Pencil, Check, FolderPlus, Folder, Search, Pin, PinOff } from "lucide-react";
-import { WrittenText } from "@/components/WrittenText";
-import { Button } from "@/components/ui/button";
-import { FolderPicker, ItemFolderPicker, OpenFolderActions, itemFolders, saveItemFolders, useFolderMemberships } from "@/components/FolderTools";
-import { formatDate, useTimezone } from "@/lib/timezone";
-import { pageHead } from "@/lib/page-head";
+import { ImagePlus, Trash2, X, Pencil, Check, FolderPlus, Folder } from "lucide-react";
+import { Markdown } from "@/components/Markdown";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { AppSelect } from "@/components/AppSelect";
 import { useBrowserDraft } from "@/lib/browser-drafts";
@@ -16,7 +12,6 @@ import { useBrowserDraft } from "@/lib/browser-drafts";
 const NONE = "__none__";
 
 export const Route = createFileRoute("/app/notes")({
-  head: () => pageHead("Notes", "Your personal notes, reminders, tags, and folders."),
   component: NotesPage,
 });
 
@@ -35,14 +30,14 @@ async function uploadMedia(userId: string, file: File): Promise<string> {
 
 type Note = {
   id: string; title: string | null; content: string; tags: string[] | null;
-  is_pinned: boolean; image_url: string | null; folder_id: string | null; created_at: string; updated_at: string;
+  image_url: string | null; folder_id: string | null; created_at: string; updated_at: string;
 };
 type Sort = "newest" | "oldest" | "title";
 
 function NotesPage() {
   const { user } = Route.useRouteContext();
   const qc = useQueryClient();
-  type NoteDraft = { title: string; content: string; tags: string; folderId: string | null; folderIds?: string[] };
+  type NoteDraft = { title: string; content: string; tags: string; folderId: string | null };
   const [draft, setDraft, clearDraft] = useBrowserDraft<NoteDraft>(`papervault:note-draft:${user.id}`, {
     title: "", content: "", tags: "", folderId: null,
   });
@@ -50,10 +45,7 @@ function NotesPage() {
   const setTitle = (value: string) => setDraft((current) => ({ ...current, title: value }));
   const setContent = (value: string) => setDraft((current) => ({ ...current, content: value }));
   const setTags = (value: string) => setDraft((current) => ({ ...current, tags: value }));
-  const selectedFolders = draft.folderIds ?? (folderId ? [folderId] : []);
-  const setSelectedFolders = (ids: string[]) => setDraft((current) => ({ ...current, folderIds: ids, folderId: ids[0] ?? null }));
-  const memberships = useFolderMemberships("note", user.id);
-  const [search, setSearch] = useState("");
+  const setFolderId = (value: string | null) => setDraft((current) => ({ ...current, folderId: value }));
   const [image, setImage] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [filterFolder, setFilterFolder] = useState<string | "all">("all");
@@ -87,34 +79,28 @@ function NotesPage() {
 
   const filtered = useMemo(() => {
     let rows = notes.data ?? [];
-    if (filterFolder !== "all") rows = rows.filter((n) => { const ids = itemFolders(n.id, n.folder_id, memberships.data); return filterFolder === "none" ? ids.length === 0 : ids.includes(filterFolder); });
-    const query = search.trim().toLocaleLowerCase();
-    if (query) rows = rows.filter((n) => `${n.title ?? ""} ${n.content} ${(n.tags ?? []).join(" ")}`.toLocaleLowerCase().includes(query));
+    if (filterFolder !== "all") rows = rows.filter((n) => filterFolder === "none" ? !n.folder_id : n.folder_id === filterFolder);
     rows = [...rows].sort((a, b) => {
-      if (a.is_pinned !== b.is_pinned) return a.is_pinned ? -1 : 1;
       if (sort === "title") return (a.title || "").localeCompare(b.title || "");
       const cmp = new Date(a.updated_at).getTime() - new Date(b.updated_at).getTime();
       return sort === "newest" ? -cmp : cmp;
     });
     return rows;
-  }, [notes.data, filterFolder, sort, search, memberships.data]);
+  }, [notes.data, filterFolder, sort]);
 
   const create = useMutation({
     mutationFn: async () => {
       let imagePath: string | null = null;
       if (image) imagePath = await uploadMedia(user.id, image);
       const tagArr = tags.split(",").map((t) => t.trim()).filter(Boolean);
-      const { data: saved, error } = await supabase.from("notes").insert({
+      const { error } = await supabase.from("notes").insert({
         user_id: user.id, title: title || null, content,
         tags: tagArr.length ? tagArr : null, image_url: imagePath, folder_id: folderId,
-      } as never).select("id").single();
+      } as never);
       if (error) throw error;
-      await saveItemFolders("note", saved.id, selectedFolders);
     },
     onSuccess: () => {
        clearDraft(); setImage(null);
-      qc.invalidateQueries({ queryKey: ["folder-memberships", "note"] });
-      qc.invalidateQueries({ queryKey: ["heatmap-notes"] });
       toast.success("Note saved");
       qc.invalidateQueries({ queryKey: ["notes"] });
     },
@@ -172,8 +158,8 @@ function NotesPage() {
         {imagePreview && (
           <div className="relative inline-block">
             <img src={imagePreview} className="max-h-56 rounded-md border border-border" alt="" />
-            <Button type="button" onClick={() => setImage(null)}
-              className="absolute -right-2 -top-2 rounded-full bg-background p-1 shadow"><X className="size-4" /></Button>
+            <button type="button" onClick={() => setImage(null)}
+              className="absolute -right-2 -top-2 rounded-full bg-background p-1 shadow"><X className="size-4" /></button>
           </div>
         )}
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -187,17 +173,25 @@ function NotesPage() {
                 e.currentTarget.value = "";
               }} />
           </label>
-          <FolderPicker folders={folders.data ?? []} selected={selectedFolders} onChange={setSelectedFolders} />
-          <Button type="submit" disabled={create.isPending}
+          <label className="flex items-center gap-2 text-sm">
+            <span className="text-muted-foreground">Folder</span>
+            <AppSelect
+              value={folderId ?? NONE}
+              onValueChange={(v) => setFolderId(v === NONE ? null : v)}
+              options={[
+                { value: NONE, label: "— none —" },
+                ...(folders.data ?? []).map((f) => ({ value: f.id, label: f.name })),
+              ]}
+            />
+          </label>
+          <button type="submit" disabled={create.isPending}
             className="rounded-md bg-primary px-5 py-2 text-sm text-primary-foreground disabled:opacity-50">
             {create.isPending ? "Saving..." : "Save note"}
-          </Button>
+          </button>
         </div>
       </form>
 
-      <div className="flex flex-wrap items-center gap-3 text-sm">
-        <label className="flex min-w-0 flex-1 items-center gap-2 rounded-md border border-input bg-card px-3 py-2"><Search className="size-4 shrink-0 text-muted-foreground" /><input aria-label="Search notes" placeholder="Search notes" value={search} onChange={(e) => setSearch(e.target.value)} className="min-w-0 w-full bg-transparent outline-none" /></label>
-        {folders.data?.find((f) => f.id === filterFolder) && <OpenFolderActions kind="note" folder={folders.data.find((f) => f.id === filterFolder) as { id: string; name: string }} onDeleted={() => setFilterFolder("all")} />}
+      <div className="paper-card flex flex-wrap items-center gap-3 p-3 text-sm">
         <label className="flex items-center gap-2">
           <Folder className="size-4 text-muted-foreground" />
           <AppSelect
@@ -224,24 +218,21 @@ function NotesPage() {
         </label>
         <form
           onSubmit={(e) => { e.preventDefault(); if (newFolder.trim()) createFolder.mutate(newFolder.trim()); }}
-          className="flex min-w-0 items-center gap-1"
+          className="ml-auto flex items-center gap-1"
         >
           <input value={newFolder} onChange={(e) => setNewFolder(e.target.value)} placeholder="New folder"
-            className="min-w-0 w-36 rounded-md border border-input bg-card px-2 py-1" />
-          <Button type="submit" className="flex items-center gap-1 rounded-md bg-primary px-2.5 py-1 text-xs text-primary-foreground">
+            className="rounded-md border border-input bg-card px-2 py-1" />
+          <button type="submit" className="flex items-center gap-1 rounded-md bg-primary px-2.5 py-1 text-xs text-primary-foreground">
             <FolderPlus className="size-3.5" /> Add
-          </Button>
+          </button>
         </form>
       </div>
 
-      <div className="columns-1 gap-4 sm:columns-2 lg:columns-3">
+      <div className="grid gap-4 sm:grid-cols-2">
         {notes.isLoading && <p className="font-hand text-sepia">gathering notes...</p>}
         {notes.data?.length === 0 && <p className="text-muted-foreground">No notes yet.</p>}
-        {!notes.isLoading && filtered.length === 0 && (notes.data?.length ?? 0) > 0 && <p className="text-muted-foreground">No matching notes.</p>}
         {filtered.map((n) => (
           <NoteCard key={n.id} note={n} folders={folders.data ?? []}
-            folderIds={itemFolders(n.id, n.folder_id, memberships.data)}
-            onPin={async () => { const { error } = await supabase.from("notes").update({ is_pinned: !n.is_pinned }).eq("id", n.id); if (error) toast.error(error.message); else qc.invalidateQueries({ queryKey: ["notes"] }); }}
             onDelete={() => remove.mutate(n.id)}
             onSave={(v) => update.mutate({ id: n.id, ...v })} />
         ))}
@@ -264,16 +255,12 @@ function NoteImage({ path }: { path: string }) {
 }
 
 function NoteCard({
-  note: n, folders, folderIds, onPin, onDelete, onSave,
+  note: n, folders, onDelete, onSave,
 }: {
-  note: Note; folders: { id: string; name: string }[]; folderIds: string[]; onPin: () => void;
+  note: Note; folders: { id: string; name: string }[];
   onDelete: () => void;
   onSave: (v: { title: string; content: string; tags: string; folder_id: string | null }) => void;
 }) {
-  const timezone = useTimezone();
-  const [open, setOpen] = useState(false);
-  const long = n.content.length > 320;
-  const preview = long ? n.content.slice(0, 320).trimEnd() + "…" : n.content;
   const [editing, setEditing] = useState(false);
   const [eTitle, setETitle] = useState(n.title ?? "");
   const [eContent, setEContent] = useState(n.content);
@@ -283,7 +270,7 @@ function NoteCard({
 
   if (editing) {
     return (
-      <article className="paper-card mb-4 break-inside-avoid space-y-2 p-4">
+      <article className="paper-card space-y-2 p-4">
         <input value={eTitle} onChange={(e) => setETitle(e.target.value)} placeholder="Title"
           className="w-full bg-transparent font-serif text-xl outline-none" />
         <input value={eTags} onChange={(e) => setETags(e.target.value)} placeholder="tags, separated, by, commas"
@@ -302,28 +289,27 @@ function NoteCard({
           />
         </label>
         <div className="flex justify-end gap-2">
-          <Button onClick={() => setEditing(false)} className="flex items-center gap-1 rounded-md border border-border px-3 py-1.5 text-sm">
+          <button onClick={() => setEditing(false)} className="flex items-center gap-1 rounded-md border border-border px-3 py-1.5 text-sm">
             <X className="size-4" /> Cancel
-          </Button>
-          <Button
+          </button>
+          <button
             onClick={() => { onSave({ title: eTitle, content: eContent, tags: eTags, folder_id: eFolder }); setEditing(false); }}
             className="flex items-center gap-1 rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground"
           >
             <Check className="size-4" /> Save
-          </Button>
+          </button>
         </div>
       </article>
     );
   }
 
   return (
-    <article className="paper-card mb-4 break-inside-avoid p-4">
+    <article className="paper-card p-4">
       <header className="flex items-start justify-between gap-2">
-        <h3 className="min-w-0 break-words font-serif text-lg text-primary">{n.title || "Untitled"}</h3>
-        <div className="flex shrink-0 items-center gap-1">
-          <Button variant="ghost" size="icon" aria-label={n.is_pinned ? "Unpin note" : "Pin note"} title={n.is_pinned ? "Unpin note" : "Pin note"} onClick={onPin}>{n.is_pinned ? <PinOff /> : <Pin />}</Button>
-          <Button aria-label="Edit note" title="Edit note" onClick={() => { setETitle(n.title ?? ""); setEContent(n.content); setETags((n.tags ?? []).join(", ")); setEFolder(n.folder_id); setEditing(true); }} className="text-muted-foreground hover:text-primary"><Pencil className="size-4" /></Button>
-          <Button aria-label="Delete note" title="Delete note" onClick={() => setConfirmDel(true)} className="text-muted-foreground hover:text-destructive"><Trash2 className="size-4" /></Button>
+        <h3 className="font-serif text-lg text-primary">{n.title || "Untitled"}</h3>
+        <div className="flex items-center gap-2">
+          <button onClick={() => setEditing(true)} className="text-muted-foreground hover:text-primary"><Pencil className="size-4" /></button>
+          <button onClick={() => setConfirmDel(true)} className="text-muted-foreground hover:text-destructive"><Trash2 className="size-4" /></button>
         </div>
       </header>
       {n.tags && n.tags.length > 0 && (
@@ -331,11 +317,9 @@ function NoteCard({
           {n.tags.map((t) => <span key={t} className="rounded-full bg-secondary px-2 py-0.5 text-[11px] text-secondary-foreground">#{t}</span>)}
         </div>
       )}
-      <WrittenText className="mt-3 text-sm">{open ? n.content : preview}</WrittenText>
-      {long && <Button variant="link" className="mt-2 h-auto px-0 text-accent" aria-expanded={open} onClick={() => setOpen((value) => !value)}>{open ? "Show less" : "Read more"}</Button>}
-      <div className="mt-3"><ItemFolderPicker kind="note" itemId={n.id} selected={folderIds} folders={folders} /></div>
+      <div className="mt-2 text-sm"><Markdown>{n.content}</Markdown></div>
       {n.image_url && <NoteImage path={n.image_url} />}
-      <p className="mt-2 text-[11px] text-muted-foreground">{formatDate(n.updated_at, timezone)}</p>
+      <p className="mt-2 text-[11px] text-muted-foreground">{new Date(n.updated_at).toLocaleString()}</p>
       <ConfirmDialog
         open={confirmDel} onOpenChange={setConfirmDel}
         title="Delete this note?" description="This can't be undone."

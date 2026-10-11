@@ -9,11 +9,8 @@ import { decryptText } from "@/lib/crypto";
 import { AppSelect } from "@/components/AppSelect";
 import { CHAT_SESSIONS_UPDATED } from "./chat";
 import { useBrowserDraft } from "@/lib/browser-drafts";
-import { dayInZone, useTimezone } from "@/lib/timezone";
-import { pageHead } from "@/lib/page-head";
 
 export const Route = createFileRoute("/app/chat/$sessionId")({
-  head: () => pageHead("Conversation", "Continue your private Companion conversation about your own writing."),
   component: SessionChat,
 });
 
@@ -27,6 +24,7 @@ const PROMPTS = [
   "What do I seem most grateful for?",
 ];
 
+function isoDay(d: Date) { return d.toISOString().slice(0, 10); }
 
 async function buildContext(
   userId: string,
@@ -91,22 +89,6 @@ function SessionChat() {
   const [loading, setLoading] = useState(false);
   const [hydrating, setHydrating] = useState(true);
   const inputRef = useRef<HTMLInputElement>(null);
-  const bottomRef = useRef<HTMLDivElement>(null);
-  const followLatest = useRef(true);
-  const timezone = useTimezone();
-  const isoDay = (date: Date) => dayInZone(date, timezone);
-
-  useEffect(() => {
-    const track = () => { followLatest.current = document.documentElement.scrollHeight - window.scrollY - window.innerHeight < 240; };
-    window.addEventListener("scroll", track, { passive: true });
-    return () => window.removeEventListener("scroll", track);
-  }, []);
-  useEffect(() => {
-    if (!hydrating && followLatest.current) {
-      const frame = requestAnimationFrame(() => bottomRef.current?.scrollIntoView({ block: "end", behavior: "instant" }));
-      return () => cancelAnimationFrame(frame);
-    }
-  }, [hydrating, messages]);
 
   const today = useMemo(() => new Date(), []);
   const monthAgo = useMemo(() => new Date(today.getTime() - 30 * 24 * 3600 * 1000), [today]);
@@ -118,7 +100,6 @@ function SessionChat() {
   useEffect(() => {
     let cancelled = false;
     setHydrating(true);
-    followLatest.current = true;
     setMessages([]);
     (async () => {
       const { data, error } = await supabase
@@ -138,14 +119,13 @@ function SessionChat() {
         );
       }
       setHydrating(false);
-      setTimeout(() => inputRef.current?.focus({ preventScroll: true }), 0);
+      setTimeout(() => inputRef.current?.focus(), 0);
     })();
     return () => { cancelled = true; };
   }, [sessionId]);
 
   const send = async (question: string) => {
     if (!question.trim() || loading) return;
-    followLatest.current = true;
     const priorHistory = messages;
     const userMsg: Msg = { role: "user", content: question };
     setMessages((m) => [...m, userMsg]);
@@ -218,7 +198,7 @@ function SessionChat() {
       toast.error(e instanceof Error ? e.message : "Could not reach the companion");
     } finally {
       setLoading(false);
-      setTimeout(() => inputRef.current?.focus({ preventScroll: true }), 0);
+      setTimeout(() => inputRef.current?.focus(), 0);
     }
   };
 
@@ -295,7 +275,7 @@ function SessionChat() {
         )}
       </div>
 
-      <div ref={bottomRef} className="h-32" aria-hidden />
+      <div className="h-32" aria-hidden />
       <form
         onSubmit={(e) => { e.preventDefault(); send(input); }}
         className="glass-card fixed bottom-4 left-4 right-4 z-30 mx-auto flex max-w-3xl items-center gap-2 p-2"

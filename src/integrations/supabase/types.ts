@@ -238,7 +238,6 @@ export type Database = {
           folder_id: string | null
           id: string
           image_path: string | null
-          is_pinned: boolean
           is_public: boolean
           iv: string | null
           mood: string | null
@@ -261,7 +260,6 @@ export type Database = {
           folder_id?: string | null
           id?: string
           image_path?: string | null
-          is_pinned?: boolean
           is_public?: boolean
           iv?: string | null
           mood?: string | null
@@ -284,7 +282,6 @@ export type Database = {
           folder_id?: string | null
           id?: string
           image_path?: string | null
-          is_pinned?: boolean
           is_public?: boolean
           iv?: string | null
           mood?: string | null
@@ -303,45 +300,6 @@ export type Database = {
         Relationships: [
           {
             foreignKeyName: "diary_entries_folder_id_fkey"
-            columns: ["folder_id"]
-            isOneToOne: false
-            referencedRelation: "diary_folders"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      diary_entry_folders: {
-        Row: {
-          created_at: string
-          entry_id: string
-          folder_id: string
-          id: string
-          user_id: string
-        }
-        Insert: {
-          created_at?: string
-          entry_id: string
-          folder_id: string
-          id?: string
-          user_id: string
-        }
-        Update: {
-          created_at?: string
-          entry_id?: string
-          folder_id?: string
-          id?: string
-          user_id?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "diary_entry_folders_entry_id_fkey"
-            columns: ["entry_id"]
-            isOneToOne: false
-            referencedRelation: "diary_entries"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "diary_entry_folders_folder_id_fkey"
             columns: ["folder_id"]
             isOneToOne: false
             referencedRelation: "diary_folders"
@@ -406,78 +364,6 @@ export type Database = {
         }
         Relationships: []
       }
-      life_goals: {
-        Row: {
-          created_at: string
-          deadline: string | null
-          id: string
-          mood: string | null
-          progress: number
-          title: string
-          updated_at: string
-          user_id: string
-        }
-        Insert: {
-          created_at?: string
-          deadline?: string | null
-          id?: string
-          mood?: string | null
-          progress?: number
-          title: string
-          updated_at?: string
-          user_id: string
-        }
-        Update: {
-          created_at?: string
-          deadline?: string | null
-          id?: string
-          mood?: string | null
-          progress?: number
-          title?: string
-          updated_at?: string
-          user_id?: string
-        }
-        Relationships: []
-      }
-      note_folder_memberships: {
-        Row: {
-          created_at: string
-          folder_id: string
-          id: string
-          note_id: string
-          user_id: string
-        }
-        Insert: {
-          created_at?: string
-          folder_id: string
-          id?: string
-          note_id: string
-          user_id: string
-        }
-        Update: {
-          created_at?: string
-          folder_id?: string
-          id?: string
-          note_id?: string
-          user_id?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "note_folder_memberships_folder_id_fkey"
-            columns: ["folder_id"]
-            isOneToOne: false
-            referencedRelation: "note_folders"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "note_folder_memberships_note_id_fkey"
-            columns: ["note_id"]
-            isOneToOne: false
-            referencedRelation: "notes"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
       note_folders: {
         Row: {
           created_at: string
@@ -509,7 +395,6 @@ export type Database = {
           folder_id: string | null
           id: string
           image_url: string | null
-          is_pinned: boolean
           tags: string[] | null
           title: string | null
           updated_at: string
@@ -521,7 +406,6 @@ export type Database = {
           folder_id?: string | null
           id?: string
           image_url?: string | null
-          is_pinned?: boolean
           tags?: string[] | null
           title?: string | null
           updated_at?: string
@@ -533,7 +417,6 @@ export type Database = {
           folder_id?: string | null
           id?: string
           image_url?: string | null
-          is_pinned?: boolean
           tags?: string[] | null
           title?: string | null
           updated_at?: string
@@ -608,14 +491,7 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      delete_owned_folder: {
-        Args: { p_delete_items?: boolean; p_folder: string; p_kind: string }
-        Returns: undefined
-      }
-      set_item_folders: {
-        Args: { p_folders: string[]; p_item: string; p_kind: string }
-        Returns: undefined
-      }
+      [_ in never]: never
     }
     Enums: {
       [_ in never]: never
