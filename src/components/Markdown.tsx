@@ -28,6 +28,10 @@ export function Markdown({ children, className = "" }: { children: string; class
             return <code className="rounded bg-secondary px-1 py-0.5 text-sm" {...p}>{children}</code>;
           },
           hr: () => <hr className="my-4 border-border" />,
+          img: ({ node, src, alt }) => (
+            <img src={typeof src === "string" ? src : undefined} alt={alt ?? ""} loading="lazy" referrerPolicy="no-referrer"
+              className="my-3 block max-h-[28rem] max-w-full rounded-md border border-border object-contain" />
+          ),
           strong: ({ node, ...p }) => <strong className="font-semibold text-primary" {...p} />,
           table: ({ node, ...p }) => <div className="my-3 overflow-x-auto"><table className="min-w-full text-sm" {...p} /></div>,
           th: ({ node, ...p }) => <th className="border-b border-border px-2 py-1 text-left font-semibold" {...p} />,
