@@ -104,7 +104,7 @@ function SessionChat() {
     (async () => {
       const { data, error } = await supabase
         .from("chat_messages")
-        .select("role,content,iv")
+        .select("id,role,content,iv")
         .eq("session_id", sessionId)
         .order("created_at", { ascending: true });
       if (cancelled) return;
@@ -117,6 +117,10 @@ function SessionChat() {
           if (r.iv) {
             if (!key) continue;
             try { content = await decryptText(key, r.content, r.iv); } catch { continue; }
+          } else if (key) {
+            // Encrypt older plain messages in place.
+            const enc = await encryptText(key, r.content);
+            void supabase.from("chat_messages").update({ content: enc.ct, iv: enc.iv }).eq("id", r.id);
           }
           out.push({ role: r.role as "user" | "assistant", content });
         }
