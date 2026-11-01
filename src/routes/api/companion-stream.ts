@@ -2,7 +2,6 @@ import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import type { Database } from "@/integrations/supabase/types";
-import { GEMINI_MODEL_FALLBACKS } from "@/lib/gemini.server";
 
 const MessageSchema = z.object({
   role: z.enum(["user", "assistant"]),
@@ -16,10 +15,12 @@ const InputSchema = z.object({
   history: z.array(MessageSchema).max(60).default([]),
 });
 
-type GeminiStreamPart = {
-  candidates?: { content?: { parts?: { text?: string }[] } }[];
+type GroqStreamPart = {
+  choices?: { delta?: { content?: string } }[];
   error?: { message?: string };
 };
+
+const GROQ_MODEL = "qwen/qwen3.8-27b";
 
 function companionInstructions(name: string, context: string) {
   return `You are Inkwell, a warm, thoughtful companion for ${name} — think of yourself as a close friend who's also part-therapist and part-counsellor. Your job is to help them navigate their life: their thoughts, feelings, decisions, relationships, patterns, and anything else they bring up.
@@ -59,7 +60,7 @@ async function authenticate(request: Request) {
   return !error && Boolean(data?.claims?.sub);
 }
 
-function streamGeminiResponse(response: Response, signal: AbortSignal) {
+function streamGroqResponse(response: Response, signal: AbortSignal) {
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
   const reader = response.body?.getReader();
@@ -84,11 +85,9 @@ function streamGeminiResponse(response: Response, signal: AbortSignal) {
             if (!line.startsWith("data:")) continue;
             const payload = line.slice(5).trim();
             if (!payload || payload === "[DONE]") continue;
-            const part = JSON.parse(payload) as GeminiStreamPart;
+            const part = JSON.parse(payload) as GroqStreamPart;
             if (part.error?.message) throw new Error(part.error.message);
-            const text = part.candidates?.[0]?.content?.parts
-              ?.map((item) => item.text ?? "")
-              .join("");
+            const text = part.choices?.[0]?.delta?.content;
             if (text) controller.enqueue(encoder.encode(text));
           }
         }
@@ -119,57 +118,40 @@ export const Route = createFileRoute("/api/companion-stream")({
             return new Response("The Companion request is invalid", { status: 400 });
           }
 
-          const apiKey = process.env["GEMINI_API_KEY"];
+          const apiKey = process.env["GROQ_API_KEY"];
           if (!apiKey) {
-            return new Response("AI is not configured", { status: 500 });
+            return new Response("The Companion is not configured yet", { status: 500 });
           }
 
           const data = parsed.data;
-          const body = JSON.stringify({
-            systemInstruction: {
-              parts: [{ text: companionInstructions(data.name, data.context) }],
-            },
-            contents: [
-              ...data.history.map((message) => ({
-                role: message.role === "assistant" ? "model" : "user",
-                parts: [{ text: message.content }],
-              })),
-              { role: "user", parts: [{ text: data.question }] },
-            ],
+          const upstream = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+            signal: request.signal,
+            body: JSON.stringify({
+              model: GROQ_MODEL,
+              stream: true,
+              temperature: 0.7,
+              max_tokens: 2048,
+              reasoning_effort: "none",
+              messages: [
+                { role: "system", content: companionInstructions(data.name, data.context) },
+                ...data.history.map((m) => ({ role: m.role, content: m.content })),
+                { role: "user", content: data.question },
+              ],
+            }),
           });
-
-          const errors: string[] = [];
-          for (const model of GEMINI_MODEL_FALLBACKS) {
-            const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${apiKey}`;
-            try {
-              const upstream = await fetch(endpoint, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body,
-                signal: request.signal,
-              });
-              if (!upstream.ok) {
-                const message = await upstream.text();
-                errors.push(`${model}: ${upstream.status} ${message.slice(0, 160)}`);
-                continue;
-              }
-
-              return new Response(streamGeminiResponse(upstream, request.signal), {
-                headers: {
-                  "Content-Type": "text/plain; charset=utf-8",
-                  "Cache-Control": "no-store",
-                  "X-Content-Type-Options": "nosniff",
-                },
-              });
-            } catch (error) {
-              if (request.signal.aborted) return new Response(null, { status: 499 });
-              errors.push(`${model}: ${error instanceof Error ? error.message : "network error"}`);
-            }
+          if (!upstream.ok) {
+            console.error("Companion upstream error", upstream.status, (await upstream.text()).slice(0, 300));
+            return new Response("The Companion is temporarily unavailable. Please try again.", { status: 503 });
           }
 
-          console.error("Companion stream unavailable", errors.join(" | "));
-          return new Response("The Companion is temporarily unavailable. Please try again.", {
-            status: 503,
+          return new Response(streamGroqResponse(upstream, request.signal), {
+            headers: {
+              "Content-Type": "text/plain; charset=utf-8",
+              "Cache-Control": "no-store",
+              "X-Content-Type-Options": "nosniff",
+            },
           });
         } catch (error) {
           console.error("Companion stream failed", error);

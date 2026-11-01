@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { Markdown } from "@/components/Markdown";
 import { supabase } from "@/integrations/supabase/client";
 import { useVault } from "@/lib/vault";
-import { decryptText } from "@/lib/crypto";
+import { decryptText, encryptText } from "@/lib/crypto";
 import { AppSelect } from "@/components/AppSelect";
 import { CHAT_SESSIONS_UPDATED } from "./chat";
 import { useBrowserDraft } from "@/lib/browser-drafts";
@@ -104,25 +104,34 @@ function SessionChat() {
     (async () => {
       const { data, error } = await supabase
         .from("chat_messages")
-        .select("role,content")
+        .select("id,role,content,iv")
         .eq("session_id", sessionId)
         .order("created_at", { ascending: true });
       if (cancelled) return;
       if (error) {
         toast.error("Could not load this conversation");
       } else {
-        setMessages(
-          (data ?? []).map((r) => ({
-            role: r.role as "user" | "assistant",
-            content: r.content,
-          })),
-        );
+        const out: Msg[] = [];
+        for (const r of data ?? []) {
+          let content = r.content;
+          if (r.iv) {
+            if (!key) continue;
+            try { content = await decryptText(key, r.content, r.iv); } catch { continue; }
+          } else if (key) {
+            // Encrypt older plain messages in place.
+            const enc = await encryptText(key, r.content);
+            void supabase.from("chat_messages").update({ content: enc.ct, iv: enc.iv }).eq("id", r.id);
+          }
+          out.push({ role: r.role as "user" | "assistant", content });
+        }
+        if (cancelled) return;
+        setMessages(out);
       }
       setHydrating(false);
       setTimeout(() => inputRef.current?.focus(), 0);
     })();
     return () => { cancelled = true; };
-  }, [sessionId]);
+  }, [sessionId, key]);
 
   const send = async (question: string) => {
     if (!question.trim() || loading) return;
@@ -131,9 +140,11 @@ function SessionChat() {
     setMessages((m) => [...m, userMsg]);
     setLoading(true);
     try {
-      // Persist user message
+      if (!key) throw new Error("Unlock your vault to continue");
+      // Persist user message, encrypted
+      const encQ = await encryptText(key, question);
       const { error: userMessageError } = await supabase.from("chat_messages").insert({
-        session_id: sessionId, user_id: user.id, role: "user", content: question,
+        session_id: sessionId, user_id: user.id, role: "user", content: encQ.ct, iv: encQ.iv,
       });
       if (userMessageError) throw userMessageError;
       clearDraft();
@@ -175,16 +186,19 @@ function SessionChat() {
       answer += decoder.decode();
       if (!answer.trim()) throw new Error("The Companion returned an empty response");
 
+      const encA = await encryptText(key, answer);
       await supabase.from("chat_messages").insert({
-        session_id: sessionId, user_id: user.id, role: "assistant", content: answer,
+        session_id: sessionId, user_id: user.id, role: "assistant", content: encA.ct, iv: encA.iv,
       });
 
       // If this is the first exchange, title the session from the question
-      const patch: { last_message_at: string; title?: string } = {
+      const patch: { last_message_at: string; title?: string; title_iv?: string } = {
         last_message_at: new Date().toISOString(),
       };
       if (priorHistory.length === 0) {
-        patch.title = question.slice(0, 60);
+        const encT = await encryptText(key, question.slice(0, 60));
+        patch.title = encT.ct;
+        patch.title_iv = encT.iv;
       }
       await supabase.from("chat_sessions").update(patch).eq("id", sessionId);
       window.dispatchEvent(new Event(CHAT_SESSIONS_UPDATED));
