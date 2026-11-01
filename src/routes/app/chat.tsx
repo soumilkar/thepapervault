@@ -3,6 +3,8 @@ import { useEffect, useState, useCallback } from "react";
 import { Sparkles, Plus, Trash2, MessageSquare, Menu } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import { useVault } from "@/lib/vault";
+import { decryptText } from "@/lib/crypto";
 import {
   Popover,
   PopoverContent,
@@ -16,6 +18,7 @@ export const Route = createFileRoute("/app/chat")({
 type SessionRow = { id: string; title: string; last_message_at: string };
 
 const MAX_SESSIONS = 7;
+const RETENTION_DAYS = 7;
 export const CHAT_SESSIONS_UPDATED = "chat-sessions-updated";
 
 function ChatLayout() {
@@ -27,11 +30,15 @@ function ChatLayout() {
   const [sessions, setSessions] = useState<SessionRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [menuOpen, setMenuOpen] = useState(false);
+  const { key } = useVault();
 
   const refresh = useCallback(async () => {
+    // Conversations inactive for longer than the retention window are removed.
+    const cutoff = new Date(Date.now() - RETENTION_DAYS * 24 * 3600 * 1000).toISOString();
+    await supabase.from("chat_sessions").delete().eq("user_id", user.id).lt("last_message_at", cutoff);
     const { data, error } = await supabase
       .from("chat_sessions")
-      .select("id,title,last_message_at")
+      .select("id,title,title_iv,last_message_at")
       .eq("user_id", user.id)
       .order("last_message_at", { ascending: false })
       .limit(MAX_SESSIONS);
@@ -39,10 +46,19 @@ function ChatLayout() {
       toast.error("Could not load conversations");
       setSessions([]);
     } else {
-      setSessions(data ?? []);
+      const rows: SessionRow[] = [];
+      for (const r of data ?? []) {
+        let title = r.title;
+        if (r.title_iv) {
+          title = "Conversation";
+          if (key) { try { title = await decryptText(key, r.title, r.title_iv); } catch { /* keep fallback */ } }
+        }
+        rows.push({ id: r.id, title, last_message_at: r.last_message_at });
+      }
+      setSessions(rows);
     }
     setLoading(false);
-  }, [user.id]);
+  }, [user.id, key]);
 
   useEffect(() => {
     void refresh();
@@ -104,7 +120,7 @@ function ChatLayout() {
             <div className="flex items-center justify-between gap-2 border-b border-primary/20 px-4 py-3">
               <p className="font-serif text-base text-primary">Conversations</p>
               <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                saved history
+                kept for 7 days
               </span>
             </div>
             <div className="flex max-h-[min(70vh,26rem)] flex-col p-3">
