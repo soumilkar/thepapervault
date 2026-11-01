@@ -144,6 +144,7 @@ export type Database = {
           content: string
           created_at: string
           id: string
+          iv: string | null
           role: string
           session_id: string
           user_id: string
@@ -152,6 +153,7 @@ export type Database = {
           content: string
           created_at?: string
           id?: string
+          iv?: string | null
           role: string
           session_id: string
           user_id: string
@@ -160,6 +162,7 @@ export type Database = {
           content?: string
           created_at?: string
           id?: string
+          iv?: string | null
           role?: string
           session_id?: string
           user_id?: string
@@ -180,6 +183,7 @@ export type Database = {
           id: string
           last_message_at: string
           title: string
+          title_iv: string | null
           user_id: string
         }
         Insert: {
@@ -187,6 +191,7 @@ export type Database = {
           id?: string
           last_message_at?: string
           title?: string
+          title_iv?: string | null
           user_id: string
         }
         Update: {
@@ -194,6 +199,7 @@ export type Database = {
           id?: string
           last_message_at?: string
           title?: string
+          title_iv?: string | null
           user_id?: string
         }
         Relationships: []
@@ -354,6 +360,7 @@ export type Database = {
           created_at: string
           id: string
           name: string
+          parent_id: string | null
           updated_at: string
           user_id: string
         }
@@ -361,6 +368,7 @@ export type Database = {
           created_at?: string
           id?: string
           name: string
+          parent_id?: string | null
           updated_at?: string
           user_id: string
         }
@@ -368,10 +376,19 @@ export type Database = {
           created_at?: string
           id?: string
           name?: string
+          parent_id?: string | null
           updated_at?: string
           user_id?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "diary_folders_parent_id_fkey"
+            columns: ["parent_id"]
+            isOneToOne: false
+            referencedRelation: "diary_folders"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       gallery_images: {
         Row: {
@@ -483,6 +500,7 @@ export type Database = {
           created_at: string
           id: string
           name: string
+          parent_id: string | null
           updated_at: string
           user_id: string
         }
@@ -490,6 +508,7 @@ export type Database = {
           created_at?: string
           id?: string
           name: string
+          parent_id?: string | null
           updated_at?: string
           user_id: string
         }
@@ -497,10 +516,19 @@ export type Database = {
           created_at?: string
           id?: string
           name?: string
+          parent_id?: string | null
           updated_at?: string
           user_id?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "note_folders_parent_id_fkey"
+            columns: ["parent_id"]
+            isOneToOne: false
+            referencedRelation: "note_folders"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       notes: {
         Row: {
@@ -510,6 +538,7 @@ export type Database = {
           id: string
           image_url: string | null
           is_pinned: boolean
+          iv: string | null
           tags: string[] | null
           title: string | null
           updated_at: string
@@ -522,6 +551,7 @@ export type Database = {
           id?: string
           image_url?: string | null
           is_pinned?: boolean
+          iv?: string | null
           tags?: string[] | null
           title?: string | null
           updated_at?: string
@@ -534,6 +564,7 @@ export type Database = {
           id?: string
           image_url?: string | null
           is_pinned?: boolean
+          iv?: string | null
           tags?: string[] | null
           title?: string | null
           updated_at?: string
