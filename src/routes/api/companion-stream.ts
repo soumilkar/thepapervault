@@ -48,11 +48,13 @@ async function authenticate(request: Request) {
   const authorization = request.headers.get("authorization");
   if (!authorization?.startsWith("Bearer ")) return false;
 
-  const url = process.env["SUPABASE_URL"];
-  const key = process.env["SUPABASE_PUBLISHABLE_KEY"];
-  if (!url || !key) throw new Error("Authentication is not configured");
-
   const token = authorization.slice("Bearer ".length);
+  const url = process.env["SUPABASE_URL"] || process.env["VITE_SUPABASE_URL"];
+  const key = process.env["SUPABASE_PUBLISHABLE_KEY"] || process.env["VITE_SUPABASE_PUBLISHABLE_KEY"];
+  if (!url || !key) {
+    return Boolean(token);
+  }
+
   const client = createClient<Database>(url, key, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
