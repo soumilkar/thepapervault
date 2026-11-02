@@ -14,6 +14,7 @@ import {
 export const Route = createFileRoute("/app")({
   ssr: false,
   beforeLoad: async () => {
+    await supabase.auth.getSession();
     const { data, error } = await supabase.auth.getUser();
     if (error || !data.user) throw redirect({ to: "/auth" });
     return { user: data.user };
