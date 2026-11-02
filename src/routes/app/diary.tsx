@@ -3,16 +3,16 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
-import { ImagePlus, Trash2, X, Download, Pencil, Check, Globe, Lock, FolderPlus, Folder, FileText } from "lucide-react";
-import { Markdown } from "@/components/Markdown";
+import { ImagePlus, Trash2, X, Download, Pencil, Check, Globe, Lock, FolderPlus, Folder, Search } from "lucide-react";
+import { RichText } from "@/components/RichText";
+import { folderOptions, folderWithDescendants, type FolderRow } from "@/lib/folders";
+import { hasImageLinks, previewText } from "@/lib/rich-text";
 import { downloadTextFile } from "@/lib/download";
 import { useVault } from "@/lib/vault";
 import { decryptBytes, decryptText, encryptBlob, encryptText } from "@/lib/crypto";
 import { MusicSearch, MusicPlayer, type SelectedTrack } from "@/components/MusicSearch";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { moodScore } from "@/lib/mood-sentiment";
-import { estimateMoodScores } from "@/lib/mood-estimate.functions";
-import { transcribeHandwriting } from "@/lib/handwriting.functions";
 import { AppSelect } from "@/components/AppSelect";
 import { useBrowserDraft } from "@/lib/browser-drafts";
 
@@ -76,11 +76,11 @@ function DiaryPage() {
   const setMusic = (value: SelectedTrack | null) => setDraft((current) => ({ ...current, music: value }));
   const [photo, setPhoto] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
-  type HandwritingPage = { id: string; file: File; url: string; status: "pending" | "converting" | "done" | "error" };
-  const [handwritingPages, setHandwritingPages] = useState<HandwritingPage[]>([]);
   const [filterFolder, setFilterFolder] = useState<string | "all">("all");
   const [sort, setSort] = useState<Sort>("newest");
   const [newFolder, setNewFolder] = useState("");
+  const [newFolderParent, setNewFolderParent] = useState<string>(NONE);
+  const [query, setQuery] = useState("");
 
   useEffect(() => {
     if (!photo) { setPhotoPreview(null); return; }
@@ -89,67 +89,15 @@ function DiaryPage() {
     return () => URL.revokeObjectURL(url);
   }, [photo]);
 
-  const readAsDataUrl = (file: File) => new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("Could not read that image"));
-    reader.onerror = () => reject(new Error("Could not read that image"));
-    reader.readAsDataURL(file);
-  });
-
-  const setPageStatus = (id: string, status: HandwritingPage["status"]) =>
-    setHandwritingPages((pages) => pages.map((p) => (p.id === id ? { ...p, status } : p)));
-
-  const handwriting = useMutation({
-    mutationFn: async (pages: HandwritingPage[]) => {
-      let converted = 0;
-      for (const page of pages) {
-        setPageStatus(page.id, "converting");
-        try {
-          const imageDataUrl = await readAsDataUrl(page.file);
-          const { text } = await transcribeHandwriting({ data: { imageDataUrl, mimeType: page.file.type as "image/jpeg" | "image/png" | "image/webp" } });
-          if (!text) throw new Error("No handwriting was detected in one of the images. Try a clearer photo.");
-           setDraft((current) => ({ ...current, content: current.content.trim() ? `${current.content.trim()}\n\n${text}` : text }));
-          setPageStatus(page.id, "done");
-          converted += 1;
-        } catch (err) {
-          setPageStatus(page.id, "error");
-          throw err;
-        }
-      }
-      return converted;
-    },
-    onSuccess: (converted) => {
-      toast.success(converted > 1 ? `${converted} pages converted. Review the text before saving.` : "Handwriting converted. Review the text before saving.");
-    },
-    onError: (error: Error) => toast.error(error.message),
-  });
-
-  const addHandwritingFiles = (files: File[]) => {
-    const accepted: HandwritingPage[] = [];
-    for (const f of files) {
-      if (f.size >= 5 * 1024 * 1024) { toast.error(`"${f.name}" must be smaller than 5 MB`); continue; }
-      accepted.push({ id: crypto.randomUUID(), file: f, url: URL.createObjectURL(f), status: "pending" });
-    }
-    if (!accepted.length) return;
-    setHandwritingPages((pages) => [...pages, ...accepted]);
-    handwriting.mutate(accepted);
-  };
-
-  const removeHandwritingPage = (id: string) =>
-    setHandwritingPages((pages) => {
-      const page = pages.find((p) => p.id === id);
-      if (page) URL.revokeObjectURL(page.url);
-      return pages.filter((p) => p.id !== id);
-    });
-
   const folders = useQuery({
     queryKey: ["diary-folders", user.id],
-    queryFn: async () => {
-      const { data, error } = await supabase.from("diary_folders").select("*").eq("user_id", user.id).order("name");
+    queryFn: async (): Promise<FolderRow[]> => {
+      const { data, error } = await supabase.from("diary_folders").select("id,name,parent_id").eq("user_id", user.id).order("name");
       if (error) throw error;
       return data ?? [];
     },
   });
+  const fOpts = useMemo(() => folderOptions(folders.data ?? []), [folders.data]);
 
   const entries = useQuery({
     enabled: !!key,
@@ -162,7 +110,6 @@ function DiaryPage() {
       if (error) throw error;
       const rows = (data ?? []) as unknown as DiaryRowRaw[];
       const out: Entry[] = [];
-      const needsAiMood: { id: string; text: string }[] = [];
       for (const row of rows) {
         let t = row.title ?? "", c = row.content, m = row.mood ?? "";
         let decrypted = false;
@@ -181,10 +128,6 @@ function DiaryPage() {
           const ms = m ? moodScore(m) : null;
           await supabase.from("diary_entries").update({ word_count: wc, mood_score: ms } as never).eq("id", row.id);
         }
-        // Queue for AI mood estimation when no mood text was written.
-        if (isReadable && row.mood_score == null && !m && c && c.trim().length > 20 && c !== "[Could not decrypt this entry]") {
-          needsAiMood.push({ id: row.id, text: c });
-        }
         const image_url = row.image_path ? await loadImage(row.image_path, row.iv ? key : null) : null;
         out.push({
           id: row.id, title: t, content: c, mood: m,
@@ -200,39 +143,26 @@ function DiaryPage() {
           created_at: row.created_at,
         });
       }
-      // Fire-and-forget AI mood estimation for entries missing a score.
-      if (needsAiMood.length > 0) {
-        (async () => {
-          try {
-            for (let i = 0; i < needsAiMood.length; i += 10) {
-              const batch = needsAiMood.slice(i, i + 10);
-              const { scores } = await estimateMoodScores({ data: { items: batch } });
-              await Promise.all(
-                scores.map((s) =>
-                  supabase.from("diary_entries").update({ mood_score: s.score } as never).eq("id", s.id)
-                )
-              );
-            }
-            qc.invalidateQueries({ queryKey: ["mood-timeline"] });
-          } catch {
-            // silent — mood estimation is best-effort
-          }
-        })();
-      }
       return out;
     },
   });
 
   const filteredSorted = useMemo(() => {
     let rows = entries.data ?? [];
-    if (filterFolder !== "all") rows = rows.filter((e) => (filterFolder === "none" ? !e.folder_id : e.folder_id === filterFolder));
+    if (filterFolder === "none") rows = rows.filter((e) => !e.folder_id);
+    else if (filterFolder !== "all") {
+      const ids = folderWithDescendants(folders.data ?? [], filterFolder);
+      rows = rows.filter((e) => e.folder_id && ids.has(e.folder_id));
+    }
+    const q = query.trim().toLowerCase();
+    if (q) rows = rows.filter((e) => `${e.title}\n${e.content}\n${e.mood}\n${e.entry_date}`.toLowerCase().includes(q));
     rows = [...rows].sort((a, b) => {
       if (sort === "title") return (a.title || "").localeCompare(b.title || "");
       const cmp = new Date(a.entry_date).getTime() - new Date(b.entry_date).getTime();
       return sort === "newest" ? -cmp : cmp;
     });
     return rows;
-  }, [entries.data, filterFolder, sort]);
+  }, [entries.data, folders.data, filterFolder, sort, query]);
 
   const create = useMutation({
     mutationFn: async () => {
@@ -281,7 +211,7 @@ function DiaryPage() {
       if (error) throw error;
     },
     onSuccess: () => {
-       clearDraft(); setPhoto(null); setHandwritingPages((pages) => { pages.forEach((p) => URL.revokeObjectURL(p.url)); return []; });
+       clearDraft(); setPhoto(null);
       toast.success("Entry saved");
       qc.invalidateQueries({ queryKey: ["diary"] });
       qc.invalidateQueries({ queryKey: ["gallery"] });
@@ -348,7 +278,7 @@ function DiaryPage() {
 
   const createFolder = useMutation({
     mutationFn: async (name: string) => {
-      const { error } = await supabase.from("diary_folders").insert({ user_id: user.id, name });
+      const { error } = await supabase.from("diary_folders").insert({ user_id: user.id, name, parent_id: newFolderParent === NONE ? null : newFolderParent } as never);
       if (error) throw error;
     },
     onSuccess: () => { setNewFolder(""); qc.invalidateQueries({ queryKey: ["diary-folders"] }); },
@@ -388,29 +318,13 @@ function DiaryPage() {
           placeholder="How are you feeling? (e.g. peaceful, anxious, joyful)"
           className="w-full bg-transparent text-sm text-accent outline-none placeholder:text-muted-foreground/60" />
         <textarea value={content} onChange={(e) => setContent(e.target.value)}
-          placeholder="Pour it out..." rows={6}
+          placeholder="Pour it out... paste an image link on its own line to show the picture" rows={6}
           className="w-full resize-none bg-transparent leading-relaxed outline-none placeholder:text-muted-foreground/60" />
 
-        {handwritingPages.length > 0 && (
-          <div className="space-y-2 rounded-md border border-border bg-secondary/50 p-3">
-            <p className="text-xs text-muted-foreground">Converted text is added to the box above, one page after another. Please review it before saving.</p>
-            {handwritingPages.map((page, i) => (
-              <div key={page.id} className="flex items-center gap-3">
-                <img src={page.url} alt={`Handwritten page ${i + 1}`} className="h-16 w-12 rounded border border-border object-cover" />
-                <div className="min-w-0 flex-1 text-sm">
-                  <p className="truncate font-medium text-primary">{page.file.name}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {page.status === "pending" && "Waiting..."}
-                    {page.status === "converting" && "Converting..."}
-                    {page.status === "done" && "Converted"}
-                    {page.status === "error" && "Could not convert"}
-                  </p>
-                </div>
-                <button type="button" onClick={() => removeHandwritingPage(page.id)} disabled={page.status === "converting"} className="text-muted-foreground hover:text-primary disabled:opacity-40" aria-label={`Remove ${page.file.name}`}>
-                  <X className="size-4" />
-                </button>
-              </div>
-            ))}
+        {hasImageLinks(content) && (
+          <div className="rounded-md border border-border bg-secondary/30 p-3">
+            <p className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">Preview</p>
+            <RichText>{content}</RichText>
           </div>
         )}
 
@@ -445,7 +359,7 @@ function DiaryPage() {
               onValueChange={(v) => setFolderId(v === NONE ? null : v)}
               options={[
                 { value: NONE, label: "— none —" },
-                ...(folders.data ?? []).map((f) => ({ value: f.id, label: f.name })),
+                ...fOpts,
               ]}
             />
           </label>
@@ -468,15 +382,6 @@ function DiaryPage() {
                   }} />
               </label>
             )}
-            <label className="flex cursor-pointer items-center gap-2 text-sm text-accent hover:text-primary">
-              <FileText className="size-4" />
-              <span>{handwriting.isPending ? "Converting..." : "Convert handwritten pages"}</span>
-              <input type="file" accept="image/jpeg,image/png,image/webp" multiple className="hidden" disabled={handwriting.isPending}
-                onChange={(e) => {
-                  addHandwritingFiles(Array.from(e.target.files ?? []));
-                  e.currentTarget.value = "";
-                }} />
-            </label>
           </div>
           {isPublic && <span className="text-xs text-muted-foreground">Public entries appear anonymously in the community Feed.</span>}
           <button type="submit" disabled={!content.trim() || create.isPending}
@@ -486,6 +391,12 @@ function DiaryPage() {
         </div>
       </form>
 
+      <label className="paper-card flex items-center gap-2 px-3 py-2 text-sm">
+        <Search className="size-4 text-muted-foreground" />
+        <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search diary entries..."
+          className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-muted-foreground/60" />
+        {query && <button type="button" onClick={() => setQuery("")} aria-label="Clear search"><X className="size-4 text-muted-foreground" /></button>}
+      </label>
       <div className="paper-card flex flex-wrap items-center gap-3 p-3 text-sm">
         <label className="flex items-center gap-2">
           <Folder className="size-4 text-muted-foreground" />
@@ -495,7 +406,7 @@ function DiaryPage() {
             options={[
               { value: "all", label: "All entries" },
               { value: "none", label: "No folder" },
-              ...(folders.data ?? []).map((f) => ({ value: f.id, label: f.name })),
+              ...fOpts,
             ]}
           />
         </label>
@@ -513,10 +424,12 @@ function DiaryPage() {
         </label>
         <form
           onSubmit={(e) => { e.preventDefault(); if (newFolder.trim()) createFolder.mutate(newFolder.trim()); }}
-          className="ml-auto flex items-center gap-1"
+          className="flex flex-wrap items-center gap-1 sm:ml-auto"
         >
           <input value={newFolder} onChange={(e) => setNewFolder(e.target.value)} placeholder="New folder"
-            className="rounded-md border border-input bg-card px-2 py-1" />
+            className="w-32 rounded-md border border-input bg-card px-2 py-1" />
+          <AppSelect value={newFolderParent} onValueChange={setNewFolderParent}
+            options={[{ value: NONE, label: "Top level" }, ...fOpts.map((o) => ({ value: o.value, label: `inside ${o.label}` }))]} />
           <button type="submit" className="flex items-center gap-1 rounded-md bg-primary px-2.5 py-1 text-xs text-primary-foreground">
             <FolderPlus className="size-3.5" /> Add
           </button>
@@ -527,7 +440,7 @@ function DiaryPage() {
         {entries.isLoading && <p className="font-hand text-sepia">opening your pages...</p>}
         {entries.data?.length === 0 && <p className="text-muted-foreground">Your diary is a blank page. Start above.</p>}
         {filteredSorted.map((e) => (
-          <DiaryCard key={e.id} entry={e} folders={folders.data ?? []}
+          <DiaryCard key={e.id} entry={e} folderOpts={fOpts}
             onDelete={() => remove.mutate(e.id)}
             onSave={(v) => update.mutate({ id: e.id, ...v, wasPrivate: !e.is_public })}
           />
@@ -553,10 +466,10 @@ async function loadImage(path: string, key: CryptoKey | null): Promise<string | 
 }
 
 function DiaryCard({
-  entry: e, folders, onDelete, onSave,
+  entry: e, folderOpts, onDelete, onSave,
 }: {
   entry: Entry;
-  folders: { id: string; name: string }[];
+  folderOpts: { value: string; label: string }[];
   onDelete: () => void;
   onSave: (v: { title: string; content: string; mood: string; folder_id: string | null; music: SelectedTrack | null }) => void;
 }) {
@@ -568,8 +481,8 @@ function DiaryCard({
   const [eFolder, setEFolder] = useState<string | null>(e.folder_id);
   const [eMusic, setEMusic] = useState<SelectedTrack | null>(e.music);
   const [confirmDel, setConfirmDel] = useState(false);
-  const long = e.content.length > 220 || !!e.image_url;
-  const preview = e.content.length > 220 ? e.content.slice(0, 220).trimEnd() + "…" : e.content;
+  const pv = previewText(e.content, 220);
+  const long = pv.truncated || !!e.image_url;
 
   if (editing) {
     return (
@@ -579,7 +492,8 @@ function DiaryCard({
         <input value={eMood} onChange={(ev) => setEMood(ev.target.value)} placeholder="Feeling"
           className="w-full bg-transparent text-sm text-accent outline-none" />
         <textarea value={eContent} onChange={(ev) => setEContent(ev.target.value)} rows={8}
-          className="w-full resize-none bg-transparent leading-relaxed outline-none" />
+          className="w-full resize-y bg-transparent leading-relaxed outline-none" />
+        {hasImageLinks(eContent) && <RichText>{eContent}</RichText>}
         <MusicSearch selected={eMusic} onChange={setEMusic} />
         <label className="flex items-center gap-2 text-sm">
           <span className="text-muted-foreground">Folder</span>
@@ -588,7 +502,7 @@ function DiaryCard({
             onValueChange={(v) => setEFolder(v === NONE ? null : v)}
             options={[
               { value: NONE, label: "— none —" },
-              ...folders.map((f) => ({ value: f.id, label: f.name })),
+              ...folderOpts,
             ]}
           />
         </label>
@@ -627,7 +541,7 @@ function DiaryCard({
         </div>
       </header>
       {e.mood && <p className="mt-1 text-sm text-accent">Feeling: {e.mood}</p>}
-      {open ? <Markdown>{e.content}</Markdown> : <p className="mt-3 whitespace-pre-wrap leading-relaxed">{preview}</p>}
+      <div className="mt-3 break-words"><RichText>{open ? e.content : pv.text}</RichText></div>
       {open && e.image_url && (
         <img src={e.image_url} alt="" className="mt-4 max-h-96 rounded-md border border-border" loading="lazy" />
       )}
