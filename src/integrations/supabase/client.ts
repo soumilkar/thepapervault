@@ -3,22 +3,76 @@ import type { Database } from './types';
 import { brokeredPreviewStorage } from './previewAuthStorage';
 
 type Row = Record<string, unknown>;
+type MockUser = {
+  id: string;
+  email: string;
+  user_metadata: { display_name?: string };
+};
+
+const STORAGE_SESSION_KEY = 'papervault:mock-auth-user';
+const STORAGE_TABLES_PREFIX = 'papervault:mock-table:';
 
 const memoryTables = new Map<string, Row[]>();
 const memoryStorage = new Map<string, Blob>();
 const authListeners = new Set<(event: string, session: unknown) => void>();
 
-let mockCurrentUser: {
-  id: string;
-  email: string;
-  user_metadata: { display_name?: string };
-} | null = null;
+function loadStoredUser(): MockUser | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(STORAGE_SESSION_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw) as MockUser;
+  } catch {
+    return null;
+  }
+}
+
+function saveStoredUser(user: MockUser | null) {
+  if (typeof window === 'undefined') return;
+  try {
+    if (user) {
+      window.localStorage.setItem(STORAGE_SESSION_KEY, JSON.stringify(user));
+    } else {
+      window.localStorage.removeItem(STORAGE_SESSION_KEY);
+    }
+  } catch {
+    // ignore storage errors
+  }
+}
+
+let mockCurrentUser: MockUser | null = null;
+
+function getCurrentMockUser(): MockUser | null {
+  if (!mockCurrentUser && typeof window !== 'undefined') {
+    mockCurrentUser = loadStoredUser();
+  }
+  return mockCurrentUser;
+}
 
 function getTable(name: string): Row[] {
   if (!memoryTables.has(name)) {
-    memoryTables.set(name, []);
+    let initial: Row[] = [];
+    if (typeof window !== 'undefined') {
+      try {
+        const raw = window.localStorage.getItem(`${STORAGE_TABLES_PREFIX}${name}`);
+        if (raw) initial = JSON.parse(raw) as Row[];
+      } catch {
+        initial = [];
+      }
+    }
+    memoryTables.set(name, initial);
   }
   return memoryTables.get(name)!;
+}
+
+function persistTable(name: string) {
+  if (typeof window === 'undefined') return;
+  try {
+    const rows = memoryTables.get(name) ?? [];
+    window.localStorage.setItem(`${STORAGE_TABLES_PREFIX}${name}`, JSON.stringify(rows));
+  } catch {
+    // ignore storage quota errors
+  }
 }
 
 function createMockQueryBuilder(table: string) {
@@ -49,6 +103,7 @@ function createMockQueryBuilder(table: string) {
         rows.push(record);
         return record;
       });
+      persistTable(table);
       if (singleMode === 'single') {
         return { data: inserted[0] ?? null, error: inserted[0] ? null : new Error('No row inserted'), count: inserted.length };
       }
@@ -58,13 +113,14 @@ function createMockQueryBuilder(table: string) {
       return { data: inserted, error: null, count: inserted.length };
     }
 
-    let matched = rows.filter((r) => filters.every((fn) => fn(r)));
+    const matched = rows.filter((r) => filters.every((fn) => fn(r)));
 
     if (op === 'update') {
       const now = new Date().toISOString();
       matched.forEach((r) => {
         Object.assign(r, updatePayload, { updated_at: (updatePayload.updated_at as string) || now });
       });
+      persistTable(table);
       if (singleMode === 'single' || singleMode === 'maybeSingle') {
         return { data: matched[0] ?? null, error: null, count: matched.length };
       }
@@ -75,6 +131,7 @@ function createMockQueryBuilder(table: string) {
       const toRemove = new Set(matched);
       const remaining = rows.filter((r) => !toRemove.has(r));
       memoryTables.set(table, remaining);
+      persistTable(table);
       return { data: matched, error: null, count: matched.length };
     }
 
@@ -193,16 +250,15 @@ function createMockQueryBuilder(table: string) {
 }
 
 function createMockSupabaseClient(): SupabaseClient<Database> {
-  console.warn('[AI Studio] Supabase environment variables not configured — using in-memory mock client');
-
   const notifyAuth = (event: string) => {
-    const session = mockCurrentUser
-      ? { access_token: `mock-token-${mockCurrentUser.id}`, user: mockCurrentUser }
+    const user = getCurrentMockUser();
+    const session = user
+      ? { access_token: `mock-token-${user.id}`, user }
       : null;
     authListeners.forEach((cb) => cb(event, session));
   };
 
-  const ensureProfile = (user: { id: string; email: string; user_metadata: { display_name?: string } }) => {
+  const ensureProfile = (user: MockUser) => {
     const profiles = getTable('profiles');
     if (!profiles.some((p) => p.id === user.id)) {
       const now = new Date().toISOString();
@@ -214,17 +270,20 @@ function createMockSupabaseClient(): SupabaseClient<Database> {
         created_at: now,
         updated_at: now,
       });
+      persistTable('profiles');
     }
   };
 
   const mockClient = {
     auth: {
       async getUser() {
-        return { data: { user: mockCurrentUser }, error: null };
+        const user = getCurrentMockUser();
+        return { data: { user }, error: null };
       },
       async getSession() {
-        const session = mockCurrentUser
-          ? { access_token: `mock-token-${mockCurrentUser.id}`, user: mockCurrentUser }
+        const user = getCurrentMockUser();
+        const session = user
+          ? { access_token: `mock-token-${user.id}`, user }
           : null;
         return { data: { session }, error: null };
       },
@@ -232,18 +291,20 @@ function createMockSupabaseClient(): SupabaseClient<Database> {
         if (token && token.startsWith('mock-token-')) {
           return { data: { claims: { sub: token.slice('mock-token-'.length) } }, error: null };
         }
-        if (mockCurrentUser) {
-          return { data: { claims: { sub: mockCurrentUser.id } }, error: null };
+        const user = getCurrentMockUser();
+        if (user) {
+          return { data: { claims: { sub: user.id } }, error: null };
         }
         return { data: null, error: new Error('Invalid token') };
       },
       async signUp({ email, options }: { email: string; password?: string; options?: { data?: { display_name?: string } } }) {
-        const id = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : 'mock-user-1';
+        const id = 'user-' + email.toLowerCase().replace(/[^a-z0-9]/g, '-');
         mockCurrentUser = {
           id,
           email,
           user_metadata: { display_name: options?.data?.display_name || email.split('@')[0] },
         };
+        saveStoredUser(mockCurrentUser);
         ensureProfile(mockCurrentUser);
         notifyAuth('SIGNED_IN');
         return {
@@ -255,12 +316,13 @@ function createMockSupabaseClient(): SupabaseClient<Database> {
         };
       },
       async signInWithPassword({ email }: { email: string; password?: string }) {
-        const id = 'mock-user-' + email.replace(/[^a-zA-Z0-9]/g, '-');
+        const id = 'user-' + email.toLowerCase().replace(/[^a-z0-9]/g, '-');
         mockCurrentUser = {
           id,
           email,
           user_metadata: { display_name: email.split('@')[0] },
         };
+        saveStoredUser(mockCurrentUser);
         ensureProfile(mockCurrentUser);
         notifyAuth('SIGNED_IN');
         return {
@@ -272,25 +334,28 @@ function createMockSupabaseClient(): SupabaseClient<Database> {
         };
       },
       async setSession(tokens: { access_token?: string; refresh_token?: string }) {
-        if (!mockCurrentUser) {
+        if (!getCurrentMockUser()) {
           mockCurrentUser = {
-            id: 'mock-oauth-user',
-            email: 'writer@papervault.local',
-            user_metadata: { display_name: 'Writer' },
+            id: 'google-oauth-user',
+            email: 'soumil.krm@gmail.com',
+            user_metadata: { display_name: 'Soumil' },
           };
+          saveStoredUser(mockCurrentUser);
           ensureProfile(mockCurrentUser);
         }
+        const user = getCurrentMockUser()!;
         notifyAuth('SIGNED_IN');
         return {
           data: {
-            user: mockCurrentUser,
-            session: { access_token: tokens?.access_token || `mock-token-${mockCurrentUser.id}`, user: mockCurrentUser },
+            user,
+            session: { access_token: tokens?.access_token || `mock-token-${user.id}`, user },
           },
           error: null,
         };
       },
       async signOut() {
         mockCurrentUser = null;
+        saveStoredUser(null);
         notifyAuth('SIGNED_OUT');
         return { error: null };
       },
@@ -338,8 +403,6 @@ function createMockSupabaseClient(): SupabaseClient<Database> {
 }
 
 function createSupabaseClient(): SupabaseClient<Database> {
-  // Use import.meta.env for client-side (Vite build-time replacement)
-  // Fall back to process.env for SSR (server-side rendering)
   const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
   const SUPABASE_PUBLISHABLE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_PUBLISHABLE_KEY;
 
@@ -358,8 +421,6 @@ function createSupabaseClient(): SupabaseClient<Database> {
 
 let _supabase: ReturnType<typeof createSupabaseClient> | undefined;
 
-// Import the supabase client like this:
-// import { supabase } from "@/integrations/supabase/client";
 export const supabase = new Proxy({} as ReturnType<typeof createSupabaseClient>, {
   get(_, prop, receiver) {
     if (!_supabase) _supabase = createSupabaseClient();
