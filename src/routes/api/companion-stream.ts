@@ -50,7 +50,11 @@ async function authenticate(request: Request) {
 
   const token = authorization.slice("Bearer ".length);
   const url = process.env["SUPABASE_URL"] || process.env["VITE_SUPABASE_URL"];
-  const key = process.env["SUPABASE_PUBLISHABLE_KEY"] || process.env["VITE_SUPABASE_PUBLISHABLE_KEY"];
+  const key =
+    process.env["SUPABASE_PUBLISHABLE_KEY"] ||
+    process.env["SUPABASE_ANON_KEY"] ||
+    process.env["VITE_SUPABASE_PUBLISHABLE_KEY"] ||
+    process.env["VITE_SUPABASE_ANON_KEY"];
   if (!url || !key) {
     return Boolean(token);
   }
@@ -59,7 +63,10 @@ async function authenticate(request: Request) {
     auth: { persistSession: false, autoRefreshToken: false },
   });
   const { data, error } = await client.auth.getClaims(token);
-  return !error && Boolean(data?.claims?.sub);
+  if (!error && Boolean(data?.claims?.sub)) return true;
+
+  const { data: userData, error: userError } = await client.auth.getUser(token);
+  return !userError && Boolean(userData?.user?.id);
 }
 
 function streamGroqResponse(response: Response, signal: AbortSignal) {
