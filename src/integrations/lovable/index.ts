@@ -23,15 +23,12 @@ export const lovable = {
       );
 
       if (!hasSupabaseEnv) {
-        try {
-          await supabase.auth.setSession({
-            access_token: `mock-token-oauth-${provider}`,
-            refresh_token: `mock-refresh-${provider}`,
-          });
-          return { redirected: false, error: null };
-        } catch (e) {
-          return { error: e instanceof Error ? e : new Error(String(e)) };
-        }
+        return {
+          redirected: false,
+          error: new Error(
+            "Supabase is not configured yet. Please add VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY (or VITE_SUPABASE_ANON_KEY) in your environment secrets."
+          ),
+        };
       }
 
       const redirectTo = opts?.redirect_uri ?? `${window.location.origin}/app`;
@@ -39,7 +36,10 @@ export const lovable = {
         provider,
         options: {
           redirectTo,
-          queryParams: opts?.extraParams,
+          queryParams: {
+            prompt: "select_account",
+            ...opts?.extraParams,
+          },
           skipBrowserRedirect: true,
         },
       });
