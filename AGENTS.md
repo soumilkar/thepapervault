@@ -1,0 +1,3 @@
+- Notes, diary (private), Companion messages/titles and browser drafts are AES-GCM encrypted client-side with the vault key; never store their plaintext server-side or in localStorage. Why: privacy-first E2EE.
+- The only AI is the Companion via Groq (`GROQ_API_KEY`, `/api/companion-stream`); no other AI scanning of user content. Why: user forbids AI processing elsewhere.
+- Folders (diary/notes) nest via `parent_id`; use `src/lib/folders.ts` helpers. Rich text uses `RichText` so previews and expanded views render identically, with image links inline.
