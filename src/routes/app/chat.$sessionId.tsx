@@ -45,17 +45,24 @@ async function buildContext(
     wantsDiary
       ? supabase.from("diary_entries").select("content,iv,entry_date" as never)
           .eq("user_id", userId).gte("entry_date", startDate).lte("entry_date", endDate)
-          .order("entry_date", { ascending: false }).limit(100)
+          .order("entry_date", { ascending: false }).limit(60)
       : Promise.resolve({ data: [] as unknown as DiaryRow[] }),
     wantsBlog
       ? supabase.from("blog_posts").select("title,content,tags,created_at")
           .eq("user_id", userId).gte("created_at", startIso).lte("created_at", endIso)
-          .order("created_at", { ascending: false }).limit(60)
+          .order("created_at", { ascending: false }).limit(40)
       : Promise.resolve({ data: [] as unknown as BlogRow[] }),
   ]);
 
   const diaryRows = (diary.data ?? []) as unknown as DiaryRow[];
   const blogRows = (blog.data ?? []) as unknown as BlogRow[];
+
+  // Keep the total context within the model's limits: newest entries first,
+  // each entry trimmed, and a hard overall budget so large diaries still work.
+  const DIARY_ENTRY_MAX = 1500;
+  const BLOG_POST_MAX = 800;
+  const CONTEXT_BUDGET = 90_000;
+  const trim = (s: string, max: number) => (s.length > max ? `${s.slice(0, max)}…` : s);
 
   const diaryDecoded: string[] = [];
   for (const row of diaryRows) {
@@ -63,21 +70,25 @@ async function buildContext(
       try {
         const plain = await decryptText(key, row.content, row.iv);
         const obj = JSON.parse(plain) as { t?: string; c?: string; m?: string };
-        diaryDecoded.push(`[${row.entry_date}${obj.m ? ` · ${obj.m}` : ""}] ${obj.t || "Untitled"}\n${obj.c ?? ""}`);
+        diaryDecoded.push(`[${row.entry_date}${obj.m ? ` · ${obj.m}` : ""}] ${obj.t || "Untitled"}\n${trim(obj.c ?? "", DIARY_ENTRY_MAX)}`);
       } catch { /* skip */ }
     } else if (!row.iv) {
-      diaryDecoded.push(`[${row.entry_date}] ${row.content}`);
+      diaryDecoded.push(`[${row.entry_date}] ${trim(row.content, DIARY_ENTRY_MAX)}`);
     }
   }
   const diaryText = wantsDiary ? (diaryDecoded.join("\n\n---\n\n") || "(no diary entries in this range)") : "";
   const blogText = wantsBlog
-    ? (blogRows.map((b) => `# ${b.title}${b.tags?.length ? ` (${b.tags.join(", ")})` : ""}\n${b.content}`).join("\n\n---\n\n") || "(no blog posts in this range)")
+    ? (blogRows.map((b) => `# ${b.title}${b.tags?.length ? ` (${b.tags.join(", ")})` : ""}\n${trim(b.content, BLOG_POST_MAX)}`).join("\n\n---\n\n") || "(no blog posts in this range)")
     : "";
 
   const parts: string[] = [];
   if (wantsDiary) parts.push(`=== DIARY ENTRIES (${startDate} → ${endDate}) ===\n${diaryText}`);
   if (wantsBlog) parts.push(`=== BLOG POSTS (${startDate} → ${endDate}) ===\n${blogText}`);
-  return parts.join("\n\n");
+  let combined = parts.join("\n\n");
+  if (combined.length > CONTEXT_BUDGET) {
+    combined = `${combined.slice(0, CONTEXT_BUDGET)}\n\n(older entries trimmed to fit)`;
+  }
+  return combined;
 }
 
 function SessionChat() {
