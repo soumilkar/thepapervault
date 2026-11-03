@@ -303,14 +303,16 @@ function NotesPage() {
         </div>
       </div>
 
-      <div className="grid items-start gap-4 sm:grid-cols-2">
+      <div className="columns-1 gap-4 sm:columns-2">
         {notes.isLoading && <p className="font-hand text-sepia">gathering notes...</p>}
         {notes.data?.length === 0 && <p className="text-muted-foreground">No notes yet.</p>}
         {notes.data && notes.data.length > 0 && filtered.length === 0 && <p className="text-muted-foreground">No notes match.</p>}
         {filtered.map((n) => (
-          <NoteCard key={n.id} note={n} folderOpts={fOpts} cryptoKey={key}
-            onDelete={() => remove.mutate(n.id)}
-            onSave={(v) => update.mutate({ note: n, ...v })} />
+          <div key={n.id} className="mb-4 break-inside-avoid">
+            <NoteCard note={n} folderOpts={fOpts} cryptoKey={key}
+              onDelete={() => remove.mutate(n.id)}
+              onSave={(v) => update.mutate({ note: n, ...v })} />
+          </div>
         ))}
       </div>
     </div>
