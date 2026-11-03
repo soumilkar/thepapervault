@@ -52,7 +52,7 @@ Every private diary entry, note, folder name, gallery photo, caption, tracker lo
 - **Privacy-Preserving Context**: When you chat with *Inkwell* (powered by Groq), your browser decrypts only the date range and sources (`Diary + Blog`, `Diary only`, or `Blog only`) you explicitly choose to share for that turn.
 - **Real-Time Streaming**: Responses stream token-by-token with automatic scroll-to-bottom tracking.
 - **Encrypted History**: Every user prompt, assistant reply, and conversation title is encrypted with your vault key before being saved to the database.
-
+- **Zero Data Retention (ZDR)**: AI Companion uses ZDR. Your information is never stored or used to train AI models (refer to Groq API privacy policy for more details). ZDR is On in Privacy section of [Groq API](https://groq.com) (`qwen/qwen3.8-27b`) for the AI model used to power "Companion" mode in this website. All other features work independently. Your data is never scanned unless you trigger AI Companion by sending a prompt in the "Companion" tab of this website.
 ### 6. Home Sanctuary & Personal Trackers
 - **Writing Streaks**: Tracks your current streak, best streak, total entries, and words written this month—computed client-side from decrypted entries.
 - **Year in Writing Heatmap**: A full-year GitHub-style activity grid visualizing your daily writing consistency across diary entries, notes, and blog posts.
