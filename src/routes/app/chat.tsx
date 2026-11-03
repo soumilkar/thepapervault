@@ -18,7 +18,6 @@ export const Route = createFileRoute("/app/chat")({
 type SessionRow = { id: string; title: string; last_message_at: string };
 
 const MAX_SESSIONS = 7;
-const RETENTION_DAYS = 7;
 export const CHAT_SESSIONS_UPDATED = "chat-sessions-updated";
 
 function ChatLayout() {
@@ -33,9 +32,7 @@ function ChatLayout() {
   const { key } = useVault();
 
   const refresh = useCallback(async () => {
-    // Conversations inactive for longer than the retention window are removed.
-    const cutoff = new Date(Date.now() - RETENTION_DAYS * 24 * 3600 * 1000).toISOString();
-    await supabase.from("chat_sessions").delete().eq("user_id", user.id).lt("last_message_at", cutoff);
+    // Conversations are kept until the user deletes them.
     const { data, error } = await supabase
       .from("chat_sessions")
       .select("id,title,title_iv,last_message_at")
@@ -120,7 +117,7 @@ function ChatLayout() {
             <div className="flex items-center justify-between gap-2 border-b border-primary/20 px-4 py-3">
               <p className="font-serif text-base text-primary">Conversations</p>
               <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                kept for 7 days
+                kept until you delete them
               </span>
             </div>
             <div className="flex max-h-[min(70vh,26rem)] flex-col p-3">
@@ -180,6 +177,7 @@ function ChatLayout() {
             <Sparkles className="size-6 shrink-0 text-accent sm:size-7" />
             <span className="truncate">Your companion</span>
           </h1>
+          <p className="mt-1 text-xs uppercase tracking-wide text-muted-foreground">end-to-end encrypted</p>
         </div>
       </div>
 
