@@ -106,12 +106,26 @@ function SessionChat() {
   const [loading, setLoading] = useState(false);
   const [hydrating, setHydrating] = useState(true);
   const inputRef = useRef<HTMLInputElement>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  const scrollToBottom = (behavior: ScrollBehavior = "smooth") => {
+    requestAnimationFrame(() => {
+      bottomRef.current?.scrollIntoView({ behavior, block: "end" });
+    });
+  };
 
   const today = useMemo(() => new Date(), []);
   const monthAgo = useMemo(() => new Date(today.getTime() - 30 * 24 * 3600 * 1000), [today]);
   const [source, setSource] = useState<Source>("both");
   const [startDate, setStartDate] = useState<string>(isoDay(monthAgo));
   const [endDate, setEndDate] = useState<string>(isoDay(today));
+
+  // Auto-scroll to bottom-most text when messages load, are sent, or stream in
+  const lastContent = messages.at(-1)?.content ?? "";
+  useEffect(() => {
+    if (hydrating || messages.length === 0) return;
+    scrollToBottom(loading ? "auto" : "smooth");
+  }, [hydrating, messages.length, lastContent, loading]);
 
   // Load prior messages for this session
   useEffect(() => {
@@ -315,7 +329,7 @@ function SessionChat() {
         )}
       </div>
 
-      <div className="h-32" aria-hidden />
+      <div ref={bottomRef} className="h-32" aria-hidden />
       <form
         onSubmit={(e) => { e.preventDefault(); send(input); }}
         className="glass-card fixed bottom-4 left-4 right-4 z-30 mx-auto flex max-w-3xl items-center gap-2 p-2"
