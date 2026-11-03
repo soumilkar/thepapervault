@@ -204,6 +204,7 @@ function NotesPage() {
       <div>
         <p className="font-hand text-2xl text-sepia">scraps and reminders</p>
         <h1 className="font-serif text-4xl text-primary">Notes</h1>
+        <p className="mt-1 text-xs uppercase tracking-wide text-muted-foreground">end-to-end encrypted</p>
       </div>
 
       <form

@@ -291,6 +291,7 @@ function DiaryPage() {
         <div>
           <p className="font-hand text-2xl text-sepia">today's page</p>
           <h1 className="font-serif text-4xl text-primary">Diary</h1>
+          <p className="mt-1 text-xs uppercase tracking-wide text-muted-foreground">end-to-end encrypted</p>
         </div>
         <button
           type="button"

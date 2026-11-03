@@ -177,6 +177,7 @@ function ChatLayout() {
             <Sparkles className="size-6 shrink-0 text-accent sm:size-7" />
             <span className="truncate">Your companion</span>
           </h1>
+          <p className="mt-1 text-xs uppercase tracking-wide text-muted-foreground">end-to-end encrypted</p>
         </div>
       </div>
 
