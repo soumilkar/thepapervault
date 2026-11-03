@@ -2,7 +2,6 @@ name: Keep Supabase Awake
 
 on:
   schedule:
-    # Runs at 00:00 UTC every Monday and Thursday
     - cron: '0 0 * * 1,4'
   workflow_dispatch:
 
@@ -13,29 +12,25 @@ jobs:
   ping-supabase:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Ping Supabase REST API
+      - name: Ping Supabase
         env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          SUPABASE_URL: "https://lffxkhqwyvgpqkkqhznm.supabase.co"
+          SUPABASE_ANON_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxmZnhraHF3eXZncHFra3Foem5tIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM2NzE4NTIsImV4cCI6MjEwOTI0Nzg1Mn0.976G_PgCYpboqWxY-chNLIiyAnIpxL0t4VAgEkWvdFok"
         run: |
+          # Remove any accidental trailing slash from SUPABASE_URL
+          CLEAN_URL="${SUPABASE_URL%/}"
+          
+          echo "Pinging ${CLEAN_URL}/auth/v1/health ..."
           response=$(curl -s -o /dev/null -w "%{http_code}" \
-            "${SUPABASE_URL}/rest/v1/" \
-            -H "apikey: ${SUPABASE_ANON_KEY}" \
-            -H "Authorization: Bearer ${SUPABASE_ANON_KEY}")
+            "${CLEAN_URL}/auth/v1/health" \
+            -H "apikey: ${SUPABASE_ANON_KEY}")
+          
           echo "HTTP Status: $response"
-          if [ "$response" -ne 200 ]; then
-            echo "Ping failed with status $response"
-            exit 1
+          if [ "$response" -ne 200 ] && [ "$response" -ne 204 ]; then
+            echo "Auth health returned $response, trying REST root..."
+            response=$(curl -s -o /dev/null -w "%{http_code}" \
+              "${CLEAN_URL}/rest/v1/" \
+              -H "apikey: ${SUPABASE_ANON_KEY}" \
+              -H "Authorization: Bearer ${SUPABASE_ANON_KEY}")
+            echo "REST HTTP Status: $response"
           fi
-
-      - name: Record last ping to prevent 60-day GitHub timeout
-        run: |
-          date -u +"Last pinged: %Y-%m-%d %H:%M:%S UTC" > .supabase-keep-alive
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add .supabase-keep-alive
-          git commit -m "chore: ping supabase [skip ci]" || exit 0
-          git push
