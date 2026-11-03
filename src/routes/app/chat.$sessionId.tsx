@@ -97,6 +97,17 @@ async function buildContext(
   return combined;
 }
 
+function isCorruptedWarmupMessage(content: string): boolean {
+  const trimmed = content.trimStart().toLowerCase();
+  return (
+    content.includes('sessionStorage.setItem("warmup_') ||
+    content.includes('sessionStorage.removeItem("warmup_') ||
+    content.includes('window.parent.postMessage({ type: "warmup') ||
+    trimmed.startsWith("<!doctype html") ||
+    trimmed.startsWith("<html")
+  );
+}
+
 function SessionChat() {
   const { user } = Route.useRouteContext();
   const { sessionId } = Route.useParams();
@@ -120,12 +131,19 @@ function SessionChat() {
   const [startDate, setStartDate] = useState<string>(isoDay(monthAgo));
   const [endDate, setEndDate] = useState<string>(isoDay(today));
 
-  // Auto-scroll to bottom-most text when messages load, are sent, or stream in
-  const lastContent = messages.at(-1)?.content ?? "";
+  // Scroll to bottom only when opening a session, not while the AI streams or finishes its reply
+  const didInitialScrollRef = useRef(false);
   useEffect(() => {
-    if (hydrating || messages.length === 0) return;
-    scrollToBottom(loading ? "auto" : "smooth");
-  }, [hydrating, messages.length, lastContent, loading]);
+    didInitialScrollRef.current = false;
+  }, [sessionId]);
+
+  useEffect(() => {
+    if (hydrating || didInitialScrollRef.current) return;
+    didInitialScrollRef.current = true;
+    if (messages.length > 0) {
+      scrollToBottom("auto");
+    }
+  }, [hydrating, messages.length]);
 
   // Load prior messages for this session
   useEffect(() => {
@@ -156,6 +174,10 @@ function SessionChat() {
               const enc = await encryptText(key, r.content);
               void supabase.from("chat_messages").update({ content: enc.ct, iv: enc.iv }).eq("id", r.id);
             }
+            if (r.role === "assistant" && isCorruptedWarmupMessage(content)) {
+              void supabase.from("chat_messages").delete().eq("id", r.id);
+              return null;
+            }
             return { role: r.role as "user" | "assistant", content };
           }),
         );
@@ -163,17 +185,19 @@ function SessionChat() {
         setMessages(decoded.filter((m): m is Msg => m !== null));
       }
       setHydrating(false);
-      setTimeout(() => inputRef.current?.focus(), 0);
+      setTimeout(() => inputRef.current?.focus({ preventScroll: true }), 0);
     })();
     return () => { cancelled = true; };
   }, [sessionId, key]);
 
   const send = async (question: string) => {
     if (!question.trim() || loading) return;
-    const priorHistory = messages;
+    inputRef.current?.blur();
+    const priorHistory = messages.filter((m) => !isCorruptedWarmupMessage(m.content));
     const userMsg: Msg = { role: "user", content: question };
     setMessages((m) => [...m, userMsg]);
     setLoading(true);
+    scrollToBottom("smooth");
     try {
       if (!key) throw new Error("Unlock your vault to continue");
       // Persist user message, encrypted
@@ -203,9 +227,16 @@ function SessionChat() {
         },
         body: JSON.stringify({ question, context, name, history: priorHistory }),
       });
+      const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
       if (!response.ok) {
         const message = await response.text();
+        if (contentType.includes("text/html") || isCorruptedWarmupMessage(message)) {
+          throw new Error("The server is warming up — please try sending your message again in a moment.");
+        }
         throw new Error(message || "Could not reach the companion");
+      }
+      if (contentType.includes("text/html")) {
+        throw new Error("The server is warming up — please try sending your message again in a moment.");
       }
 
       const reader = response.body?.getReader();
@@ -218,13 +249,19 @@ function SessionChat() {
         const { done, value } = await reader.read();
         if (done) break;
         answer += decoder.decode(value, { stream: true });
+        if (isCorruptedWarmupMessage(answer)) {
+          void reader.cancel();
+          throw new Error("The server is warming up — please try sending your message again in a moment.");
+        }
         setMessages((current) => [
           ...current.slice(0, -1),
           { role: "assistant", content: answer },
         ]);
       }
       answer += decoder.decode();
-      if (!answer.trim()) throw new Error("The Companion returned an empty response");
+      if (!answer.trim() || isCorruptedWarmupMessage(answer)) {
+        throw new Error("The Companion returned an empty response");
+      }
 
       const encA = await encryptText(key, answer);
       await supabase.from("chat_messages").insert({
@@ -252,7 +289,6 @@ function SessionChat() {
       toast.error(e instanceof Error ? e.message : "Could not reach the companion");
     } finally {
       setLoading(false);
-      setTimeout(() => inputRef.current?.focus(), 0);
     }
   };
 
