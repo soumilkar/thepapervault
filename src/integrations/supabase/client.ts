@@ -63,6 +63,12 @@ function createUnconfiguredSupabaseClient(): SupabaseClient<Database> {
       async signInWithOAuth() {
         return { data: { provider: 'google', url: null }, error: new Error(MISSING_ENV_MESSAGE) };
       },
+      async signInWithIdToken() {
+        return { data: { user: null, session: null }, error: new Error(MISSING_ENV_MESSAGE) };
+      },
+      async exchangeCodeForSession() {
+        return { data: { user: null, session: null }, error: new Error(MISSING_ENV_MESSAGE) };
+      },
       async setSession() {
         return { data: { user: null, session: null }, error: new Error(MISSING_ENV_MESSAGE) };
       },

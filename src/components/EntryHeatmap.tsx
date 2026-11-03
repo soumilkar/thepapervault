@@ -1,6 +1,7 @@
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
+import { useDiaryMetrics } from "@/lib/diary-metrics";
 
 function isoDay(d: Date) {
   const y = d.getFullYear();
@@ -10,13 +11,12 @@ function isoDay(d: Date) {
 }
 
 function getYearGrid(year: number) {
-  // Build weeks (columns) starting Sunday, covering Jan 1 → Dec 31 of `year`.
   const jan1 = new Date(year, 0, 1);
   const dec31 = new Date(year, 11, 31);
   const start = new Date(jan1);
-  start.setDate(jan1.getDate() - jan1.getDay()); // back up to Sunday
+  start.setDate(jan1.getDate() - jan1.getDay());
   const end = new Date(dec31);
-  end.setDate(dec31.getDate() + (6 - dec31.getDay())); // forward to Saturday
+  end.setDate(dec31.getDate() + (6 - dec31.getDay()));
 
   const weeks: Date[][] = [];
   const cursor = new Date(start);
@@ -33,60 +33,52 @@ function getYearGrid(year: number) {
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
-export function EntryHeatmap({ userId }: { userId: string }) {
+export const EntryHeatmap = memo(function EntryHeatmap({ userId }: { userId: string }) {
   const year = new Date().getFullYear();
   const yearStart = `${year}-01-01`;
   const yearEnd = `${year}-12-31`;
 
-  const diary = useQuery({
-    queryKey: ["heatmap-diary", userId, year],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("diary_entries")
-        .select("entry_date")
-        .eq("user_id", userId)
-        .gte("entry_date", yearStart)
-        .lte("entry_date", yearEnd);
-      if (error) throw error;
-      return (data ?? []).map((d) => d.entry_date as string);
-    },
-  });
+  const diary = useDiaryMetrics(userId);
 
-  const blog = useQuery({
-    queryKey: ["heatmap-blog", userId, year],
+  const otherActivity = useQuery({
+    queryKey: ["heatmap-activity", userId, year],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("blog_posts")
-        .select("created_at")
-        .eq("user_id", userId)
-        .gte("created_at", `${yearStart}T00:00:00Z`)
-        .lte("created_at", `${yearEnd}T23:59:59Z`);
-      if (error) throw error;
-      return (data ?? []).map((d) => isoDay(new Date(d.created_at as string)));
-    },
-  });
-
-  const notes = useQuery({
-    queryKey: ["heatmap-notes", userId, year],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("notes")
-        .select("created_at")
-        .eq("user_id", userId)
-        .gte("created_at", `${yearStart}T00:00:00Z`)
-        .lte("created_at", `${yearEnd}T23:59:59Z`);
-      if (error) throw error;
-      return (data ?? []).map((d) => isoDay(new Date(d.created_at as string)));
+      const [b, n] = await Promise.all([
+        supabase
+          .from("blog_posts")
+          .select("created_at")
+          .eq("user_id", userId)
+          .gte("created_at", `${yearStart}T00:00:00Z`)
+          .lte("created_at", `${yearEnd}T23:59:59Z`),
+        supabase
+          .from("notes")
+          .select("created_at")
+          .eq("user_id", userId)
+          .gte("created_at", `${yearStart}T00:00:00Z`)
+          .lte("created_at", `${yearEnd}T23:59:59Z`),
+      ]);
+      return {
+        blog: (b.data ?? []).map((d) => isoDay(new Date(d.created_at as string))),
+        notes: (n.data ?? []).map((d) => isoDay(new Date(d.created_at as string))),
+      };
     },
   });
 
   const counts = useMemo(() => {
     const map = new Map<string, number>();
-    (diary.data ?? []).forEach((d) => map.set(d, (map.get(d) ?? 0) + 1));
-    (blog.data ?? []).forEach((d) => map.set(d, (map.get(d) ?? 0) + 1));
-    (notes.data ?? []).forEach((d) => map.set(d, (map.get(d) ?? 0) + 1));
+    for (const d of diary.data ?? []) {
+      if (d.entry_date >= yearStart && d.entry_date <= yearEnd) {
+        map.set(d.entry_date, (map.get(d.entry_date) ?? 0) + 1);
+      }
+    }
+    for (const d of otherActivity.data?.blog ?? []) {
+      map.set(d, (map.get(d) ?? 0) + 1);
+    }
+    for (const d of otherActivity.data?.notes ?? []) {
+      map.set(d, (map.get(d) ?? 0) + 1);
+    }
     return map;
-  }, [diary.data, blog.data, notes.data]);
+  }, [diary.data, otherActivity.data, yearStart, yearEnd]);
 
   const weeks = useMemo(() => getYearGrid(year), [year]);
   const maxCount = Math.max(1, ...Array.from(counts.values()));
@@ -98,7 +90,6 @@ export function EntryHeatmap({ userId }: { userId: string }) {
     return `oklch(${0.75 + t * 0.18} ${0.06 + t * 0.12} ${55 + t * 35} / ${0.35 + t * 0.65})`;
   };
 
-  // Month labels: place a label on the first week whose first day falls in that month
   const monthColLabels = useMemo(() => {
     const seen = new Set<number>();
     return weeks.map((week) => {
@@ -106,9 +97,8 @@ export function EntryHeatmap({ userId }: { userId: string }) {
       if (first.getFullYear() !== year) return "";
       const m = first.getMonth();
       if (seen.has(m)) return "";
-      // only label if the month's 1st actually lies in this week
       const containsFirstOfMonth = week.some(
-        (d) => d.getFullYear() === year && d.getDate() <= 7 && d.getMonth() === m
+        (d) => d.getFullYear() === year && d.getDate() <= 7 && d.getMonth() === m,
       );
       if (!containsFirstOfMonth) return "";
       seen.add(m);
@@ -116,7 +106,7 @@ export function EntryHeatmap({ userId }: { userId: string }) {
     });
   }, [weeks, year]);
 
-  const isLoading = diary.isLoading || blog.isLoading || notes.isLoading;
+  const isLoading = diary.isLoading || otherActivity.isLoading;
 
   return (
     <div className="paper-card p-5 overflow-hidden">
@@ -127,11 +117,12 @@ export function EntryHeatmap({ userId }: { userId: string }) {
       {isLoading ? (
         <p className="text-sm text-muted-foreground">gathering days...</p>
       ) : counts.size === 0 ? (
-        <p className="text-sm text-muted-foreground">Nothing yet in {year}. Every blank square is waiting for you.</p>
+        <p className="text-sm text-muted-foreground">
+          Nothing yet in {year}. Every blank square is waiting for you.
+        </p>
       ) : (
         <div className="overflow-x-auto">
           <div className="flex gap-1 min-w-max">
-            {/* Day labels */}
             <div className="flex flex-col gap-1 mr-2">
               <div className="h-3" />
               {Array.from({ length: 7 }).map((_, i) => (
@@ -165,4 +156,4 @@ export function EntryHeatmap({ userId }: { userId: string }) {
       )}
     </div>
   );
-}
+});

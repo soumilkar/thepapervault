@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import {
@@ -22,7 +22,12 @@ type Tab = "mine" | "community";
 const MEDIA_BUCKET = "media";
 
 async function uploadMedia(userId: string, file: File): Promise<string> {
-  const ALLOWED: Record<string, string> = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif" };
+  const ALLOWED: Record<string, string> = {
+    "image/jpeg": "jpg",
+    "image/png": "png",
+    "image/webp": "webp",
+    "image/gif": "gif",
+  };
   const ext = ALLOWED[file.type];
   if (!ext) throw new Error("Only JPEG, PNG, WebP, or GIF images are allowed");
   if (file.size > 5 * 1024 * 1024) throw new Error("Image must be smaller than 5 MB");
@@ -43,7 +48,11 @@ function BlogPage() {
   const qc = useQueryClient();
   type BlogDraft = { title: string; content: string; tags: string; music: SelectedTrack | null; notify: boolean };
   const [draft, setDraft, clearDraft, draftReady] = useBrowserDraft<BlogDraft>(`papervault:blog-draft:${user.id}`, {
-    title: "", content: "", tags: "", music: null, notify: true,
+    title: "",
+    content: "",
+    tags: "",
+    music: null,
+    notify: true,
   });
   const { title, content, tags, music, notify } = draft;
   const setTitle = (value: string) => setDraft((current) => ({ ...current, title: value }));
@@ -61,7 +70,10 @@ function BlogPage() {
   }, [draftReady]);
 
   useEffect(() => {
-    if (!image) { setImagePreview(null); return; }
+    if (!image) {
+      setImagePreview(null);
+      return;
+    }
     const url = URL.createObjectURL(image);
     setImagePreview(url);
     return () => URL.revokeObjectURL(url);
@@ -70,8 +82,11 @@ function BlogPage() {
   const mine = useQuery({
     queryKey: ["blog", "mine", user.id],
     queryFn: async () => {
-      const { data, error } = await supabase.from("blog_posts").select("*")
-        .eq("user_id", user.id).order("created_at", { ascending: false });
+      const { data, error } = await supabase
+        .from("blog_posts")
+        .select("*")
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: false });
       if (error) throw error;
       return data;
     },
@@ -81,8 +96,12 @@ function BlogPage() {
     queryKey: ["blog", "community", user.id],
     enabled: tab === "community",
     queryFn: async () => {
-      const { data: posts, error } = await supabase.from("blog_posts").select("*")
-        .neq("user_id", user.id).order("created_at", { ascending: false }).limit(100);
+      const { data: posts, error } = await supabase
+        .from("blog_posts")
+        .select("*")
+        .neq("user_id", user.id)
+        .order("created_at", { ascending: false })
+        .limit(100);
       if (error) throw error;
       const ids = Array.from(new Set((posts ?? []).map((p) => p.user_id)));
       const nameMap = new Map<string, string>();
@@ -96,11 +115,16 @@ function BlogPage() {
 
   const create = useMutation({
     mutationFn: async () => {
-      const tagArr = tags.split(",").map((t) => t.trim()).filter(Boolean);
+      const tagArr = tags
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean);
       let imagePath: string | null = null;
       if (image) imagePath = await uploadMedia(user.id, image);
       const { error } = await supabase.from("blog_posts").insert({
-        user_id: user.id, title, content,
+        user_id: user.id,
+        title,
+        content,
         tags: tagArr.length ? tagArr : null,
         notify_on_comment: notify,
         image_url: imagePath,
@@ -113,33 +137,62 @@ function BlogPage() {
       if (error) throw error;
     },
     onSuccess: () => {
-       clearDraft(); setImage(null); setOpen(false);
+      clearDraft();
+      setImage(null);
+      setOpen(false);
       toast.success("Blog published");
       qc.invalidateQueries({ queryKey: ["blog"] });
       qc.invalidateQueries({ queryKey: ["dashboard-counts"] });
+      qc.invalidateQueries({ queryKey: ["heatmap-activity"] });
     },
     onError: (e: Error) => toast.error(e.message),
   });
 
   const remove = useMutation({
-    mutationFn: async (id: string) => {
-      const { error } = await supabase.from("blog_posts").delete().eq("id", id);
+    mutationFn: async (post: { id: string; image_url?: string | null }) => {
+      if (post.image_url) {
+        await supabase.storage.from(MEDIA_BUCKET).remove([post.image_url]);
+      }
+      const { error } = await supabase.from("blog_posts").delete().eq("id", post.id);
       if (error) throw error;
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["blog"] });
       qc.invalidateQueries({ queryKey: ["dashboard-counts"] });
+      qc.invalidateQueries({ queryKey: ["heatmap-activity"] });
     },
   });
 
   const update = useMutation({
-    mutationFn: async (vars: { id: string; title: string; content: string; tags: string; newImage?: File | null; clearImage?: boolean }) => {
-      const tagArr = vars.tags.split(",").map((t) => t.trim()).filter(Boolean);
+    mutationFn: async (vars: {
+      id: string;
+      oldImageUrl?: string | null;
+      title: string;
+      content: string;
+      tags: string;
+      newImage?: File | null;
+      clearImage?: boolean;
+    }) => {
+      const tagArr = vars.tags
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean);
       const patch: Record<string, unknown> = {
-        title: vars.title, content: vars.content, tags: tagArr.length ? tagArr : null,
+        title: vars.title,
+        content: vars.content,
+        tags: tagArr.length ? tagArr : null,
       };
-      if (vars.newImage) patch.image_url = await uploadMedia(user.id, vars.newImage);
-      else if (vars.clearImage) patch.image_url = null;
+      if (vars.newImage) {
+        if (vars.oldImageUrl) {
+          await supabase.storage.from(MEDIA_BUCKET).remove([vars.oldImageUrl]);
+        }
+        patch.image_url = await uploadMedia(user.id, vars.newImage);
+      } else if (vars.clearImage) {
+        if (vars.oldImageUrl) {
+          await supabase.storage.from(MEDIA_BUCKET).remove([vars.oldImageUrl]);
+        }
+        patch.image_url = null;
+      }
       const { error } = await supabase.from("blog_posts").update(patch as never).eq("id", vars.id);
       if (error) throw error;
     },
@@ -152,10 +205,16 @@ function BlogPage() {
 
   const exportMine = () => {
     const rows = mine.data ?? [];
-    if (!rows.length) { toast.error("No posts to export yet"); return; }
-    const txt = rows.map((p: any) =>
-      `${new Date(p.created_at).toISOString().slice(0, 10)} — ${p.title}${p.tags?.length ? `  [${p.tags.join(", ")}]` : ""}\n${"=".repeat(60)}\n${p.content}\n`
-    ).join("\n\n");
+    if (!rows.length) {
+      toast.error("No posts to export yet");
+      return;
+    }
+    const txt = rows
+      .map(
+        (p: any) =>
+          `${new Date(p.created_at).toISOString().slice(0, 10)} — ${p.title}${p.tags?.length ? `  [${p.tags.join(", ")}]` : ""}\n${"=".repeat(60)}\n${p.content}\n`,
+      )
+      .join("\n\n");
     downloadTextFile(`blog-${new Date().toISOString().slice(0, 10)}.txt`, txt);
   };
 
@@ -167,10 +226,16 @@ function BlogPage() {
           <h1 className="font-serif text-4xl text-primary">Blog</h1>
         </div>
         <div className="flex shrink-0 gap-2">
-          <button onClick={exportMine} className="flex items-center gap-1.5 rounded-md border border-border bg-card px-3 py-2 text-sm text-primary hover:bg-secondary">
+          <button
+            onClick={exportMine}
+            className="flex items-center gap-1.5 rounded-md border border-border bg-card px-3 py-2 text-sm text-primary hover:bg-secondary"
+          >
             <Download className="size-4" /> Export
           </button>
-          <button onClick={() => setOpen(!open)} className="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground">
+          <button
+            onClick={() => setOpen(!open)}
+            className="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground"
+          >
             {open ? "Cancel" : "Write new post"}
           </button>
         </div>
@@ -178,28 +243,41 @@ function BlogPage() {
 
       {open && (
         <form
-          onSubmit={(e) => { e.preventDefault(); if (title.trim() && content.trim()) create.mutate(); }}
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (title.trim() && content.trim()) create.mutate();
+          }}
           className="paper-card space-y-3 p-6"
         >
           <input
-            value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Post title" required
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="Post title"
+            required
             className="w-full bg-transparent font-serif text-3xl outline-none placeholder:text-muted-foreground/60"
           />
           <input
-            value={tags} onChange={(e) => setTags(e.target.value)} placeholder="tags, separated, by, commas"
+            value={tags}
+            onChange={(e) => setTags(e.target.value)}
+            placeholder="tags, separated, by, commas"
             className="w-full bg-transparent text-sm text-accent outline-none placeholder:text-muted-foreground/60"
           />
           <textarea
-            value={content} onChange={(e) => setContent(e.target.value)}
+            value={content}
+            onChange={(e) => setContent(e.target.value)}
             placeholder="Write your story... (markdown supported: **bold**, _italic_, # heading, lists, links)"
-            rows={12} required
+            rows={12}
+            required
             className="w-full resize-none bg-transparent leading-relaxed outline-none placeholder:text-muted-foreground/60"
           />
           {imagePreview && (
             <div className="relative inline-block">
               <img src={imagePreview} alt="preview" className="max-h-56 rounded-md border border-border" />
-              <button type="button" onClick={() => setImage(null)}
-                className="absolute -right-2 -top-2 rounded-full bg-background p-1 shadow">
+              <button
+                type="button"
+                onClick={() => setImage(null)}
+                className="absolute -right-2 -top-2 rounded-full bg-background p-1 shadow"
+              >
                 <X className="size-4" />
               </button>
             </div>
@@ -208,7 +286,10 @@ function BlogPage() {
             <label className="flex cursor-pointer items-center gap-2 text-sm text-accent hover:text-primary">
               <ImagePlus className="size-4" />
               <span>{image ? "Change image" : "Attach an image"}</span>
-              <input type="file" accept="image/*" className="hidden"
+              <input
+                type="file"
+                accept="image/*"
+                className="hidden"
                 onChange={(e) => {
                   const f = e.target.files?.[0];
                   if (f) {
@@ -216,19 +297,29 @@ function BlogPage() {
                     else setImage(f);
                   }
                   e.currentTarget.value = "";
-                }} />
+                }}
+              />
             </label>
           </div>
           <MusicSearch selected={music} onChange={setMusic} />
           <label className="flex cursor-pointer items-center gap-2 text-sm text-muted-foreground">
-            <input type="checkbox" checked={notify} onChange={(e) => setNotify(e.target.checked)} className="size-4 accent-primary" />
+            <input
+              type="checkbox"
+              checked={notify}
+              onChange={(e) => setNotify(e.target.checked)}
+              className="size-4 accent-primary"
+            />
             <span className="flex items-center gap-1">
               {notify ? <Bell className="size-3.5 text-accent" /> : <BellOff className="size-3.5" />}
               Email me when someone comments on this post
             </span>
           </label>
           <div className="flex justify-end">
-            <button type="submit" disabled={create.isPending} className="rounded-md bg-primary px-5 py-2 text-sm text-primary-foreground disabled:opacity-50">
+            <button
+              type="submit"
+              disabled={create.isPending}
+              className="rounded-md bg-primary px-5 py-2 text-sm text-primary-foreground disabled:opacity-50"
+            >
               {create.isPending ? "Publishing..." : "Publish"}
             </button>
           </div>
@@ -236,8 +327,18 @@ function BlogPage() {
       )}
 
       <div className="flex gap-2 border-b border-border">
-        <TabBtn active={tab === "mine"} onClick={() => setTab("mine")} icon={<BookOpen className="size-4" />} label="My Blogs" />
-        <TabBtn active={tab === "community"} onClick={() => setTab("community")} icon={<Users className="size-4" />} label="Community" />
+        <TabBtn
+          active={tab === "mine"}
+          onClick={() => setTab("mine")}
+          icon={<BookOpen className="size-4" />}
+          label="My Blogs"
+        />
+        <TabBtn
+          active={tab === "community"}
+          onClick={() => setTab("community")}
+          icon={<Users className="size-4" />}
+          label="Community"
+        />
       </div>
 
       {tab === "mine" ? (
@@ -250,8 +351,8 @@ function BlogPage() {
               post={p}
               currentUserId={user.id}
               isOwner
-              onDelete={() => remove.mutate(p.id)}
-              onSave={(vals) => update.mutate({ id: p.id, ...vals })}
+              onDelete={() => remove.mutate({ id: p.id, image_url: p.image_url })}
+              onSave={(vals) => update.mutate({ id: p.id, oldImageUrl: p.image_url, ...vals })}
             />
           ))}
         </div>
@@ -268,30 +369,73 @@ function BlogPage() {
   );
 }
 
-function TabBtn({ active, onClick, icon, label }: { active: boolean; onClick: () => void; icon: React.ReactNode; label: string }) {
+function TabBtn({
+  active,
+  onClick,
+  icon,
+  label,
+}: {
+  active: boolean;
+  onClick: () => void;
+  icon: React.ReactNode;
+  label: string;
+}) {
   return (
     <button
       onClick={onClick}
-      className={`flex items-center gap-2 border-b-2 px-4 py-2 text-sm transition ${active ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-primary"}`}
+      className={`flex items-center gap-2 border-b-2 px-4 py-2 text-sm transition ${
+        active ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-primary"
+      }`}
     >
-      {icon}{label}
+      {icon}
+      {label}
     </button>
   );
 }
 
 function BlogImage({ path }: { path: string }) {
   const [src, setSrc] = useState<string | null>(null);
-  useEffect(() => { let cancelled = false; getMediaUrl(path).then((u) => { if (!cancelled) setSrc(u); }); return () => { cancelled = true; }; }, [path]);
+  useEffect(() => {
+    let cancelled = false;
+    getMediaUrl(path).then((u) => {
+      if (!cancelled) setSrc(u);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [path]);
   if (!src) return null;
-  return <img src={src} alt="" loading="lazy" className="mt-4 max-h-[28rem] w-full rounded-md border border-border object-contain" />;
+  return (
+    <img
+      src={src}
+      alt=""
+      loading="lazy"
+      decoding="async"
+      className="mt-4 max-h-[28rem] w-full rounded-md border border-border object-contain"
+    />
+  );
 }
 
-function BlogCard({
-  post: p, isOwner, author, currentUserId, onDelete, onSave,
+const BlogCard = memo(function BlogCard({
+  post: p,
+  isOwner,
+  author,
+  currentUserId,
+  onDelete,
+  onSave,
 }: {
-  post: any; isOwner: boolean; author?: string; currentUserId: string;
+  post: any;
+  isOwner: boolean;
+  author?: string;
+  currentUserId: string;
   onDelete?: () => void;
-  onSave?: (vals: { title: string; content: string; tags: string; newImage?: File | null; clearImage?: boolean }) => void;
+  onSave?: (vals: {
+    title: string;
+    content: string;
+    tags: string;
+    newImage?: File | null;
+    clearImage?: boolean;
+  }) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -305,7 +449,10 @@ function BlogCard({
   const [confirmDel, setConfirmDel] = useState(false);
 
   useEffect(() => {
-    if (!eImage) { setEImagePreview(null); return; }
+    if (!eImage) {
+      setEImagePreview(null);
+      return;
+    }
     const url = URL.createObjectURL(eImage);
     setEImagePreview(url);
     return () => URL.revokeObjectURL(url);
@@ -314,50 +461,99 @@ function BlogCard({
   const preview = p.content.length > 220 ? p.content.slice(0, 220).trimEnd() + "…" : p.content;
 
   const startEdit = () => {
-    setETitle(p.title); setEContent(p.content); setETags((p.tags ?? []).join(", "));
-    setEImage(null); setEClearImage(false);
-    setEditing(true); setOpen(true);
+    setETitle(p.title);
+    setEContent(p.content);
+    setETags((p.tags ?? []).join(", "));
+    setEImage(null);
+    setEClearImage(false);
+    setEditing(true);
+    setOpen(true);
   };
 
   if (editing) {
     return (
       <article className="paper-card space-y-3 p-6">
-        <input value={eTitle} onChange={(e) => setETitle(e.target.value)}
-          className="w-full bg-transparent font-serif text-2xl outline-none" />
-        <input value={eTags} onChange={(e) => setETags(e.target.value)} placeholder="tags, separated, by, commas"
-          className="w-full bg-transparent text-sm text-accent outline-none" />
-        <textarea value={eContent} onChange={(e) => setEContent(e.target.value)} rows={10}
-          className="w-full resize-none bg-transparent leading-relaxed outline-none" />
+        <input
+          value={eTitle}
+          onChange={(e) => setETitle(e.target.value)}
+          className="w-full bg-transparent font-serif text-2xl outline-none"
+        />
+        <input
+          value={eTags}
+          onChange={(e) => setETags(e.target.value)}
+          placeholder="tags, separated, by, commas"
+          className="w-full bg-transparent text-sm text-accent outline-none"
+        />
+        <textarea
+          value={eContent}
+          onChange={(e) => setEContent(e.target.value)}
+          rows={10}
+          className="w-full resize-none bg-transparent leading-relaxed outline-none"
+        />
 
         {eImagePreview ? (
           <div className="relative inline-block">
             <img src={eImagePreview} className="max-h-48 rounded-md border border-border" alt="" />
-            <button type="button" onClick={() => setEImage(null)} className="absolute -right-2 -top-2 rounded-full bg-background p-1 shadow"><X className="size-4" /></button>
+            <button
+              type="button"
+              onClick={() => setEImage(null)}
+              className="absolute -right-2 -top-2 rounded-full bg-background p-1 shadow"
+            >
+              <X className="size-4" />
+            </button>
           </div>
         ) : p.image_url && !eClearImage ? (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <span>Current image kept.</span>
-            <button type="button" onClick={() => setEClearImage(true)} className="text-destructive hover:underline">Remove</button>
+            <button
+              type="button"
+              onClick={() => setEClearImage(true)}
+              className="text-destructive hover:underline"
+            >
+              Remove
+            </button>
           </div>
         ) : null}
 
         <label className="flex cursor-pointer items-center gap-2 text-sm text-accent hover:text-primary">
           <ImagePlus className="size-4" />
-          <span>{eImage ? "Change image" : (p.image_url && !eClearImage ? "Replace image" : "Attach image")}</span>
-          <input type="file" accept="image/*" className="hidden"
+          <span>{eImage ? "Change image" : p.image_url && !eClearImage ? "Replace image" : "Attach image"}</span>
+          <input
+            type="file"
+            accept="image/*"
+            className="hidden"
             onChange={(e) => {
               const f = e.target.files?.[0];
-              if (f) { if (f.size > 5 * 1024 * 1024) toast.error("Image must be smaller than 5 MB"); else { setEImage(f); setEClearImage(false); } }
+              if (f) {
+                if (f.size > 5 * 1024 * 1024) toast.error("Image must be smaller than 5 MB");
+                else {
+                  setEImage(f);
+                  setEClearImage(false);
+                }
+              }
               e.currentTarget.value = "";
-            }} />
+            }}
+          />
         </label>
 
         <div className="flex justify-end gap-2">
-          <button onClick={() => setEditing(false)} className="flex items-center gap-1 rounded-md border border-border px-3 py-1.5 text-sm">
+          <button
+            onClick={() => setEditing(false)}
+            className="flex items-center gap-1 rounded-md border border-border px-3 py-1.5 text-sm"
+          >
             <X className="size-4" /> Cancel
           </button>
           <button
-            onClick={() => { onSave?.({ title: eTitle, content: eContent, tags: eTags, newImage: eImage, clearImage: eClearImage }); setEditing(false); }}
+            onClick={() => {
+              onSave?.({
+                title: eTitle,
+                content: eContent,
+                tags: eTags,
+                newImage: eImage,
+                clearImage: eClearImage,
+              });
+              setEditing(false);
+            }}
             className="flex items-center gap-1 rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground"
           >
             <Check className="size-4" /> Save
@@ -370,7 +566,10 @@ function BlogCard({
   return (
     <article className="paper-card p-6">
       <header className="grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-3">
-        <button onClick={() => setOpen((o) => !o)} className="min-w-0 text-left font-serif text-2xl text-primary hover:underline underline-offset-4">
+        <button
+          onClick={() => setOpen((o) => !o)}
+          className="min-w-0 text-left font-serif text-2xl text-primary hover:underline underline-offset-4"
+        >
           <span className="break-words">{p.title}</span>
         </button>
         <div className="flex shrink-0 items-center gap-3">
@@ -380,7 +579,11 @@ function BlogCard({
               <button onClick={startEdit} className="text-muted-foreground hover:text-primary" aria-label="Edit">
                 <Pencil className="size-4" />
               </button>
-              <button onClick={() => setConfirmDel(true)} className="text-muted-foreground hover:text-destructive" aria-label="Delete">
+              <button
+                onClick={() => setConfirmDel(true)}
+                className="text-muted-foreground hover:text-destructive"
+                aria-label="Delete"
+              >
                 <Trash2 className="size-4" />
               </button>
             </>
@@ -390,7 +593,11 @@ function BlogCard({
       {author && <p className="mt-1 text-sm text-accent">by {author}</p>}
       {p.tags && p.tags.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-2">
-          {p.tags.map((t: string) => <span key={t} className="rounded-full bg-secondary px-2 py-0.5 text-xs text-secondary-foreground">#{t}</span>)}
+          {p.tags.map((t: string) => (
+            <span key={t} className="rounded-full bg-secondary px-2 py-0.5 text-xs text-secondary-foreground">
+              #{t}
+            </span>
+          ))}
         </div>
       )}
       <div className="mt-3">
@@ -406,7 +613,10 @@ function BlogCard({
 
       <div className="mt-4 flex items-center gap-4 border-t border-border/60 pt-3">
         <LikeButton postId={p.id} currentUserId={currentUserId} />
-        <button onClick={() => setShowComments((s) => !s)} className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-primary">
+        <button
+          onClick={() => setShowComments((s) => !s)}
+          className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-primary"
+        >
           <MessageCircle className="size-4" /> Comments
         </button>
       </div>
@@ -414,33 +624,43 @@ function BlogCard({
       {showComments && <Comments postId={p.id} postAuthorId={p.user_id} currentUserId={currentUserId} />}
 
       <ConfirmDialog
-        open={confirmDel} onOpenChange={setConfirmDel}
+        open={confirmDel}
+        onOpenChange={setConfirmDel}
         title="Delete this blog post?"
         description="This can't be undone. Comments and likes on it will also be removed."
         confirmText="Delete post"
-        onConfirm={() => { onDelete?.(); setConfirmDel(false); }}
+        onConfirm={() => {
+          onDelete?.();
+          setConfirmDel(false);
+        }}
       />
     </article>
   );
-}
+});
 
 function LikeButton({ postId, currentUserId }: { postId: string; currentUserId: string }) {
   const qc = useQueryClient();
   const likes = useQuery({
     queryKey: ["likes", postId],
     queryFn: async () => {
-      const [{ count }, { data: mine }] = await Promise.all([
-        supabase.from("blog_likes").select("id", { count: "exact", head: true }).eq("post_id", postId),
-        supabase.from("blog_likes").select("id").eq("post_id", postId).eq("user_id", currentUserId).maybeSingle(),
-      ]);
-      return { count: count ?? 0, liked: !!mine };
+      const { data, error } = await supabase.from("blog_likes").select("user_id").eq("post_id", postId);
+      if (error) throw error;
+      const rows = data ?? [];
+      return {
+        count: rows.length,
+        liked: rows.some((r) => r.user_id === currentUserId),
+      };
     },
   });
 
   const toggle = useMutation({
     mutationFn: async () => {
       if (likes.data?.liked) {
-        const { error } = await supabase.from("blog_likes").delete().eq("post_id", postId).eq("user_id", currentUserId);
+        const { error } = await supabase
+          .from("blog_likes")
+          .delete()
+          .eq("post_id", postId)
+          .eq("user_id", currentUserId);
         if (error) throw error;
       } else {
         const { error } = await supabase.from("blog_likes").insert({ post_id: postId, user_id: currentUserId });
@@ -455,7 +675,9 @@ function LikeButton({ postId, currentUserId }: { postId: string; currentUserId: 
   return (
     <button
       onClick={() => toggle.mutate()}
-      className={`flex items-center gap-1.5 text-sm transition ${liked ? "text-destructive" : "text-muted-foreground hover:text-destructive"}`}
+      className={`flex items-center gap-1.5 text-sm transition ${
+        liked ? "text-destructive" : "text-muted-foreground hover:text-destructive"
+      }`}
     >
       <Heart className={`size-4 ${liked ? "fill-current" : ""}`} />
       {likes.data?.count ?? 0}
@@ -474,14 +696,26 @@ type CommentNode = {
   children: CommentNode[];
 };
 
-function Comments({ postId, postAuthorId, currentUserId }: { postId: string; postAuthorId: string; currentUserId: string }) {
+function Comments({
+  postId,
+  postAuthorId,
+  currentUserId,
+}: {
+  postId: string;
+  postAuthorId: string;
+  currentUserId: string;
+}) {
   const qc = useQueryClient();
   const [text, setText] = useState("");
 
   const comments = useQuery({
     queryKey: ["comments", postId],
     queryFn: async () => {
-      const { data, error } = await supabase.from("blog_comments").select("*").eq("post_id", postId).order("created_at", { ascending: true });
+      const { data, error } = await supabase
+        .from("blog_comments")
+        .select("*")
+        .eq("post_id", postId)
+        .order("created_at", { ascending: true });
       if (error) throw error;
       const ids = Array.from(new Set((data ?? []).map((c) => c.user_id)));
       const nameMap = new Map<string, string>();
@@ -508,18 +742,26 @@ function Comments({ postId, postAuthorId, currentUserId }: { postId: string; pos
   const add = useMutation({
     mutationFn: async (vars: { content: string; parent_id: string | null }) => {
       const { error } = await supabase.from("blog_comments").insert({
-        post_id: postId, user_id: currentUserId,
-        content: vars.content.trim(), parent_id: vars.parent_id,
+        post_id: postId,
+        user_id: currentUserId,
+        content: vars.content.trim(),
+        parent_id: vars.parent_id,
       });
       if (error) throw error;
     },
-    onSuccess: () => { setText(""); qc.invalidateQueries({ queryKey: ["comments", postId] }); },
+    onSuccess: () => {
+      setText("");
+      qc.invalidateQueries({ queryKey: ["comments", postId] });
+    },
     onError: (e: Error) => toast.error(e.message),
   });
 
   const edit = useMutation({
     mutationFn: async (vars: { id: string; content: string }) => {
-      const { error } = await supabase.from("blog_comments").update({ content: vars.content.trim() }).eq("id", vars.id);
+      const { error } = await supabase
+        .from("blog_comments")
+        .update({ content: vars.content.trim() })
+        .eq("id", vars.id);
       if (error) throw error;
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["comments", postId] }),
@@ -538,22 +780,35 @@ function Comments({ postId, postAuthorId, currentUserId }: { postId: string; pos
     <div className="mt-3 space-y-3 border-t border-border/60 pt-3">
       {tree.length === 0 && <p className="text-sm text-muted-foreground">Be the first to comment.</p>}
       {tree.map((c) => (
-        <CommentItem key={c.id} node={c} postAuthorId={postAuthorId} currentUserId={currentUserId} depth={0}
+        <CommentItem
+          key={c.id}
+          node={c}
+          postAuthorId={postAuthorId}
+          currentUserId={currentUserId}
+          depth={0}
           onReply={(parentId, content) => add.mutate({ content, parent_id: parentId })}
           onEdit={(id, content) => edit.mutate({ id, content })}
           onDelete={(id) => del.mutate(id)}
         />
       ))}
       <form
-        onSubmit={(e) => { e.preventDefault(); if (text.trim()) add.mutate({ content: text, parent_id: null }); }}
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (text.trim()) add.mutate({ content: text, parent_id: null });
+        }}
         className="flex gap-2"
       >
         <input
-          value={text} onChange={(e) => setText(e.target.value)}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
           placeholder="Write a comment..."
           className="flex-1 rounded-md border border-input bg-card px-3 py-1.5 text-sm outline-none focus:border-ring"
         />
-        <button type="submit" disabled={!text.trim() || add.isPending} className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground disabled:opacity-50">
+        <button
+          type="submit"
+          disabled={!text.trim() || add.isPending}
+          className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground disabled:opacity-50"
+        >
           Post
         </button>
       </form>
@@ -562,9 +817,18 @@ function Comments({ postId, postAuthorId, currentUserId }: { postId: string; pos
 }
 
 function CommentItem({
-  node: c, postAuthorId, currentUserId, depth, onReply, onEdit, onDelete,
+  node: c,
+  postAuthorId,
+  currentUserId,
+  depth,
+  onReply,
+  onEdit,
+  onDelete,
 }: {
-  node: CommentNode; postAuthorId: string; currentUserId: string; depth: number;
+  node: CommentNode;
+  postAuthorId: string;
+  currentUserId: string;
+  depth: number;
   onReply: (parentId: string, content: string) => void;
   onEdit: (id: string, content: string) => void;
   onDelete: (id: string) => void;
@@ -586,15 +850,27 @@ function CommentItem({
           {c.author}
           {isAuthor && <span className="text-accent">/Author</span>}
           <span className="ml-2 font-normal text-muted-foreground">
-            {new Date(c.created_at).toLocaleDateString()}{edited && " · edited"}
+            {new Date(c.created_at).toLocaleDateString()}
+            {edited && " · edited"}
           </span>
         </p>
         {isMine && !editing && (
           <div className="flex items-center gap-2">
-            <button onClick={() => { setEditText(c.content); setEditing(true); }} className="text-muted-foreground hover:text-primary" aria-label="Edit comment">
+            <button
+              onClick={() => {
+                setEditText(c.content);
+                setEditing(true);
+              }}
+              className="text-muted-foreground hover:text-primary"
+              aria-label="Edit comment"
+            >
               <Pencil className="size-3.5" />
             </button>
-            <button onClick={() => setConfirmDel(true)} className="text-muted-foreground hover:text-destructive" aria-label="Delete comment">
+            <button
+              onClick={() => setConfirmDel(true)}
+              className="text-muted-foreground hover:text-destructive"
+              aria-label="Delete comment"
+            >
               <Trash2 className="size-3.5" />
             </button>
           </div>
@@ -602,16 +878,32 @@ function CommentItem({
       </div>
       {editing ? (
         <form
-          onSubmit={(e) => { e.preventDefault(); if (editText.trim()) { onEdit(c.id, editText); setEditing(false); } }}
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (editText.trim()) {
+              onEdit(c.id, editText);
+              setEditing(false);
+            }
+          }}
           className="mt-1 space-y-2"
         >
           <textarea
-            value={editText} onChange={(e) => setEditText(e.target.value)} rows={2}
+            value={editText}
+            onChange={(e) => setEditText(e.target.value)}
+            rows={2}
             className="w-full resize-none rounded-md border border-input bg-card px-2 py-1 text-sm outline-none focus:border-ring"
           />
           <div className="flex justify-end gap-2">
-            <button type="button" onClick={() => setEditing(false)} className="rounded-md border border-border px-2.5 py-1 text-xs">Cancel</button>
-            <button type="submit" className="rounded-md bg-primary px-2.5 py-1 text-xs text-primary-foreground">Save</button>
+            <button
+              type="button"
+              onClick={() => setEditing(false)}
+              className="rounded-md border border-border px-2.5 py-1 text-xs"
+            >
+              Cancel
+            </button>
+            <button type="submit" className="rounded-md bg-primary px-2.5 py-1 text-xs text-primary-foreground">
+              Save
+            </button>
           </div>
         </form>
       ) : (
@@ -621,7 +913,10 @@ function CommentItem({
       )}
       <div className="mt-1.5 flex items-center gap-3">
         <CommentVotes commentId={c.id} currentUserId={currentUserId} />
-        <button onClick={() => setReplying((r) => !r)} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-primary">
+        <button
+          onClick={() => setReplying((r) => !r)}
+          className="flex items-center gap-1 text-xs text-muted-foreground hover:text-primary"
+        >
           <CornerDownRight className="size-3" /> Reply
         </button>
       </div>
@@ -631,31 +926,49 @@ function CommentItem({
             e.preventDefault();
             if (!replyText.trim()) return;
             onReply(c.id, replyText);
-            setReplyText(""); setReplying(false);
+            setReplyText("");
+            setReplying(false);
           }}
           className="mt-2 flex gap-2"
         >
           <input
-            autoFocus value={replyText} onChange={(e) => setReplyText(e.target.value)}
+            autoFocus
+            value={replyText}
+            onChange={(e) => setReplyText(e.target.value)}
             placeholder={`Reply to ${c.author}...`}
             className="flex-1 rounded-md border border-input bg-card px-2 py-1 text-xs outline-none focus:border-ring"
           />
-          <button type="submit" className="rounded-md bg-primary px-2.5 py-1 text-xs text-primary-foreground">Send</button>
+          <button type="submit" className="rounded-md bg-primary px-2.5 py-1 text-xs text-primary-foreground">
+            Send
+          </button>
         </form>
       )}
       {c.children.length > 0 && (
         <div className="mt-2 space-y-2">
           {c.children.map((child) => (
-            <CommentItem key={child.id} node={child} postAuthorId={postAuthorId} currentUserId={currentUserId} depth={depth + 1}
-              onReply={onReply} onEdit={onEdit} onDelete={onDelete} />
+            <CommentItem
+              key={child.id}
+              node={child}
+              postAuthorId={postAuthorId}
+              currentUserId={currentUserId}
+              depth={depth + 1}
+              onReply={onReply}
+              onEdit={onEdit}
+              onDelete={onDelete}
+            />
           ))}
         </div>
       )}
       <ConfirmDialog
-        open={confirmDel} onOpenChange={setConfirmDel}
-        title="Delete this comment?" description="This can't be undone."
+        open={confirmDel}
+        onOpenChange={setConfirmDel}
+        title="Delete this comment?"
+        description="This can't be undone."
         confirmText="Delete"
-        onConfirm={() => { onDelete(c.id); setConfirmDel(false); }}
+        onConfirm={() => {
+          onDelete(c.id);
+          setConfirmDel(false);
+        }}
       />
     </div>
   );
@@ -666,12 +979,15 @@ function CommentVotes({ commentId, currentUserId }: { commentId: string; current
   const votes = useQuery({
     queryKey: ["cvotes", commentId],
     queryFn: async () => {
-      const [{ data: all }, { data: mine }] = await Promise.all([
-        supabase.from("comment_votes").select("value").eq("comment_id", commentId),
-        supabase.from("comment_votes").select("value").eq("comment_id", commentId).eq("user_id", currentUserId).maybeSingle(),
-      ]);
-      const score = (all ?? []).reduce((s, v: any) => s + v.value, 0);
-      return { score, mine: (mine?.value as 1 | -1 | undefined) ?? 0 };
+      const { data, error } = await supabase
+        .from("comment_votes")
+        .select("user_id,value")
+        .eq("comment_id", commentId);
+      if (error) throw error;
+      const rows = data ?? [];
+      const score = rows.reduce((s, v: any) => s + v.value, 0);
+      const mineRow = rows.find((v: any) => v.user_id === currentUserId);
+      return { score, mine: (mineRow?.value as 1 | -1 | undefined) ?? 0 };
     },
   });
 
@@ -679,13 +995,23 @@ function CommentVotes({ commentId, currentUserId }: { commentId: string; current
     mutationFn: async (v: 1 | -1) => {
       const current = votes.data?.mine ?? 0;
       if (current === v) {
-        const { error } = await supabase.from("comment_votes").delete().eq("comment_id", commentId).eq("user_id", currentUserId);
+        const { error } = await supabase
+          .from("comment_votes")
+          .delete()
+          .eq("comment_id", commentId)
+          .eq("user_id", currentUserId);
         if (error) throw error;
       } else if (current === 0) {
-        const { error } = await supabase.from("comment_votes").insert({ comment_id: commentId, user_id: currentUserId, value: v });
+        const { error } = await supabase
+          .from("comment_votes")
+          .insert({ comment_id: commentId, user_id: currentUserId, value: v });
         if (error) throw error;
       } else {
-        const { error } = await supabase.from("comment_votes").update({ value: v }).eq("comment_id", commentId).eq("user_id", currentUserId);
+        const { error } = await supabase
+          .from("comment_votes")
+          .update({ value: v })
+          .eq("comment_id", commentId)
+          .eq("user_id", currentUserId);
         if (error) throw error;
       }
     },
@@ -696,11 +1022,21 @@ function CommentVotes({ commentId, currentUserId }: { commentId: string; current
   const mine = votes.data?.mine ?? 0;
   return (
     <div className="flex items-center gap-0.5 text-xs">
-      <button onClick={() => cast.mutate(1)} className={`rounded p-0.5 transition ${mine === 1 ? "text-accent" : "text-muted-foreground hover:text-accent"}`} aria-label="Upvote">
+      <button
+        onClick={() => cast.mutate(1)}
+        className={`rounded p-0.5 transition ${mine === 1 ? "text-accent" : "text-muted-foreground hover:text-accent"}`}
+        aria-label="Upvote"
+      >
         <ArrowUp className="size-3.5" />
       </button>
       <span className="min-w-4 text-center tabular-nums">{votes.data?.score ?? 0}</span>
-      <button onClick={() => cast.mutate(-1)} className={`rounded p-0.5 transition ${mine === -1 ? "text-destructive" : "text-muted-foreground hover:text-destructive"}`} aria-label="Downvote">
+      <button
+        onClick={() => cast.mutate(-1)}
+        className={`rounded p-0.5 transition ${
+          mine === -1 ? "text-destructive" : "text-muted-foreground hover:text-destructive"
+        }`}
+        aria-label="Downvote"
+      >
         <ArrowDown className="size-3.5" />
       </button>
     </div>

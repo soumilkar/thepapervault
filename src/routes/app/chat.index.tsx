@@ -3,6 +3,8 @@ import { useEffect, useState } from "react";
 import { Sparkles } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import { useVault } from "@/lib/vault";
+import { encryptText } from "@/lib/crypto";
 import { CHAT_SESSIONS_UPDATED } from "./chat";
 
 export const Route = createFileRoute("/app/chat/")({
@@ -11,10 +13,12 @@ export const Route = createFileRoute("/app/chat/")({
 
 function ChatIndex() {
   const { user } = Route.useRouteContext();
+  const { key } = useVault();
   const navigate = useNavigate();
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!key) return;
     let cancelled = false;
     (async () => {
       // Find the most recent conversation; open it, else create a new one.
@@ -37,9 +41,10 @@ function ChatIndex() {
         });
         return;
       }
+      const enc = await encryptText(key, "New conversation");
       const { data: created, error: insErr } = await supabase
         .from("chat_sessions")
-        .insert({ user_id: user.id, title: "New conversation" })
+        .insert({ user_id: user.id, title: enc.ct, title_iv: enc.iv })
         .select("id")
         .single();
       if (cancelled) return;
@@ -55,8 +60,10 @@ function ChatIndex() {
         replace: true,
       });
     })();
-    return () => { cancelled = true; };
-  }, [user.id, navigate]);
+    return () => {
+      cancelled = true;
+    };
+  }, [user.id, key, navigate]);
 
   return (
     <div className="paper-card flex flex-col items-center justify-center gap-3 p-10 text-center">

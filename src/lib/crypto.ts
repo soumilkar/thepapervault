@@ -62,28 +62,72 @@ export async function deriveVerifier(passphrase: string, saltB64: string): Promi
   return toB64(bits);
 }
 
+export function timingSafeEqualStr(a: string, b: string): boolean {
+  const bytesA = enc.encode(a);
+  const bytesB = enc.encode(b);
+  const len = Math.max(bytesA.length, bytesB.length);
+  let diff = bytesA.length ^ bytesB.length;
+  for (let i = 0; i < len; i++) {
+    diff |= (bytesA[i] ?? 0) ^ (bytesB[i] ?? 0);
+  }
+  return diff === 0;
+}
+
 export async function encryptText(key: CryptoKey, plaintext: string): Promise<{ ct: string; iv: string }> {
   const iv = randomBytes(12);
-  const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv: buf(iv) }, key, buf(enc.encode(plaintext)));
+  const ct = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv: buf(iv), tagLength: 128 },
+    key,
+    buf(enc.encode(plaintext)),
+  );
   return { ct: toB64(ct), iv: toB64(iv) };
 }
 
 export async function decryptText(key: CryptoKey, ctB64: string, ivB64: string): Promise<string> {
   const pt = await crypto.subtle.decrypt(
-    { name: "AES-GCM", iv: buf(fromB64(ivB64)) },
+    { name: "AES-GCM", iv: buf(fromB64(ivB64)), tagLength: 128 },
     key,
     buf(fromB64(ctB64)),
   );
   return dec.decode(pt);
 }
 
+const FIELD_PREFIX = "e2ee:v1:";
+
+export function isEncryptedField(value: string | null | undefined): boolean {
+  return typeof value === "string" && value.startsWith(FIELD_PREFIX);
+}
+
+export async function encryptField(key: CryptoKey, plaintext: string): Promise<string> {
+  const { ct, iv } = await encryptText(key, plaintext);
+  return `${FIELD_PREFIX}${iv}:${ct}`;
+}
+
+export async function decryptField(
+  key: CryptoKey,
+  raw: string,
+): Promise<{ plaintext: string; wasEncrypted: boolean }> {
+  if (!isEncryptedField(raw)) {
+    return { plaintext: raw, wasEncrypted: false };
+  }
+  const rest = raw.slice(FIELD_PREFIX.length);
+  const sep = rest.indexOf(":");
+  if (sep <= 0) {
+    return { plaintext: "[encrypted]", wasEncrypted: true };
+  }
+  const iv = rest.slice(0, sep);
+  const ct = rest.slice(sep + 1);
+  const plaintext = await decryptText(key, ct, iv);
+  return { plaintext, wasEncrypted: true };
+}
+
 export async function encryptBlob(key: CryptoKey, blob: Blob): Promise<{ blob: Blob; iv: string }> {
   const iv = randomBytes(12);
   const buffer = await blob.arrayBuffer();
-  const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv: buf(iv) }, key, buffer);
+  const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv: buf(iv), tagLength: 128 }, key, buffer);
   return { blob: new Blob([ct], { type: "application/octet-stream" }), iv: toB64(iv) };
 }
 
 export async function decryptBytes(key: CryptoKey, bytes: ArrayBuffer, ivB64: string): Promise<ArrayBuffer> {
-  return crypto.subtle.decrypt({ name: "AES-GCM", iv: buf(fromB64(ivB64)) }, key, bytes);
+  return crypto.subtle.decrypt({ name: "AES-GCM", iv: buf(fromB64(ivB64)), tagLength: 128 }, key, bytes);
 }

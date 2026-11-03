@@ -24,16 +24,18 @@ export function VaultGate({ userId, children }: { userId: string; children: Reac
     e.preventDefault();
     setBusy(true);
     try {
+      let dataKey: CryptoKey;
       if (status === "needs_setup") {
         if (passphrase !== confirm) throw new Error("Passphrases don't match");
-        await setup(passphrase);
+        dataKey = await setup(passphrase);
         toast.success("Welcome in");
       } else {
-        await unlock(passphrase);
+        dataKey = await unlock(passphrase);
         toast.success("Welcome back");
       }
-      try { await runVaultMigration(userId); } catch (err) { console.error("vault migration", err); }
-      setPassphrase(""); setConfirm("");
+      void runVaultMigration(userId, dataKey).catch((err) => console.error("vault migration", err));
+      setPassphrase("");
+      setConfirm("");
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Could not unlock");
     } finally {
@@ -55,8 +57,8 @@ export function VaultGate({ userId, children }: { userId: string; children: Reac
         </h2>
         <p className="text-sm text-muted-foreground">
           {status === "needs_setup"
-            ? "Choose a passphrase you'll remember. It protects your private diary and gallery."
-            : "Enter the passphrase you set for your private diary and gallery."}
+            ? "Choose a passphrase you'll remember. It end-to-end encrypts your diary, notes, folders, gallery, and companion chats."
+            : "Enter your passphrase to decrypt your private diary, notes, folders, gallery, and companion chats."}
         </p>
 
         <label className="block">

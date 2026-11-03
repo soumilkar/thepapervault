@@ -1,6 +1,6 @@
-import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { memo, useMemo } from "react";
 import { Flame, Trophy, PenLine, TrendingUp } from "lucide-react";
+import { useDiaryMetrics } from "@/lib/diary-metrics";
 
 function isoDay(d: Date) {
   return d.toISOString().slice(0, 10);
@@ -29,7 +29,6 @@ function getStreaks(dates: string[]) {
     }
   }
 
-  // Current streak from today/yesterday backwards
   const last = sorted[sorted.length - 1];
   if (last !== today && last !== yesterday) {
     current = 0;
@@ -46,35 +45,34 @@ function getStreaks(dates: string[]) {
   return { current, longest };
 }
 
+export const WritingStreaks = memo(function WritingStreaks({ userId }: { userId: string }) {
+  const diary = useDiaryMetrics(userId);
 
-export function WritingStreaks({ userId }: { userId: string }) {
-  const diary = useQuery({
-    queryKey: ["streak-diary", userId],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("diary_entries")
-        .select("entry_date,word_count")
-        .eq("user_id", userId)
-        .order("entry_date", { ascending: true });
-      if (error) throw error;
-      return (data ?? []) as { entry_date: string; word_count: number | null }[];
-    },
-  });
-
-  const dates = (diary.data ?? []).map((d) => d.entry_date);
-  const streaks = getStreaks(dates);
-
-  const wordsThisMonth = (diary.data ?? []).reduce((sum, d) => {
-    const date = new Date(d.entry_date);
+  const { streaks, wordsThisMonth, totalWords, totalEntries } = useMemo(() => {
+    const rows = diary.data ?? [];
+    const dates = rows.map((d) => d.entry_date);
     const now = new Date();
-    if (date.getMonth() === now.getMonth() && date.getFullYear() === now.getFullYear()) {
-      return sum + (d.word_count ?? 0);
-    }
-    return sum;
-  }, 0);
+    const curMonth = now.getMonth();
+    const curYear = now.getFullYear();
 
-  const totalWords = (diary.data ?? []).reduce((sum, d) => sum + (d.word_count ?? 0), 0);
-  const totalEntries = dates.length;
+    let monthSum = 0;
+    let totalSum = 0;
+    for (const d of rows) {
+      const wc = d.word_count ?? 0;
+      totalSum += wc;
+      const date = new Date(d.entry_date);
+      if (date.getMonth() === curMonth && date.getFullYear() === curYear) {
+        monthSum += wc;
+      }
+    }
+
+    return {
+      streaks: getStreaks(dates),
+      wordsThisMonth: monthSum,
+      totalWords: totalSum,
+      totalEntries: rows.length,
+    };
+  }, [diary.data]);
 
   const items = [
     { icon: <Flame className="size-5 text-orange-400" />, value: streaks.current, label: "current streak" },
@@ -111,4 +109,4 @@ export function WritingStreaks({ userId }: { userId: string }) {
       )}
     </div>
   );
-}
+});

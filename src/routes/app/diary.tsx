@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { ImagePlus, Trash2, X, Download, Pencil, Check, Globe, Lock, FolderPlus, Folder, Search } from "lucide-react";
@@ -9,7 +9,7 @@ import { folderOptions, folderWithDescendants, type FolderRow } from "@/lib/fold
 import { hasImageLinks, previewText } from "@/lib/rich-text";
 import { downloadTextFile } from "@/lib/download";
 import { useVault } from "@/lib/vault";
-import { decryptBytes, decryptText, encryptBlob, encryptText } from "@/lib/crypto";
+import { decryptBytes, decryptField, decryptText, encryptBlob, encryptField, encryptText } from "@/lib/crypto";
 import { MusicSearch, MusicPlayer, type SelectedTrack } from "@/components/MusicSearch";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { moodScore } from "@/lib/mood-sentiment";
@@ -25,6 +25,15 @@ function countWords(s: string) {
 export const Route = createFileRoute("/app/diary")({
   component: DiaryPage,
 });
+
+type DiaryEncryptedPayload = {
+  t?: string;
+  c?: string;
+  m?: string;
+  wc?: number;
+  ms?: number | null;
+  mu?: SelectedTrack | null;
+};
 
 type DiaryRowRaw = {
   id: string;
@@ -45,12 +54,29 @@ type DiaryRowRaw = {
   mood_score: number | null;
   created_at: string;
 };
+
 type Entry = {
-  id: string; title: string; content: string; mood: string; entry_date: string;
-  image_url: string | null; is_public: boolean; folder_id: string | null;
-  music: SelectedTrack | null; created_at: string;
+  id: string;
+  title: string;
+  content: string;
+  mood: string;
+  entry_date: string;
+  image_path: string | null;
+  is_public: boolean;
+  folder_id: string | null;
+  music: SelectedTrack | null;
+  created_at: string;
 };
+
 type Sort = "newest" | "oldest" | "title";
+
+const NULL_MUSIC_COLUMNS = {
+  music_track_id: null,
+  music_track_name: null,
+  music_artist: null,
+  music_preview_url: null,
+  music_artwork_url: null,
+};
 
 function DiaryPage() {
   const { user } = Route.useRouteContext();
@@ -65,7 +91,12 @@ function DiaryPage() {
     music: SelectedTrack | null;
   };
   const [draft, setDraft, clearDraft] = useBrowserDraft<DiaryDraft>(`papervault:diary-draft:${user.id}`, {
-    title: "", content: "", mood: "", isPublic: false, folderId: null, music: null,
+    title: "",
+    content: "",
+    mood: "",
+    isPublic: false,
+    folderId: null,
+    music: null,
   });
   const { title, content, mood, isPublic, folderId, music } = draft;
   const setTitle = (value: string) => setDraft((current) => ({ ...current, title: value }));
@@ -83,18 +114,41 @@ function DiaryPage() {
   const [query, setQuery] = useState("");
 
   useEffect(() => {
-    if (!photo) { setPhotoPreview(null); return; }
+    if (!photo) {
+      setPhotoPreview(null);
+      return;
+    }
     const url = URL.createObjectURL(photo);
     setPhotoPreview(url);
     return () => URL.revokeObjectURL(url);
   }, [photo]);
 
   const folders = useQuery({
+    enabled: !!key,
     queryKey: ["diary-folders", user.id],
     queryFn: async (): Promise<FolderRow[]> => {
-      const { data, error } = await supabase.from("diary_folders").select("id,name,parent_id").eq("user_id", user.id).order("name");
+      const { data, error } = await supabase
+        .from("diary_folders")
+        .select("id,name,parent_id")
+        .eq("user_id", user.id);
       if (error) throw error;
-      return data ?? [];
+      const raw = data ?? [];
+      if (!key) return [];
+      const decoded = await Promise.all(
+        raw.map(async (f) => {
+          try {
+            const { plaintext, wasEncrypted } = await decryptField(key, f.name);
+            if (!wasEncrypted && f.name) {
+              const encName = await encryptField(key, f.name);
+              void supabase.from("diary_folders").update({ name: encName }).eq("id", f.id);
+            }
+            return { id: f.id, name: plaintext, parent_id: f.parent_id };
+          } catch {
+            return { id: f.id, name: "[Locked folder]", parent_id: f.parent_id };
+          }
+        }),
+      );
+      return decoded.sort((a, b) => a.name.localeCompare(b.name));
     },
   });
   const fOpts = useMemo(() => folderOptions(folders.data ?? []), [folders.data]);
@@ -103,47 +157,113 @@ function DiaryPage() {
     enabled: !!key,
     queryKey: ["diary", user.id],
     queryFn: async (): Promise<Entry[]> => {
-      const { data, error } = await supabase.from("diary_entries")
+      const { data, error } = await supabase
+        .from("diary_entries")
         .select("*")
         .eq("user_id", user.id)
-        .order("entry_date", { ascending: false }).order("created_at", { ascending: false });
+        .order("entry_date", { ascending: false })
+        .order("created_at", { ascending: false });
       if (error) throw error;
       const rows = (data ?? []) as unknown as DiaryRowRaw[];
-      const out: Entry[] = [];
-      for (const row of rows) {
-        let t = row.title ?? "", c = row.content, m = row.mood ?? "";
-        let decrypted = false;
-        if (row.iv && key) {
-          try {
-            const plain = await decryptText(key, row.content, row.iv);
-            const obj = JSON.parse(plain) as { t?: string; c?: string; m?: string };
-            t = obj.t ?? ""; c = obj.c ?? ""; m = obj.m ?? "";
-            decrypted = true;
-          } catch { c = "[Could not decrypt this entry]"; }
-        }
-        // Backfill insight metadata for legacy entries so charts don't need to decrypt.
-        const isReadable = decrypted || !row.iv;
-        if (isReadable && (row.word_count == null || row.word_count === 0) && c) {
-          const wc = countWords(c);
-          const ms = m ? moodScore(m) : null;
-          await supabase.from("diary_entries").update({ word_count: wc, mood_score: ms } as never).eq("id", row.id);
-        }
-        const image_url = row.image_path ? await loadImage(row.image_path, row.iv ? key : null) : null;
-        out.push({
-          id: row.id, title: t, content: c, mood: m,
-          entry_date: row.entry_date, image_url,
-          is_public: row.is_public, folder_id: row.folder_id,
-          music: row.music_preview_url ? {
-            music_track_id: row.music_track_id ?? "",
-            music_track_name: row.music_track_name ?? "",
-            music_artist: row.music_artist ?? "",
-            music_preview_url: row.music_preview_url,
-            music_artwork_url: row.music_artwork_url ?? "",
-          } : null,
-          created_at: row.created_at,
-        });
-      }
-      return out;
+
+      return Promise.all(
+        rows.map(async (row) => {
+          let t = row.title ?? "";
+          let c = row.content;
+          let m = row.mood ?? "";
+          let mu: SelectedTrack | null = row.music_preview_url
+            ? {
+                music_track_id: row.music_track_id ?? "",
+                music_track_name: row.music_track_name ?? "",
+                music_artist: row.music_artist ?? "",
+                music_preview_url: row.music_preview_url,
+                music_artwork_url: row.music_artwork_url ?? "",
+              }
+            : null;
+
+          if (row.iv && key) {
+            try {
+              const plain = await decryptText(key, row.content, row.iv);
+              const obj = JSON.parse(plain) as DiaryEncryptedPayload;
+              t = obj.t ?? "";
+              c = obj.c ?? "";
+              m = obj.m ?? "";
+              if (obj.mu) mu = obj.mu;
+
+              // If any legacy plaintext metadata columns remain on a private entry, scrub them into the ciphertext
+              const hasLeakedMeta =
+                !row.is_public &&
+                (row.title !== null ||
+                  row.mood !== null ||
+                  (row.word_count !== null && row.word_count !== 0) ||
+                  row.mood_score !== null ||
+                  row.music_preview_url !== null ||
+                  obj.wc === undefined);
+              if (hasLeakedMeta) {
+                const upgradedPayload: DiaryEncryptedPayload = {
+                  t,
+                  c,
+                  m,
+                  wc: countWords(c),
+                  ms: m ? moodScore(m) : null,
+                  mu,
+                };
+                const reEnc = await encryptText(key, JSON.stringify(upgradedPayload));
+                void supabase
+                  .from("diary_entries")
+                  .update({
+                    title: null,
+                    mood: null,
+                    content: reEnc.ct,
+                    iv: reEnc.iv,
+                    word_count: 0,
+                    mood_score: null,
+                    ...NULL_MUSIC_COLUMNS,
+                  } as never)
+                  .eq("id", row.id);
+              }
+            } catch {
+              c = "[Could not decrypt this entry]";
+            }
+          } else if (!row.is_public && !row.iv && key) {
+            // Legacy unencrypted private entry: immediately encrypt all fields and scrub plaintext columns
+            const upgradedPayload: DiaryEncryptedPayload = {
+              t,
+              c,
+              m,
+              wc: countWords(c),
+              ms: m ? moodScore(m) : null,
+              mu,
+            };
+            const enc = await encryptText(key, JSON.stringify(upgradedPayload));
+            void supabase
+              .from("diary_entries")
+              .update({
+                title: null,
+                mood: null,
+                content: enc.ct,
+                iv: enc.iv,
+                word_count: 0,
+                mood_score: null,
+                ...NULL_MUSIC_COLUMNS,
+              } as never)
+              .eq("id", row.id);
+          }
+
+          return {
+            id: row.id,
+            title: t,
+            content: c,
+            mood: m,
+            entry_date: row.entry_date,
+            image_path: row.image_path,
+            is_public: row.is_public,
+            folder_id: row.folder_id,
+            music: mu,
+            created_at: row.created_at,
+          };
+        }),
+      );
     },
   });
 
@@ -164,6 +284,13 @@ function DiaryPage() {
     return rows;
   }, [entries.data, folders.data, filterFolder, sort, query]);
 
+  const invalidateDiaryQueries = useCallback(() => {
+    qc.invalidateQueries({ queryKey: ["diary"] });
+    qc.invalidateQueries({ queryKey: ["diary-metrics"] });
+    qc.invalidateQueries({ queryKey: ["public-diary-feed"] });
+    qc.invalidateQueries({ queryKey: ["dashboard-counts"] });
+  }, [qc]);
+
   const create = useMutation({
     mutationFn: async () => {
       const musicPatch = {
@@ -175,9 +302,15 @@ function DiaryPage() {
       };
       if (isPublic) {
         const { error } = await supabase.from("diary_entries").insert({
-          user_id: user.id, title: title || null, content, mood: mood || null,
-          is_public: true, folder_id: folderId, visibility: "public_anon",
-          word_count: countWords(content), mood_score: mood ? moodScore(mood) : null,
+          user_id: user.id,
+          title: title || null,
+          content,
+          mood: mood || null,
+          is_public: true,
+          folder_id: folderId,
+          visibility: "public_anon",
+          word_count: countWords(content),
+          mood_score: mood ? moodScore(mood) : null,
           ...musicPatch,
         } as never);
         if (error) throw error;
@@ -186,47 +319,76 @@ function DiaryPage() {
       if (!key) throw new Error("Vault is locked");
       let imagePath: string | null = null;
       if (photo) {
-        const ALLOWED: Record<string, string> = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif" };
+        const ALLOWED: Record<string, string> = {
+          "image/jpeg": "jpg",
+          "image/png": "png",
+          "image/webp": "webp",
+          "image/gif": "gif",
+        };
         if (!ALLOWED[photo.type]) throw new Error("Only JPEG, PNG, WebP, or GIF images are allowed");
         if (photo.size > 5 * 1024 * 1024) throw new Error("Photo must be smaller than 5 MB");
         imagePath = `${user.id}/${crypto.randomUUID()}.bin`;
         const { blob, iv: imgIv } = await encryptBlob(key, photo);
-        const { error: upErr } = await supabase.storage.from("gallery").upload(imagePath, blob, { contentType: "application/octet-stream" });
+        const { error: upErr } = await supabase.storage
+          .from("gallery")
+          .upload(imagePath, blob, { contentType: "application/octet-stream" });
         if (upErr) throw upErr;
-        const captionPlain = title || (content.slice(0, 60) || "from my diary");
+        const captionPlain = title || content.slice(0, 60) || "from my diary";
         const { ct: capCt, iv: capIv } = await encryptText(key, captionPlain);
         await supabase.from("gallery_images").insert({
-          user_id: user.id, storage_path: imagePath, caption: capCt,
-          iv: imgIv, caption_iv: capIv, mime: photo.type,
+          user_id: user.id,
+          storage_path: imagePath,
+          caption: capCt,
+          iv: imgIv,
+          caption_iv: capIv,
+          mime: photo.type,
         });
       }
-      const plaintext = JSON.stringify({ t: title, c: content, m: mood });
-      const { ct, iv } = await encryptText(key, plaintext);
+      const payload: DiaryEncryptedPayload = {
+        t: title,
+        c: content,
+        m: mood,
+        wc: countWords(content),
+        ms: mood ? moodScore(mood) : null,
+        mu: music,
+      };
+      const { ct, iv } = await encryptText(key, JSON.stringify(payload));
       const { error } = await supabase.from("diary_entries").insert({
-        user_id: user.id, title: null, content: ct, mood: null, image_path: imagePath,
-        visibility: "private", is_public: false, folder_id: folderId, iv,
-        word_count: countWords(content), mood_score: mood ? moodScore(mood) : null,
-        ...musicPatch,
+        user_id: user.id,
+        title: null,
+        content: ct,
+        mood: null,
+        image_path: imagePath,
+        visibility: "private",
+        is_public: false,
+        folder_id: folderId,
+        iv,
+        word_count: 0,
+        mood_score: null,
+        ...NULL_MUSIC_COLUMNS,
       } as never);
       if (error) throw error;
     },
     onSuccess: () => {
-       clearDraft(); setPhoto(null);
+      clearDraft();
+      setPhoto(null);
       toast.success("Entry saved");
-      qc.invalidateQueries({ queryKey: ["diary"] });
+      invalidateDiaryQueries();
       qc.invalidateQueries({ queryKey: ["gallery"] });
-      qc.invalidateQueries({ queryKey: ["public-diary-feed"] });
-      qc.invalidateQueries({ queryKey: ["dashboard-counts"] });
-      qc.invalidateQueries({ queryKey: ["recent-diary"] });
-      qc.invalidateQueries({ queryKey: ["streak-diary"] });
-      qc.invalidateQueries({ queryKey: ["mood-timeline"] });
-      qc.invalidateQueries({ queryKey: ["heatmap-diary"] });
     },
     onError: (e: Error) => toast.error(e.message),
   });
 
   const update = useMutation({
-    mutationFn: async (vars: { id: string; title: string; content: string; mood: string; folder_id: string | null; music: SelectedTrack | null; wasPrivate: boolean }) => {
+    mutationFn: async (vars: {
+      id: string;
+      title: string;
+      content: string;
+      mood: string;
+      folder_id: string | null;
+      music: SelectedTrack | null;
+      wasPrivate: boolean;
+    }) => {
       const musicPatch = {
         music_track_id: vars.music?.music_track_id ?? null,
         music_track_name: vars.music?.music_track_name ?? null,
@@ -236,30 +398,48 @@ function DiaryPage() {
       };
       if (vars.wasPrivate) {
         if (!key) throw new Error("Vault is locked");
-        const plaintext = JSON.stringify({ t: vars.title, c: vars.content, m: vars.mood });
-        const { ct, iv } = await encryptText(key, plaintext);
-        const { error } = await supabase.from("diary_entries").update({
-          content: ct, iv, folder_id: vars.folder_id,
-          word_count: countWords(vars.content), mood_score: vars.mood ? moodScore(vars.mood) : null,
-          ...musicPatch,
-        } as never).eq("id", vars.id);
+        const payload: DiaryEncryptedPayload = {
+          t: vars.title,
+          c: vars.content,
+          m: vars.mood,
+          wc: countWords(vars.content),
+          ms: vars.mood ? moodScore(vars.mood) : null,
+          mu: vars.music,
+        };
+        const { ct, iv } = await encryptText(key, JSON.stringify(payload));
+        const { error } = await supabase
+          .from("diary_entries")
+          .update({
+            title: null,
+            mood: null,
+            content: ct,
+            iv,
+            folder_id: vars.folder_id,
+            word_count: 0,
+            mood_score: null,
+            ...NULL_MUSIC_COLUMNS,
+          } as never)
+          .eq("id", vars.id);
         if (error) throw error;
       } else {
-        const { error } = await supabase.from("diary_entries").update({
-          title: vars.title || null, content: vars.content, mood: vars.mood || null,
-          folder_id: vars.folder_id,
-          word_count: countWords(vars.content), mood_score: vars.mood ? moodScore(vars.mood) : null,
-          ...musicPatch,
-        } as never).eq("id", vars.id);
+        const { error } = await supabase
+          .from("diary_entries")
+          .update({
+            title: vars.title || null,
+            content: vars.content,
+            mood: vars.mood || null,
+            folder_id: vars.folder_id,
+            word_count: countWords(vars.content),
+            mood_score: vars.mood ? moodScore(vars.mood) : null,
+            ...musicPatch,
+          } as never)
+          .eq("id", vars.id);
         if (error) throw error;
       }
     },
     onSuccess: () => {
       toast.success("Entry updated");
-      qc.invalidateQueries({ queryKey: ["diary"] });
-      qc.invalidateQueries({ queryKey: ["public-diary-feed"] });
-      qc.invalidateQueries({ queryKey: ["streak-diary"] });
-      qc.invalidateQueries({ queryKey: ["mood-timeline"] });
+      invalidateDiaryQueries();
     },
     onError: (e: Error) => toast.error(e.message),
   });
@@ -270,20 +450,57 @@ function DiaryPage() {
       if (error) throw error;
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["diary"] });
-      qc.invalidateQueries({ queryKey: ["public-diary-feed"] });
-      qc.invalidateQueries({ queryKey: ["dashboard-counts"] });
+      invalidateDiaryQueries();
     },
   });
 
   const createFolder = useMutation({
     mutationFn: async (name: string) => {
-      const { error } = await supabase.from("diary_folders").insert({ user_id: user.id, name, parent_id: newFolderParent === NONE ? null : newFolderParent } as never);
+      if (!key) throw new Error("Vault is locked");
+      const encName = await encryptField(key, name);
+      const { error } = await supabase.from("diary_folders").insert({
+        user_id: user.id,
+        name: encName,
+        parent_id: newFolderParent === NONE ? null : newFolderParent,
+      } as never);
       if (error) throw error;
     },
-    onSuccess: () => { setNewFolder(""); qc.invalidateQueries({ queryKey: ["diary-folders"] }); },
+    onSuccess: () => {
+      setNewFolder("");
+      qc.invalidateQueries({ queryKey: ["diary-folders"] });
+    },
     onError: (e: Error) => toast.error(e.message),
   });
+
+  const deleteFolder = useMutation({
+    mutationFn: async (targetFolderId: string) => {
+      const { error } = await supabase
+        .from("diary_folders")
+        .delete()
+        .eq("id", targetFolderId)
+        .eq("user_id", user.id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      setFilterFolder("all");
+      toast.success("Folder deleted");
+      qc.invalidateQueries({ queryKey: ["diary-folders"] });
+      qc.invalidateQueries({ queryKey: ["diary"] });
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const handleDeleteEntry = useCallback((id: string) => remove.mutate(id), [remove]);
+  const handleSaveEntry = useCallback(
+    (
+      id: string,
+      wasPrivate: boolean,
+      v: { title: string; content: string; mood: string; folder_id: string | null; music: SelectedTrack | null },
+    ) => {
+      update.mutate({ id, ...v, wasPrivate });
+    },
+    [update],
+  );
 
   return (
     <div className="space-y-6">
@@ -297,10 +514,16 @@ function DiaryPage() {
           type="button"
           onClick={() => {
             const rows = entries.data ?? [];
-            if (!rows.length) { toast.error("No entries to export yet"); return; }
-            const txt = rows.map((e) =>
-              `${e.entry_date} — ${e.title || "Untitled"}${e.mood ? `  (feeling: ${e.mood})` : ""}${e.is_public ? "  [public]" : ""}\n${"-".repeat(60)}\n${e.content}\n`
-            ).join("\n\n");
+            if (!rows.length) {
+              toast.error("No entries to export yet");
+              return;
+            }
+            const txt = rows
+              .map(
+                (e) =>
+                  `${e.entry_date} — ${e.title || "Untitled"}${e.mood ? `  (feeling: ${e.mood})` : ""}${e.is_public ? "  [public]" : ""}\n${"-".repeat(60)}\n${e.content}\n`,
+              )
+              .join("\n\n");
             downloadTextFile(`diary-${new Date().toISOString().slice(0, 10)}.txt`, txt);
           }}
           className="flex shrink-0 items-center gap-1.5 rounded-md border border-border bg-card px-3 py-2 text-sm text-primary hover:bg-secondary"
@@ -310,17 +533,31 @@ function DiaryPage() {
       </div>
 
       <form
-        onSubmit={(e) => { e.preventDefault(); if (content.trim()) create.mutate(); }}
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (content.trim()) create.mutate();
+        }}
         className="paper-card space-y-3 p-6"
       >
-        <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Title (optional)"
-          className="w-full bg-transparent font-serif text-2xl outline-none placeholder:text-muted-foreground/60" />
-        <input value={mood} onChange={(e) => setMood(e.target.value)}
+        <input
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          placeholder="Title (optional)"
+          className="w-full bg-transparent font-serif text-2xl outline-none placeholder:text-muted-foreground/60"
+        />
+        <input
+          value={mood}
+          onChange={(e) => setMood(e.target.value)}
           placeholder="How are you feeling? (e.g. peaceful, anxious, joyful)"
-          className="w-full bg-transparent text-sm text-accent outline-none placeholder:text-muted-foreground/60" />
-        <textarea value={content} onChange={(e) => setContent(e.target.value)}
-          placeholder="Pour it out... paste an image link on its own line to show the picture" rows={6}
-          className="w-full resize-none bg-transparent leading-relaxed outline-none placeholder:text-muted-foreground/60" />
+          className="w-full bg-transparent text-sm text-accent outline-none placeholder:text-muted-foreground/60"
+        />
+        <textarea
+          value={content}
+          onChange={(e) => setContent(e.target.value)}
+          placeholder="Pour it out... paste an image link on its own line to show the picture"
+          rows={6}
+          className="w-full resize-none bg-transparent leading-relaxed outline-none placeholder:text-muted-foreground/60"
+        />
 
         {hasImageLinks(content) && (
           <div className="rounded-md border border-border bg-secondary/30 p-3">
@@ -332,8 +569,11 @@ function DiaryPage() {
         {photoPreview && !isPublic && (
           <div className="relative inline-block">
             <img src={photoPreview} alt="preview" className="max-h-56 rounded-md border border-border" />
-            <button type="button" onClick={() => setPhoto(null)}
-              className="absolute -right-2 -top-2 rounded-full bg-background p-1 shadow">
+            <button
+              type="button"
+              onClick={() => setPhoto(null)}
+              className="absolute -right-2 -top-2 rounded-full bg-background p-1 shadow"
+            >
               <X className="size-4" />
             </button>
           </div>
@@ -358,10 +598,7 @@ function DiaryPage() {
             <AppSelect
               value={folderId ?? NONE}
               onValueChange={(v) => setFolderId(v === NONE ? null : v)}
-              options={[
-                { value: NONE, label: "— none —" },
-                ...fOpts,
-              ]}
+              options={[{ value: NONE, label: "— none —" }, ...fOpts]}
             />
           </label>
         </div>
@@ -372,7 +609,10 @@ function DiaryPage() {
               <label className="flex cursor-pointer items-center gap-2 text-sm text-accent hover:text-primary">
                 <ImagePlus className="size-4" />
                 <span>{photo ? "Change photo" : "Add a photo (also saved to gallery)"}</span>
-                <input type="file" accept="image/*" className="hidden"
+                <input
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
                   onChange={(e) => {
                     const f = e.target.files?.[0];
                     if (f) {
@@ -380,13 +620,21 @@ function DiaryPage() {
                       else setPhoto(f);
                     }
                     e.currentTarget.value = "";
-                  }} />
+                  }}
+                />
               </label>
             )}
           </div>
-          {isPublic && <span className="text-xs text-muted-foreground">Public entries appear anonymously in the community Feed.</span>}
-          <button type="submit" disabled={!content.trim() || create.isPending}
-            className="rounded-md bg-primary px-5 py-2 text-sm text-primary-foreground disabled:opacity-50">
+          {isPublic && (
+            <span className="text-xs text-muted-foreground">
+              Public entries appear anonymously in the community Feed.
+            </span>
+          )}
+          <button
+            type="submit"
+            disabled={!content.trim() || create.isPending}
+            className="rounded-md bg-primary px-5 py-2 text-sm text-primary-foreground disabled:opacity-50"
+          >
             {create.isPending ? "Saving..." : "Save entry"}
           </button>
         </div>
@@ -394,23 +642,37 @@ function DiaryPage() {
 
       <label className="paper-card flex items-center gap-2 px-3 py-2 text-sm">
         <Search className="size-4 text-muted-foreground" />
-        <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search diary entries..."
-          className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-muted-foreground/60" />
-        {query && <button type="button" onClick={() => setQuery("")} aria-label="Clear search"><X className="size-4 text-muted-foreground" /></button>}
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search diary entries..."
+          className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-muted-foreground/60"
+        />
+        {query && (
+          <button type="button" onClick={() => setQuery("")} aria-label="Clear search">
+            <X className="size-4 text-muted-foreground" />
+          </button>
+        )}
       </label>
       <div className="paper-card flex flex-wrap items-center gap-3 p-3 text-sm">
-        <label className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5">
           <Folder className="size-4 text-muted-foreground" />
           <AppSelect
             value={filterFolder}
             onValueChange={(v) => setFilterFolder(v as typeof filterFolder)}
-            options={[
-              { value: "all", label: "All entries" },
-              { value: "none", label: "No folder" },
-              ...fOpts,
-            ]}
+            options={[{ value: "all", label: "All entries" }, { value: "none", label: "No folder" }, ...fOpts]}
           />
-        </label>
+          {filterFolder !== "all" && filterFolder !== "none" && (
+            <button
+              type="button"
+              onClick={() => deleteFolder.mutate(filterFolder)}
+              title="Delete selected folder"
+              className="rounded p-1.5 text-muted-foreground hover:bg-secondary hover:text-destructive"
+            >
+              <Trash2 className="size-3.5" />
+            </button>
+          )}
+        </div>
         <label className="flex items-center gap-2">
           <span className="text-muted-foreground">Sort</span>
           <AppSelect
@@ -424,14 +686,27 @@ function DiaryPage() {
           />
         </label>
         <form
-          onSubmit={(e) => { e.preventDefault(); if (newFolder.trim()) createFolder.mutate(newFolder.trim()); }}
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (newFolder.trim()) createFolder.mutate(newFolder.trim());
+          }}
           className="flex flex-wrap items-center gap-1 sm:ml-auto"
         >
-          <input value={newFolder} onChange={(e) => setNewFolder(e.target.value)} placeholder="New folder"
-            className="w-32 rounded-md border border-input bg-card px-2 py-1" />
-          <AppSelect value={newFolderParent} onValueChange={setNewFolderParent}
-            options={[{ value: NONE, label: "Top level" }, ...fOpts.map((o) => ({ value: o.value, label: `inside ${o.label}` }))]} />
-          <button type="submit" className="flex items-center gap-1 rounded-md bg-primary px-2.5 py-1 text-xs text-primary-foreground">
+          <input
+            value={newFolder}
+            onChange={(e) => setNewFolder(e.target.value)}
+            placeholder="New folder"
+            className="w-32 rounded-md border border-input bg-card px-2 py-1"
+          />
+          <AppSelect
+            value={newFolderParent}
+            onValueChange={setNewFolderParent}
+            options={[{ value: NONE, label: "Top level" }, ...fOpts.map((o) => ({ value: o.value, label: `inside ${o.label}` }))]}
+          />
+          <button
+            type="submit"
+            className="flex items-center gap-1 rounded-md bg-primary px-2.5 py-1 text-xs text-primary-foreground"
+          >
             <FolderPlus className="size-3.5" /> Add
           </button>
         </form>
@@ -441,9 +716,13 @@ function DiaryPage() {
         {entries.isLoading && <p className="font-hand text-sepia">opening your pages...</p>}
         {entries.data?.length === 0 && <p className="text-muted-foreground">Your diary is a blank page. Start above.</p>}
         {filteredSorted.map((e) => (
-          <DiaryCard key={e.id} entry={e} folderOpts={fOpts}
-            onDelete={() => remove.mutate(e.id)}
-            onSave={(v) => update.mutate({ id: e.id, ...v, wasPrivate: !e.is_public })}
+          <DiaryCard
+            key={e.id}
+            entry={e}
+            folderOpts={fOpts}
+            cryptoKey={key}
+            onDelete={handleDeleteEntry}
+            onSave={handleSaveEntry}
           />
         ))}
       </div>
@@ -451,28 +730,73 @@ function DiaryPage() {
   );
 }
 
-async function loadImage(path: string, key: CryptoKey | null): Promise<string | null> {
-  const { data: signed } = await supabase.storage.from("gallery").createSignedUrl(path, 60 * 60);
-  if (!signed?.signedUrl) return null;
-  const { data: meta } = await supabase.from("gallery_images").select("iv,mime" as never).eq("storage_path", path).maybeSingle();
-  const row = meta as unknown as { iv: string | null; mime: string | null } | null;
-  if (!row?.iv || !key) return signed.signedUrl;
-  try {
-    const res = await fetch(signed.signedUrl);
-    const ct = await res.arrayBuffer();
-    const pt = await decryptBytes(key, ct, row.iv);
-    const blob = new Blob([pt], { type: row.mime || "image/jpeg" });
-    return URL.createObjectURL(blob);
-  } catch { return null; }
+function DiaryImage({
+  path,
+  encrypted,
+  cryptoKey,
+}: {
+  path: string;
+  encrypted: boolean;
+  cryptoKey: CryptoKey | null;
+}) {
+  const [src, setSrc] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    let objectUrl: string | null = null;
+    (async () => {
+      const { data: signed } = await supabase.storage.from("gallery").createSignedUrl(path, 60 * 60);
+      if (!signed?.signedUrl || cancelled) return;
+      if (!encrypted || !cryptoKey) {
+        setSrc(signed.signedUrl);
+        return;
+      }
+      const { data: meta } = await supabase
+        .from("gallery_images")
+        .select("iv,mime" as never)
+        .eq("storage_path", path)
+        .maybeSingle();
+      const row = meta as unknown as { iv: string | null; mime: string | null } | null;
+      if (!row?.iv) {
+        if (!cancelled) setSrc(signed.signedUrl);
+        return;
+      }
+      try {
+        const res = await fetch(signed.signedUrl);
+        const ct = await res.arrayBuffer();
+        const pt = await decryptBytes(cryptoKey, ct, row.iv);
+        objectUrl = URL.createObjectURL(new Blob([pt], { type: row.mime || "image/jpeg" }));
+        if (!cancelled) setSrc(objectUrl);
+      } catch {
+        // unreadable image
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [path, encrypted, cryptoKey]);
+
+  if (!src) return null;
+  return <img src={src} alt="" className="mt-4 max-h-96 rounded-md border border-border" loading="lazy" />;
 }
 
-function DiaryCard({
-  entry: e, folderOpts, onDelete, onSave,
+const DiaryCard = memo(function DiaryCard({
+  entry: e,
+  folderOpts,
+  cryptoKey,
+  onDelete,
+  onSave,
 }: {
   entry: Entry;
   folderOpts: { value: string; label: string }[];
-  onDelete: () => void;
-  onSave: (v: { title: string; content: string; mood: string; folder_id: string | null; music: SelectedTrack | null }) => void;
+  cryptoKey: CryptoKey | null;
+  onDelete: (id: string) => void;
+  onSave: (
+    id: string,
+    wasPrivate: boolean,
+    v: { title: string; content: string; mood: string; folder_id: string | null; music: SelectedTrack | null },
+  ) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -482,18 +806,30 @@ function DiaryCard({
   const [eFolder, setEFolder] = useState<string | null>(e.folder_id);
   const [eMusic, setEMusic] = useState<SelectedTrack | null>(e.music);
   const [confirmDel, setConfirmDel] = useState(false);
-  const pv = previewText(e.content, 220);
-  const long = pv.truncated || !!e.image_url;
+  const pv = useMemo(() => previewText(e.content, 220), [e.content]);
+  const long = pv.truncated || !!e.image_path;
 
   if (editing) {
     return (
       <article className="paper-card space-y-3 p-6">
-        <input value={eTitle} onChange={(ev) => setETitle(ev.target.value)} placeholder="Title"
-          className="w-full bg-transparent font-serif text-2xl outline-none" />
-        <input value={eMood} onChange={(ev) => setEMood(ev.target.value)} placeholder="Feeling"
-          className="w-full bg-transparent text-sm text-accent outline-none" />
-        <textarea value={eContent} onChange={(ev) => setEContent(ev.target.value)} rows={8}
-          className="w-full resize-y bg-transparent leading-relaxed outline-none" />
+        <input
+          value={eTitle}
+          onChange={(ev) => setETitle(ev.target.value)}
+          placeholder="Title"
+          className="w-full bg-transparent font-serif text-2xl outline-none"
+        />
+        <input
+          value={eMood}
+          onChange={(ev) => setEMood(ev.target.value)}
+          placeholder="Feeling"
+          className="w-full bg-transparent text-sm text-accent outline-none"
+        />
+        <textarea
+          value={eContent}
+          onChange={(ev) => setEContent(ev.target.value)}
+          rows={8}
+          className="w-full resize-y bg-transparent leading-relaxed outline-none"
+        />
         {hasImageLinks(eContent) && <RichText>{eContent}</RichText>}
         <MusicSearch selected={eMusic} onChange={setEMusic} />
         <label className="flex items-center gap-2 text-sm">
@@ -501,18 +837,27 @@ function DiaryCard({
           <AppSelect
             value={eFolder ?? NONE}
             onValueChange={(v) => setEFolder(v === NONE ? null : v)}
-            options={[
-              { value: NONE, label: "— none —" },
-              ...folderOpts,
-            ]}
+            options={[{ value: NONE, label: "— none —" }, ...folderOpts]}
           />
         </label>
         <div className="flex justify-end gap-2">
-          <button onClick={() => setEditing(false)} className="flex items-center gap-1 rounded-md border border-border px-3 py-1.5 text-sm">
+          <button
+            onClick={() => setEditing(false)}
+            className="flex items-center gap-1 rounded-md border border-border px-3 py-1.5 text-sm"
+          >
             <X className="size-4" /> Cancel
           </button>
           <button
-            onClick={() => { onSave({ title: eTitle, content: eContent, mood: eMood, folder_id: eFolder, music: eMusic }); setEditing(false); }}
+            onClick={() => {
+              onSave(e.id, !e.is_public, {
+                title: eTitle,
+                content: eContent,
+                mood: eMood,
+                folder_id: eFolder,
+                music: eMusic,
+              });
+              setEditing(false);
+            }}
             className="flex items-center gap-1 rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground"
           >
             <Check className="size-4" /> Save
@@ -525,32 +870,60 @@ function DiaryCard({
   return (
     <article className="paper-card p-6">
       <header className="flex items-baseline justify-between gap-3">
-        <button onClick={() => setOpen((o) => !o)} className="text-left font-serif text-xl text-primary hover:underline underline-offset-4">
+        <button
+          onClick={() => setOpen((o) => !o)}
+          className="text-left font-serif text-xl text-primary hover:underline underline-offset-4"
+        >
           {e.title || "Untitled"}
         </button>
         <div className="flex items-center gap-3">
-          <span className="font-hand text-sepia">{new Date(e.entry_date).toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" })}</span>
+          <span className="font-hand text-sepia">
+            {new Date(e.entry_date).toLocaleDateString(undefined, {
+              month: "long",
+              day: "numeric",
+              year: "numeric",
+            })}
+          </span>
           <span title={e.is_public ? "Public · anonymous" : "Private"} className="text-muted-foreground">
             {e.is_public ? <Globe className="size-4" /> : <Lock className="size-4" />}
           </span>
-          <button onClick={() => { setETitle(e.title); setEContent(e.content); setEMood(e.mood); setEFolder(e.folder_id); setEMusic(e.music); setEditing(true); }} className="text-muted-foreground hover:text-primary" aria-label="Edit">
+          <button
+            onClick={() => {
+              setETitle(e.title);
+              setEContent(e.content);
+              setEMood(e.mood);
+              setEFolder(e.folder_id);
+              setEMusic(e.music);
+              setEditing(true);
+            }}
+            className="text-muted-foreground hover:text-primary"
+            aria-label="Edit"
+          >
             <Pencil className="size-4" />
           </button>
-          <button onClick={() => setConfirmDel(true)} className="text-muted-foreground hover:text-destructive" aria-label="Delete">
+          <button
+            onClick={() => setConfirmDel(true)}
+            className="text-muted-foreground hover:text-destructive"
+            aria-label="Delete"
+          >
             <Trash2 className="size-4" />
           </button>
         </div>
       </header>
       {e.mood && <p className="mt-1 text-sm text-accent">Feeling: {e.mood}</p>}
-      <div className="mt-3 break-words"><RichText>{open ? e.content : pv.text}</RichText></div>
-      {open && e.image_url && (
-        <img src={e.image_url} alt="" className="mt-4 max-h-96 rounded-md border border-border" loading="lazy" />
-      )}
+      <div className="mt-3 break-words">
+        <RichText>{open ? e.content : pv.text}</RichText>
+      </div>
+      {open && e.image_path && <DiaryImage path={e.image_path} encrypted={!e.is_public} cryptoKey={cryptoKey} />}
       {e.music?.music_preview_url && (
-        <MusicPlayer track={{
-          music_track_name: e.music.music_track_name, music_artist: e.music.music_artist,
-          music_preview_url: e.music.music_preview_url, music_artwork_url: e.music.music_artwork_url,
-        }} />
+        <MusicPlayer
+          track={{
+            music_track_name: e.music.music_track_name,
+            music_artist: e.music.music_artist,
+            music_preview_url: e.music.music_preview_url,
+            music_artwork_url: e.music.music_artwork_url,
+          }}
+        />
       )}
       {long && (
         <button onClick={() => setOpen((o) => !o)} className="mt-2 text-sm text-accent hover:text-primary">
@@ -558,11 +931,16 @@ function DiaryCard({
         </button>
       )}
       <ConfirmDialog
-        open={confirmDel} onOpenChange={setConfirmDel}
-        title="Delete this diary entry?" description="This can't be undone."
+        open={confirmDel}
+        onOpenChange={setConfirmDel}
+        title="Delete this diary entry?"
+        description="This can't be undone."
         confirmText="Delete entry"
-        onConfirm={() => { onDelete(); setConfirmDel(false); }}
+        onConfirm={() => {
+          onDelete(e.id);
+          setConfirmDel(false);
+        }}
       />
     </article>
   );
-}
+});

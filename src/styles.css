@@ -95,7 +95,6 @@
     background-image:
       radial-gradient(at 20% 0%, oklch(0.92 0.06 70 / 0.5), transparent 50%),
       radial-gradient(at 80% 100%, oklch(0.88 0.08 60 / 0.4), transparent 50%);
-    background-attachment: fixed;
     min-height: 100vh;
   }
 }
@@ -111,7 +110,7 @@
     background: color-mix(in oklch, var(--color-card) 40%, transparent);
     border: 1px solid color-mix(in oklch, var(--color-border) 70%, transparent);
     border-radius: calc(var(--radius) + 4px);
-    backdrop-filter: blur(28px) saturate(1.4);
+    backdrop-filter: blur(12px) saturate(1.2);
     box-shadow:
       0 1px 0 rgba(255,255,255,0.4) inset,
       0 10px 30px -10px oklch(0.4 0.05 50 / 0.2);

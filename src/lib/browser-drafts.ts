@@ -10,11 +10,16 @@ export function useBrowserDraft<T>(storageKey: string, initialValue: T) {
   const [ready, setReady] = useState(false);
   const skipNextWrite = useRef(false);
 
+  const initialRef = useRef<T>(initialValue);
+
   useEffect(() => {
     let cancelled = false;
     setReady(false);
     skipNextWrite.current = false;
-    if (!key) return;
+    if (!key) {
+      setValue(initialRef.current);
+      return;
+    }
     (async () => {
       try {
         const saved = window.localStorage.getItem(storageKey);
@@ -24,9 +29,13 @@ export function useBrowserDraft<T>(storageKey: string, initialValue: T) {
             const plain = await decryptText(key, parsed.ct, parsed.iv);
             if (!cancelled) setValue(JSON.parse(plain) as T);
           } else {
-            // Legacy unencrypted draft: drop it from storage, keep it in memory so it is re-saved encrypted.
+            // Legacy unencrypted draft: remove plaintext immediately and write encrypted version
             window.localStorage.removeItem(storageKey);
-            if (!cancelled) setValue(parsed as T);
+            const enc = await encryptText(key, JSON.stringify(parsed));
+            if (!cancelled) {
+              window.localStorage.setItem(storageKey, JSON.stringify(enc));
+              setValue(parsed as T);
+            }
           }
         }
       } catch {
@@ -34,7 +43,9 @@ export function useBrowserDraft<T>(storageKey: string, initialValue: T) {
       }
       if (!cancelled) setReady(true);
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [storageKey, key]);
 
   useEffect(() => {

@@ -4,7 +4,7 @@ import { Sparkles, Plus, Trash2, MessageSquare, Menu } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { useVault } from "@/lib/vault";
-import { decryptText } from "@/lib/crypto";
+import { decryptText, encryptText } from "@/lib/crypto";
 import {
   Popover,
   PopoverContent,
@@ -32,26 +32,43 @@ function ChatLayout() {
   const { key } = useVault();
 
   const refresh = useCallback(async () => {
-    // Conversations are kept until the user deletes them.
     const { data, error } = await supabase
       .from("chat_sessions")
       .select("id,title,title_iv,last_message_at")
       .eq("user_id", user.id)
-      .order("last_message_at", { ascending: false })
-      .limit(MAX_SESSIONS);
+      .order("last_message_at", { ascending: false });
     if (error) {
       toast.error("Could not load conversations");
       setSessions([]);
     } else {
-      const rows: SessionRow[] = [];
-      for (const r of data ?? []) {
-        let title = r.title;
-        if (r.title_iv) {
-          title = "Conversation";
-          if (key) { try { title = await decryptText(key, r.title, r.title_iv); } catch { /* keep fallback */ } }
-        }
-        rows.push({ id: r.id, title, last_message_at: r.last_message_at });
+      const all = data ?? [];
+      const kept = all.slice(0, MAX_SESSIONS);
+      const excessIds = all.slice(MAX_SESSIONS).map((r) => r.id);
+      if (excessIds.length > 0) {
+        void supabase.from("chat_sessions").delete().in("id", excessIds);
       }
+      const rows: SessionRow[] = await Promise.all(
+        kept.map(async (r) => {
+          let title = r.title;
+          if (r.title_iv) {
+            title = "Conversation";
+            if (key) {
+              try {
+                title = await decryptText(key, r.title, r.title_iv);
+              } catch {
+                // keep fallback
+              }
+            }
+          } else if (key && r.title) {
+            const enc = await encryptText(key, r.title);
+            void supabase
+              .from("chat_sessions")
+              .update({ title: enc.ct, title_iv: enc.iv })
+              .eq("id", r.id);
+          }
+          return { id: r.id, title, last_message_at: r.last_message_at };
+        }),
+      );
       setSessions(rows);
     }
     setLoading(false);
@@ -70,16 +87,27 @@ function ChatLayout() {
   }, [activeId]);
 
   const startNew = async () => {
+    if (!key) {
+      toast.error("Vault is locked");
+      return;
+    }
+    const defaultTitle = "New conversation";
+    const enc = await encryptText(key, defaultTitle);
     const { data, error } = await supabase
       .from("chat_sessions")
-      .insert({ user_id: user.id, title: "New conversation" })
-      .select("id,title,last_message_at")
+      .insert({ user_id: user.id, title: enc.ct, title_iv: enc.iv })
+      .select("id,last_message_at")
       .single();
     if (error || !data) {
       toast.error("Could not start a new chat");
       return;
     }
-    setSessions((s) => [data, ...s].slice(0, MAX_SESSIONS));
+    const next = [{ id: data.id, title: defaultTitle, last_message_at: data.last_message_at }, ...sessions];
+    const excess = next.slice(MAX_SESSIONS).map((s) => s.id);
+    if (excess.length > 0) {
+      void supabase.from("chat_sessions").delete().in("id", excess);
+    }
+    setSessions(next.slice(0, MAX_SESSIONS));
     setMenuOpen(false);
     navigate({ to: "/app/chat/$sessionId", params: { sessionId: data.id } });
   };

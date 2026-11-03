@@ -5,8 +5,8 @@ import { BookOpen, Image as ImageIcon, PenLine, Sparkles } from "lucide-react";
 export const Route = createFileRoute("/")({
   ssr: false,
   beforeLoad: async () => {
-    const { data } = await supabase.auth.getUser();
-    if (data.user) throw redirect({ to: "/app" });
+    const { data } = await supabase.auth.getSession();
+    if (data.session?.user) throw redirect({ to: "/app" });
   },
   head: () => ({
     meta: [

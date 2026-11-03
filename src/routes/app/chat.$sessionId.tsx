@@ -64,18 +64,24 @@ async function buildContext(
   const CONTEXT_BUDGET = 90_000;
   const trim = (s: string, max: number) => (s.length > max ? `${s.slice(0, max)}…` : s);
 
-  const diaryDecoded: string[] = [];
-  for (const row of diaryRows) {
-    if (row.iv && key) {
-      try {
-        const plain = await decryptText(key, row.content, row.iv);
-        const obj = JSON.parse(plain) as { t?: string; c?: string; m?: string };
-        diaryDecoded.push(`[${row.entry_date}${obj.m ? ` · ${obj.m}` : ""}] ${obj.t || "Untitled"}\n${trim(obj.c ?? "", DIARY_ENTRY_MAX)}`);
-      } catch { /* skip */ }
-    } else if (!row.iv) {
-      diaryDecoded.push(`[${row.entry_date}] ${trim(row.content, DIARY_ENTRY_MAX)}`);
-    }
-  }
+  const diaryDecoded = (
+    await Promise.all(
+      diaryRows.map(async (row) => {
+        if (row.iv && key) {
+          try {
+            const plain = await decryptText(key, row.content, row.iv);
+            const obj = JSON.parse(plain) as { t?: string; c?: string; m?: string };
+            return `[${row.entry_date}${obj.m ? ` · ${obj.m}` : ""}] ${obj.t || "Untitled"}\n${trim(obj.c ?? "", DIARY_ENTRY_MAX)}`;
+          } catch {
+            return null;
+          }
+        } else if (!row.iv) {
+          return `[${row.entry_date}] ${trim(row.content, DIARY_ENTRY_MAX)}`;
+        }
+        return null;
+      }),
+    )
+  ).filter((item): item is string => item !== null);
   const diaryText = wantsDiary ? (diaryDecoded.join("\n\n---\n\n") || "(no diary entries in this range)") : "";
   const blogText = wantsBlog
     ? (blogRows.map((b) => `# ${b.title}${b.tags?.length ? ` (${b.tags.join(", ")})` : ""}\n${trim(b.content, BLOG_POST_MAX)}`).join("\n\n---\n\n") || "(no blog posts in this range)")
@@ -122,21 +128,25 @@ function SessionChat() {
       if (error) {
         toast.error("Could not load this conversation");
       } else {
-        const out: Msg[] = [];
-        for (const r of data ?? []) {
-          let content = r.content;
-          if (r.iv) {
-            if (!key) continue;
-            try { content = await decryptText(key, r.content, r.iv); } catch { continue; }
-          } else if (key) {
-            // Encrypt older plain messages in place.
-            const enc = await encryptText(key, r.content);
-            void supabase.from("chat_messages").update({ content: enc.ct, iv: enc.iv }).eq("id", r.id);
-          }
-          out.push({ role: r.role as "user" | "assistant", content });
-        }
+        const decoded = await Promise.all(
+          (data ?? []).map(async (r) => {
+            let content = r.content;
+            if (r.iv) {
+              if (!key) return null;
+              try {
+                content = await decryptText(key, r.content, r.iv);
+              } catch {
+                return null;
+              }
+            } else if (key) {
+              const enc = await encryptText(key, r.content);
+              void supabase.from("chat_messages").update({ content: enc.ct, iv: enc.iv }).eq("id", r.id);
+            }
+            return { role: r.role as "user" | "assistant", content };
+          }),
+        );
         if (cancelled) return;
-        setMessages(out);
+        setMessages(decoded.filter((m): m is Msg => m !== null));
       }
       setHydrating(false);
       setTimeout(() => inputRef.current?.focus(), 0);
@@ -161,7 +171,12 @@ function SessionChat() {
       clearDraft();
 
       const context = await buildContext(user.id, key, source, startDate, endDate);
-      const name = user.user_metadata?.display_name || user.email?.split("@")[0] || "the writer";
+      const name =
+        user.user_metadata?.display_name ||
+        user.user_metadata?.full_name ||
+        user.user_metadata?.name ||
+        user.email?.split("@")[0] ||
+        "the writer";
       const { data: sessionData } = await supabase.auth.getSession();
       const accessToken = sessionData.session?.access_token;
       if (!accessToken) throw new Error("Please sign in again to continue");

@@ -1,4 +1,5 @@
 import { createFileRoute, Outlet, redirect, Link, useRouter, useRouterState } from "@tanstack/react-router";
+import { useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { BookOpen, Image as ImageIcon, PenLine, Sparkles, LogOut, Home, ChevronDown, Lock, StickyNote } from "lucide-react";
 import { VaultProvider, useVault } from "@/lib/vault";
@@ -14,10 +15,9 @@ import {
 export const Route = createFileRoute("/app")({
   ssr: false,
   beforeLoad: async () => {
-    await supabase.auth.getSession();
-    const { data, error } = await supabase.auth.getUser();
-    if (error || !data.user) throw redirect({ to: "/auth" });
-    return { user: data.user };
+    const { data, error } = await supabase.auth.getSession();
+    if (error || !data.session?.user) throw redirect({ to: "/auth" });
+    return { user: data.session.user };
   },
   component: AuthedLayout,
 });
@@ -33,12 +33,14 @@ const NAV: { to: string; icon: typeof Home; label: string; exact?: boolean }[] =
 
 function AuthedLayout() {
   const router = useRouter();
+  const qc = useQueryClient();
   const { user } = Route.useRouteContext();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const current =
     NAV.find((n) => (n.exact ? pathname === n.to : pathname.startsWith(n.to))) ?? NAV[0];
 
   const handleSignOut = async () => {
+    qc.clear();
     await supabase.auth.signOut();
     router.navigate({ to: "/auth", replace: true });
   };

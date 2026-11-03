@@ -1,9 +1,18 @@
 -- =============================================================================
--- The PaperVault — Complete Supabase Setup Script (Idempotent)
--- Run this in your new Supabase project's SQL Editor.
+-- The PaperVault — Complete Supabase Setup Script (Idempotent & Cleaned)
+-- Run this in your Supabase project's SQL Editor.
 -- =============================================================================
 
 BEGIN;
+
+-- -----------------------------------------------------------------------------
+-- 0. Drop Legacy / Unused Objects (Idempotent Cleanup)
+-- -----------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS public.set_item_folders(uuid, uuid[], text);
+DROP FUNCTION IF EXISTS public.delete_owned_folder(uuid, text, boolean);
+DROP TABLE IF EXISTS public.life_goals CASCADE;
+DROP TABLE IF EXISTS public.diary_entry_folders CASCADE;
+DROP TABLE IF EXISTS public.note_folder_memberships CASCADE;
 
 -- -----------------------------------------------------------------------------
 -- 1. Helper Trigger Functions
@@ -53,11 +62,11 @@ REVOKE EXECUTE ON FUNCTION public.handle_new_user() FROM PUBLIC, anon, authentic
 CREATE TABLE IF NOT EXISTS public.profiles (
   id uuid PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
   display_name text,
-  bio text,
   tour_completed boolean NOT NULL DEFAULT false,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE public.profiles DROP COLUMN IF EXISTS bio;
 
 -- 2.2 vault_keys (E2EE PBKDF2 salts + verifier; never stores actual vault key)
 CREATE TABLE IF NOT EXISTS public.vault_keys (
@@ -94,7 +103,6 @@ CREATE TABLE IF NOT EXISTS public.diary_entries (
   iv text,
   visibility text NOT NULL DEFAULT 'private' CHECK (visibility IN ('private', 'public_anon')),
   is_public boolean NOT NULL DEFAULT false,
-  is_pinned boolean NOT NULL DEFAULT false,
   music_track_id text,
   music_track_name text,
   music_artist text,
@@ -103,18 +111,9 @@ CREATE TABLE IF NOT EXISTS public.diary_entries (
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE public.diary_entries DROP COLUMN IF EXISTS is_pinned;
 
--- 2.5 diary_entry_folders (many-to-many folder join table)
-CREATE TABLE IF NOT EXISTS public.diary_entry_folders (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
-  entry_id uuid NOT NULL REFERENCES public.diary_entries(id) ON DELETE CASCADE,
-  folder_id uuid NOT NULL REFERENCES public.diary_folders(id) ON DELETE CASCADE,
-  created_at timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (entry_id, folder_id)
-);
-
--- 2.6 note_folders (supports nested subfolders via parent_id)
+-- 2.5 note_folders (supports nested subfolders via parent_id)
 CREATE TABLE IF NOT EXISTS public.note_folders (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
@@ -124,7 +123,7 @@ CREATE TABLE IF NOT EXISTS public.note_folders (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
--- 2.7 notes (E2EE notes)
+-- 2.6 notes (E2EE notes)
 CREATE TABLE IF NOT EXISTS public.notes (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
@@ -134,22 +133,12 @@ CREATE TABLE IF NOT EXISTS public.notes (
   tags text[],
   image_url text,
   iv text,
-  is_pinned boolean NOT NULL DEFAULT false,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE public.notes DROP COLUMN IF EXISTS is_pinned;
 
--- 2.8 note_folder_memberships (many-to-many folder join table)
-CREATE TABLE IF NOT EXISTS public.note_folder_memberships (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
-  note_id uuid NOT NULL REFERENCES public.notes(id) ON DELETE CASCADE,
-  folder_id uuid NOT NULL REFERENCES public.note_folders(id) ON DELETE CASCADE,
-  created_at timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (note_id, folder_id)
-);
-
--- 2.9 blog_posts
+-- 2.7 blog_posts
 CREATE TABLE IF NOT EXISTS public.blog_posts (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
@@ -167,7 +156,7 @@ CREATE TABLE IF NOT EXISTS public.blog_posts (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
--- 2.10 blog_likes
+-- 2.8 blog_likes
 CREATE TABLE IF NOT EXISTS public.blog_likes (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   post_id uuid NOT NULL REFERENCES public.blog_posts(id) ON DELETE CASCADE,
@@ -176,7 +165,7 @@ CREATE TABLE IF NOT EXISTS public.blog_likes (
   UNIQUE (post_id, user_id)
 );
 
--- 2.11 blog_comments (supports nested replies via parent_id)
+-- 2.9 blog_comments (supports nested replies via parent_id)
 CREATE TABLE IF NOT EXISTS public.blog_comments (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   post_id uuid NOT NULL REFERENCES public.blog_posts(id) ON DELETE CASCADE,
@@ -187,7 +176,7 @@ CREATE TABLE IF NOT EXISTS public.blog_comments (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
--- 2.12 comment_votes (upvotes/downvotes on blog comments)
+-- 2.10 comment_votes (upvotes/downvotes on blog comments)
 CREATE TABLE IF NOT EXISTS public.comment_votes (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   comment_id uuid NOT NULL REFERENCES public.blog_comments(id) ON DELETE CASCADE,
@@ -197,7 +186,7 @@ CREATE TABLE IF NOT EXISTS public.comment_votes (
   UNIQUE (comment_id, user_id)
 );
 
--- 2.13 gallery_images (E2EE gallery photos + encrypted captions)
+-- 2.11 gallery_images (E2EE gallery photos + encrypted captions)
 CREATE TABLE IF NOT EXISTS public.gallery_images (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
@@ -209,7 +198,7 @@ CREATE TABLE IF NOT EXISTS public.gallery_images (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
--- 2.14 chat_sessions (E2EE companion chat sessions)
+-- 2.12 chat_sessions (E2EE companion chat sessions)
 CREATE TABLE IF NOT EXISTS public.chat_sessions (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
@@ -219,7 +208,7 @@ CREATE TABLE IF NOT EXISTS public.chat_sessions (
   last_message_at timestamptz NOT NULL DEFAULT now()
 );
 
--- 2.15 chat_messages (E2EE companion chat messages)
+-- 2.13 chat_messages (E2EE companion chat messages)
 CREATE TABLE IF NOT EXISTS public.chat_messages (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   session_id uuid NOT NULL REFERENCES public.chat_sessions(id) ON DELETE CASCADE,
@@ -228,18 +217,6 @@ CREATE TABLE IF NOT EXISTS public.chat_messages (
   content text NOT NULL,
   iv text,
   created_at timestamptz NOT NULL DEFAULT now()
-);
-
--- 2.16 life_goals
-CREATE TABLE IF NOT EXISTS public.life_goals (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
-  title text NOT NULL,
-  progress integer NOT NULL DEFAULT 0,
-  deadline date,
-  mood text,
-  created_at timestamptz NOT NULL DEFAULT now(),
-  updated_at timestamptz NOT NULL DEFAULT now()
 );
 
 -- -----------------------------------------------------------------------------
@@ -338,82 +315,8 @@ CREATE TRIGGER blog_comments_touch
   BEFORE UPDATE ON public.blog_comments
   FOR EACH ROW EXECUTE FUNCTION public.touch_updated_at();
 
-DROP TRIGGER IF EXISTS life_goals_touch ON public.life_goals;
-CREATE TRIGGER life_goals_touch
-  BEFORE UPDATE ON public.life_goals
-  FOR EACH ROW EXECUTE FUNCTION public.touch_updated_at();
-
 -- -----------------------------------------------------------------------------
--- 5. Helper RPC Functions
--- -----------------------------------------------------------------------------
-
-CREATE OR REPLACE FUNCTION public.delete_owned_folder(
-  p_folder uuid,
-  p_kind text,
-  p_delete_items boolean DEFAULT false
-)
-RETURNS void
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public
-AS $$
-BEGIN
-  IF p_kind = 'diary' THEN
-    IF p_delete_items THEN
-      DELETE FROM public.diary_entries
-      WHERE folder_id = p_folder AND user_id = auth.uid();
-    END IF;
-    DELETE FROM public.diary_folders
-    WHERE id = p_folder AND user_id = auth.uid();
-  ELSIF p_kind = 'note' OR p_kind = 'notes' THEN
-    IF p_delete_items THEN
-      DELETE FROM public.notes
-      WHERE folder_id = p_folder AND user_id = auth.uid();
-    END IF;
-    DELETE FROM public.note_folders
-    WHERE id = p_folder AND user_id = auth.uid();
-  END IF;
-END;
-$$;
-
-CREATE OR REPLACE FUNCTION public.set_item_folders(
-  p_item uuid,
-  p_folders uuid[],
-  p_kind text
-)
-RETURNS void
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public
-AS $$
-DECLARE
-  v_folder uuid;
-BEGIN
-  IF p_kind = 'diary' THEN
-    DELETE FROM public.diary_entry_folders
-    WHERE entry_id = p_item AND user_id = auth.uid();
-    FOREACH v_folder IN ARRAY COALESCE(p_folders, ARRAY[]::uuid[]) LOOP
-      INSERT INTO public.diary_entry_folders (user_id, entry_id, folder_id)
-      VALUES (auth.uid(), p_item, v_folder)
-      ON CONFLICT DO NOTHING;
-    END LOOP;
-  ELSIF p_kind = 'note' OR p_kind = 'notes' THEN
-    DELETE FROM public.note_folder_memberships
-    WHERE note_id = p_item AND user_id = auth.uid();
-    FOREACH v_folder IN ARRAY COALESCE(p_folders, ARRAY[]::uuid[]) LOOP
-      INSERT INTO public.note_folder_memberships (user_id, note_id, folder_id)
-      VALUES (auth.uid(), p_item, v_folder)
-      ON CONFLICT DO NOTHING;
-    END LOOP;
-  END IF;
-END;
-$$;
-
-GRANT EXECUTE ON FUNCTION public.delete_owned_folder(uuid, text, boolean) TO authenticated;
-GRANT EXECUTE ON FUNCTION public.set_item_folders(uuid, uuid[], text) TO authenticated;
-
--- -----------------------------------------------------------------------------
--- 6. Table Grants & Row Level Security (RLS)
+-- 5. Table Grants & Row Level Security (RLS)
 -- -----------------------------------------------------------------------------
 
 GRANT SELECT, INSERT, UPDATE, DELETE ON
@@ -421,18 +324,15 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON
   public.vault_keys,
   public.diary_folders,
   public.diary_entries,
-  public.diary_entry_folders,
   public.note_folders,
   public.notes,
-  public.note_folder_memberships,
   public.blog_posts,
   public.blog_likes,
   public.blog_comments,
   public.comment_votes,
   public.gallery_images,
   public.chat_sessions,
-  public.chat_messages,
-  public.life_goals
+  public.chat_messages
 TO authenticated;
 
 GRANT SELECT ON public.diary_entries TO anon;
@@ -442,28 +342,23 @@ GRANT ALL ON
   public.vault_keys,
   public.diary_folders,
   public.diary_entries,
-  public.diary_entry_folders,
   public.note_folders,
   public.notes,
-  public.note_folder_memberships,
   public.blog_posts,
   public.blog_likes,
   public.blog_comments,
   public.comment_votes,
   public.gallery_images,
   public.chat_sessions,
-  public.chat_messages,
-  public.life_goals
+  public.chat_messages
 TO service_role;
 
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.vault_keys ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.diary_folders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.diary_entries ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.diary_entry_folders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.note_folders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.notes ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.note_folder_memberships ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.blog_posts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.blog_likes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.blog_comments ENABLE ROW LEVEL SECURITY;
@@ -471,7 +366,6 @@ ALTER TABLE public.comment_votes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.gallery_images ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.chat_sessions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.chat_messages ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.life_goals ENABLE ROW LEVEL SECURITY;
 
 -- profiles policies
 DROP POLICY IF EXISTS "read all profiles" ON public.profiles;
@@ -514,13 +408,6 @@ CREATE POLICY "diary entries visible when public and owned" ON public.diary_entr
     OR (auth.uid() IS NOT NULL AND auth.uid() = user_id)
   );
 
--- diary_entry_folders policies
-DROP POLICY IF EXISTS "own diary entry folders" ON public.diary_entry_folders;
-CREATE POLICY "own diary entry folders" ON public.diary_entry_folders
-  FOR ALL TO authenticated
-  USING (auth.uid() = user_id)
-  WITH CHECK (auth.uid() = user_id);
-
 -- note_folders policies
 DROP POLICY IF EXISTS "own note folders" ON public.note_folders;
 CREATE POLICY "own note folders" ON public.note_folders
@@ -531,13 +418,6 @@ CREATE POLICY "own note folders" ON public.note_folders
 -- notes policies
 DROP POLICY IF EXISTS "own notes" ON public.notes;
 CREATE POLICY "own notes" ON public.notes
-  FOR ALL TO authenticated
-  USING (auth.uid() = user_id)
-  WITH CHECK (auth.uid() = user_id);
-
--- note_folder_memberships policies
-DROP POLICY IF EXISTS "own note folder memberships" ON public.note_folder_memberships;
-CREATE POLICY "own note folder memberships" ON public.note_folder_memberships
   FOR ALL TO authenticated
   USING (auth.uid() = user_id)
   WITH CHECK (auth.uid() = user_id);
@@ -635,15 +515,8 @@ CREATE POLICY "own messages" ON public.chat_messages
   USING (auth.uid() = user_id)
   WITH CHECK (auth.uid() = user_id);
 
--- life_goals policies
-DROP POLICY IF EXISTS "own life goals" ON public.life_goals;
-CREATE POLICY "own life goals" ON public.life_goals
-  FOR ALL TO authenticated
-  USING (auth.uid() = user_id)
-  WITH CHECK (auth.uid() = user_id);
-
 -- -----------------------------------------------------------------------------
--- 7. Storage Buckets & Storage RLS Policies
+-- 6. Storage Buckets & Storage RLS Policies
 -- -----------------------------------------------------------------------------
 
 INSERT INTO storage.buckets (id, name, public)
@@ -674,12 +547,18 @@ CREATE POLICY "users delete own gallery objects" ON storage.objects
   FOR DELETE TO authenticated
   USING (bucket_id = 'gallery' AND auth.uid()::text = (storage.foldername(name))[1]);
 
--- 'media' bucket policies (used by Notes E2EE attachments and Blog images)
+-- 'media' bucket policies (encrypted .bin Note attachments are strictly owner-only; Blog images readable by authenticated users)
 DROP POLICY IF EXISTS "media users read own" ON storage.objects;
 DROP POLICY IF EXISTS "media authenticated read" ON storage.objects;
 CREATE POLICY "media authenticated read" ON storage.objects
   FOR SELECT TO authenticated
-  USING (bucket_id = 'media');
+  USING (
+    bucket_id = 'media'
+    AND (
+      auth.uid()::text = (storage.foldername(name))[1]
+      OR name NOT LIKE '%.bin'
+    )
+  );
 
 DROP POLICY IF EXISTS "media users insert own" ON storage.objects;
 CREATE POLICY "media users insert own" ON storage.objects
@@ -696,5 +575,43 @@ DROP POLICY IF EXISTS "media users delete own" ON storage.objects;
 CREATE POLICY "media users delete own" ON storage.objects
   FOR DELETE TO authenticated
   USING (bucket_id = 'media' AND auth.uid()::text = (storage.foldername(name))[1]);
+
+-- -----------------------------------------------------------------------------
+-- 7. Data Hygiene & E2EE Metadata Scrubbing
+-- -----------------------------------------------------------------------------
+UPDATE public.diary_entries d
+SET image_path = NULL
+WHERE d.image_path IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1 FROM public.gallery_images g
+    WHERE g.storage_path = d.image_path AND g.user_id = d.user_id
+  );
+
+-- Scrub any residual plaintext metadata columns on encrypted private diary entries
+UPDATE public.diary_entries
+SET
+  title = NULL,
+  mood = NULL,
+  word_count = 0,
+  mood_score = NULL,
+  music_track_id = NULL,
+  music_track_name = NULL,
+  music_artist = NULL,
+  music_preview_url = NULL,
+  music_artwork_url = NULL
+WHERE is_public = false AND iv IS NOT NULL;
+
+-- Scrub any residual plaintext columns on encrypted notes
+UPDATE public.notes
+SET
+  title = NULL,
+  tags = NULL
+WHERE iv IS NOT NULL;
+
+DELETE FROM public.chat_sessions s
+WHERE NOT EXISTS (
+  SELECT 1 FROM public.chat_messages m WHERE m.session_id = s.id
+)
+AND s.created_at < now() - interval '1 hour';
 
 COMMIT;
