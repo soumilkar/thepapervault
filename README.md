@@ -4,7 +4,7 @@ make a websitte for me where I can login to make my diary entries, have a person
 
 This project was built with [Lovable](https://lovable.dev).
 
-**Live app**: https://thepapervault.lovable.app
+**Live app**: https://thepapervault.vercel.app
 
 ## Build with Lovable
 
