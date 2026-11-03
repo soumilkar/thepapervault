@@ -245,7 +245,6 @@ export type Database = {
           is_public: boolean
           iv: string | null
           mood: string | null
-          mood_score: number | null
           music_artist: string | null
           music_artwork_url: string | null
           music_preview_url: string | null
@@ -267,7 +266,6 @@ export type Database = {
           is_public?: boolean
           iv?: string | null
           mood?: string | null
-          mood_score?: number | null
           music_artist?: string | null
           music_artwork_url?: string | null
           music_preview_url?: string | null
@@ -289,7 +287,6 @@ export type Database = {
           is_public?: boolean
           iv?: string | null
           mood?: string | null
-          mood_score?: number | null
           music_artist?: string | null
           music_artwork_url?: string | null
           music_preview_url?: string | null

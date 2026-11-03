@@ -8,7 +8,8 @@ import { Markdown } from "@/components/Markdown";
 import { MusicPlayer } from "@/components/MusicSearch";
 import { WritingStreaks } from "@/components/WritingStreaks";
 import { EntryHeatmap } from "@/components/EntryHeatmap";
-import { MoodTimeline } from "@/components/MoodTimeline";
+import { MoodTracker } from "@/components/MoodTracker";
+import { GoalsTracker } from "@/components/GoalsTracker";
 import { useDiaryMetrics } from "@/lib/diary-metrics";
 
 export const Route = createFileRoute("/app/")({
@@ -110,12 +111,13 @@ function Dashboard() {
 
       <div className="space-y-6">
         <WritingStreaks userId={user.id} />
+        <EntryHeatmap userId={user.id} />
         <div className="grid gap-6 lg:grid-cols-2">
           <div className="min-w-0">
-            <EntryHeatmap userId={user.id} />
+            <GoalsTracker userId={user.id} />
           </div>
           <div className="min-w-0">
-            <MoodTimeline userId={user.id} />
+            <MoodTracker userId={user.id} />
           </div>
         </div>
       </div>

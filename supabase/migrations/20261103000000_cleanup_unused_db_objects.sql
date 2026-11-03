@@ -16,6 +16,7 @@ DROP TABLE IF EXISTS public.note_folder_memberships CASCADE;
 -- 3. Drop unused columns
 ALTER TABLE public.profiles DROP COLUMN IF EXISTS bio;
 ALTER TABLE public.diary_entries DROP COLUMN IF EXISTS is_pinned;
+ALTER TABLE public.diary_entries DROP COLUMN IF EXISTS mood_score;
 ALTER TABLE public.notes DROP COLUMN IF EXISTS is_pinned;
 
 -- 4. Clean up unallocated / orphaned data
@@ -53,7 +54,6 @@ SET
   title = NULL,
   mood = NULL,
   word_count = 0,
-  mood_score = NULL,
   music_track_id = NULL,
   music_track_name = NULL,
   music_artist = NULL,

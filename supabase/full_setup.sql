@@ -96,7 +96,6 @@ CREATE TABLE IF NOT EXISTS public.diary_entries (
   title text,
   content text NOT NULL,
   mood text,
-  mood_score smallint,
   word_count integer NOT NULL DEFAULT 0,
   entry_date date NOT NULL DEFAULT CURRENT_DATE,
   image_path text,
@@ -112,6 +111,7 @@ CREATE TABLE IF NOT EXISTS public.diary_entries (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 ALTER TABLE public.diary_entries DROP COLUMN IF EXISTS is_pinned;
+ALTER TABLE public.diary_entries DROP COLUMN IF EXISTS mood_score;
 
 -- 2.5 note_folders (supports nested subfolders via parent_id)
 CREATE TABLE IF NOT EXISTS public.note_folders (
@@ -593,7 +593,6 @@ SET
   title = NULL,
   mood = NULL,
   word_count = 0,
-  mood_score = NULL,
   music_track_id = NULL,
   music_track_name = NULL,
   music_artist = NULL,

@@ -360,7 +360,7 @@ function NotesPage() {
         <input
           value={title}
           onChange={(e) => setTitle(e.target.value)}
-          placeholder="Title (optional)"
+          placeholder="Title"
           className="w-full bg-transparent font-serif text-2xl outline-none placeholder:text-muted-foreground/60"
         />
         <input
@@ -373,7 +373,7 @@ function NotesPage() {
           value={content}
           onChange={(e) => setContent(e.target.value)}
           rows={5}
-          placeholder="Jot something down... paste an image link on its own line to show the picture"
+          placeholder="Jot something down..."
           className="w-full resize-y bg-transparent leading-relaxed outline-none placeholder:text-muted-foreground/60"
         />
         {hasImageLinks(content) && (

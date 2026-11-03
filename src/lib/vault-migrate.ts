@@ -2,7 +2,6 @@
 // and prune unallocated / excess chat sessions belonging to the current user.
 import { supabase } from "@/integrations/supabase/client";
 import { decryptText, encryptBlob, encryptField, encryptText, isEncryptedField } from "@/lib/crypto";
-import { moodScore } from "@/lib/mood-sentiment";
 
 let migrationRunning = false;
 
@@ -48,7 +47,6 @@ type DiaryRow = {
   mood: string | null;
   iv: string | null;
   word_count: number | null;
-  mood_score: number | null;
   music_track_id: string | null;
   music_track_name: string | null;
   music_artist: string | null;
@@ -69,7 +67,7 @@ async function migrateDiary(userId: string, key: CryptoKey) {
   const { data } = await supabase
     .from("diary_entries")
     .select(
-      "id,title,content,mood,iv,word_count,mood_score,music_track_id,music_track_name,music_artist,music_preview_url,music_artwork_url",
+      "id,title,content,mood,iv,word_count,music_track_id,music_track_name,music_artist,music_preview_url,music_artwork_url",
     )
     .eq("user_id", userId)
     .eq("is_public", false);
@@ -81,7 +79,6 @@ async function migrateDiary(userId: string, key: CryptoKey) {
         row.title !== null ||
         row.mood !== null ||
         (row.word_count !== null && row.word_count !== 0) ||
-        row.mood_score !== null ||
         row.music_preview_url !== null;
       if (!hasPlainCols) return;
 
@@ -121,7 +118,6 @@ async function migrateDiary(userId: string, key: CryptoKey) {
         c,
         m,
         wc: countWords(c),
-        ms: m ? moodScore(m) : null,
         mu,
       });
       const { ct, iv } = await encryptText(key, payload);
@@ -133,7 +129,6 @@ async function migrateDiary(userId: string, key: CryptoKey) {
           mood: null,
           iv,
           word_count: 0,
-          mood_score: null,
           music_track_id: null,
           music_track_name: null,
           music_artist: null,

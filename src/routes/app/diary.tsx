@@ -12,7 +12,6 @@ import { useVault } from "@/lib/vault";
 import { decryptBytes, decryptField, decryptText, encryptBlob, encryptField, encryptText } from "@/lib/crypto";
 import { MusicSearch, MusicPlayer, type SelectedTrack } from "@/components/MusicSearch";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
-import { moodScore } from "@/lib/mood-sentiment";
 import { AppSelect } from "@/components/AppSelect";
 import { useBrowserDraft } from "@/lib/browser-drafts";
 
@@ -31,7 +30,6 @@ type DiaryEncryptedPayload = {
   c?: string;
   m?: string;
   wc?: number;
-  ms?: number | null;
   mu?: SelectedTrack | null;
 };
 
@@ -51,7 +49,6 @@ type DiaryRowRaw = {
   music_preview_url: string | null;
   music_artwork_url: string | null;
   word_count: number | null;
-  mood_score: number | null;
   created_at: string;
 };
 
@@ -196,7 +193,6 @@ function DiaryPage() {
                 (row.title !== null ||
                   row.mood !== null ||
                   (row.word_count !== null && row.word_count !== 0) ||
-                  row.mood_score !== null ||
                   row.music_preview_url !== null ||
                   obj.wc === undefined);
               if (hasLeakedMeta) {
@@ -205,7 +201,6 @@ function DiaryPage() {
                   c,
                   m,
                   wc: countWords(c),
-                  ms: m ? moodScore(m) : null,
                   mu,
                 };
                 const reEnc = await encryptText(key, JSON.stringify(upgradedPayload));
@@ -217,7 +212,6 @@ function DiaryPage() {
                     content: reEnc.ct,
                     iv: reEnc.iv,
                     word_count: 0,
-                    mood_score: null,
                     ...NULL_MUSIC_COLUMNS,
                   } as never)
                   .eq("id", row.id);
@@ -232,7 +226,6 @@ function DiaryPage() {
               c,
               m,
               wc: countWords(c),
-              ms: m ? moodScore(m) : null,
               mu,
             };
             const enc = await encryptText(key, JSON.stringify(upgradedPayload));
@@ -244,7 +237,6 @@ function DiaryPage() {
                 content: enc.ct,
                 iv: enc.iv,
                 word_count: 0,
-                mood_score: null,
                 ...NULL_MUSIC_COLUMNS,
               } as never)
               .eq("id", row.id);
@@ -310,7 +302,6 @@ function DiaryPage() {
           folder_id: folderId,
           visibility: "public_anon",
           word_count: countWords(content),
-          mood_score: mood ? moodScore(mood) : null,
           ...musicPatch,
         } as never);
         if (error) throw error;
@@ -349,7 +340,6 @@ function DiaryPage() {
         c: content,
         m: mood,
         wc: countWords(content),
-        ms: mood ? moodScore(mood) : null,
         mu: music,
       };
       const { ct, iv } = await encryptText(key, JSON.stringify(payload));
@@ -364,7 +354,6 @@ function DiaryPage() {
         folder_id: folderId,
         iv,
         word_count: 0,
-        mood_score: null,
         ...NULL_MUSIC_COLUMNS,
       } as never);
       if (error) throw error;
@@ -403,7 +392,6 @@ function DiaryPage() {
           c: vars.content,
           m: vars.mood,
           wc: countWords(vars.content),
-          ms: vars.mood ? moodScore(vars.mood) : null,
           mu: vars.music,
         };
         const { ct, iv } = await encryptText(key, JSON.stringify(payload));
@@ -416,7 +404,6 @@ function DiaryPage() {
             iv,
             folder_id: vars.folder_id,
             word_count: 0,
-            mood_score: null,
             ...NULL_MUSIC_COLUMNS,
           } as never)
           .eq("id", vars.id);
@@ -430,7 +417,6 @@ function DiaryPage() {
             mood: vars.mood || null,
             folder_id: vars.folder_id,
             word_count: countWords(vars.content),
-            mood_score: vars.mood ? moodScore(vars.mood) : null,
             ...musicPatch,
           } as never)
           .eq("id", vars.id);
@@ -542,19 +528,19 @@ function DiaryPage() {
         <input
           value={title}
           onChange={(e) => setTitle(e.target.value)}
-          placeholder="Title (optional)"
+          placeholder="Title"
           className="w-full bg-transparent font-serif text-2xl outline-none placeholder:text-muted-foreground/60"
         />
         <input
           value={mood}
           onChange={(e) => setMood(e.target.value)}
-          placeholder="How are you feeling? (e.g. peaceful, anxious, joyful)"
+          placeholder="How are you feeling?"
           className="w-full bg-transparent text-sm text-accent outline-none placeholder:text-muted-foreground/60"
         />
         <textarea
           value={content}
           onChange={(e) => setContent(e.target.value)}
-          placeholder="Pour it out... paste an image link on its own line to show the picture"
+          placeholder="Pour it out..."
           rows={6}
           className="w-full resize-none bg-transparent leading-relaxed outline-none placeholder:text-muted-foreground/60"
         />
