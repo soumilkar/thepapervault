@@ -1,17 +1,26 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { memo, useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
-import { ImagePlus, Trash2, X, Pencil, Check, FolderPlus, Folder, Search, Plus, Minus } from "lucide-react";
-import { RichText } from "@/components/RichText";
+import {
+  Trash2,
+  X,
+  FolderPlus,
+  Folder,
+  Search,
+  Plus,
+  ChevronRight,
+  ChevronDown,
+  FileText,
+} from "lucide-react";
+import { RichEditor } from "@/components/RichEditor";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { AppSelect } from "@/components/AppSelect";
 import { useBrowserDraft } from "@/lib/browser-drafts";
 import { useVault } from "@/lib/vault";
 import { decryptBytes, decryptField, decryptText, encryptBlob, encryptField, encryptText } from "@/lib/crypto";
 import { folderOptions, folderWithDescendants, type FolderRow } from "@/lib/folders";
-import { hasImageLinks, previewText } from "@/lib/rich-text";
 
 const NONE = "__none__";
 
@@ -49,6 +58,16 @@ async function uploadEncrypted(userId: string, key: CryptoKey, file: File) {
   return { path, iv, mime: file.type };
 }
 
+function formatSheetDate(iso?: string) {
+  const d = iso ? new Date(iso) : new Date();
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleDateString("en-US", {
+    month: "2-digit",
+    day: "2-digit",
+    year: "numeric",
+  });
+}
+
 type Payload = { t?: string; c?: string; g?: string[]; ii?: string; im?: string };
 type Note = {
   id: string;
@@ -79,18 +98,26 @@ function NotesPage() {
   const { user } = Route.useRouteContext();
   const { key } = useVault();
   const qc = useQueryClient();
-  type NoteDraft = { title: string; content: string; tags: string; folderId: string | null };
+  type NoteDraft = {
+    title: string;
+    content: string;
+    tags: string;
+    folderId: string | null;
+    activeNoteId?: string | null;
+  };
   const [draft, setDraft, clearDraft] = useBrowserDraft<NoteDraft>(`papervault:note-draft:${user.id}`, {
     title: "",
     content: "",
     tags: "",
     folderId: null,
+    activeNoteId: null,
   });
-  const { title, content, tags, folderId } = draft;
+  const { title, content, tags, folderId, activeNoteId: draftActiveNoteId } = draft;
   const setTitle = (value: string) => setDraft((c) => ({ ...c, title: value }));
   const setContent = (value: string) => setDraft((c) => ({ ...c, content: value }));
   const setTags = (value: string) => setDraft((c) => ({ ...c, tags: value }));
   const setFolderId = (value: string | null) => setDraft((c) => ({ ...c, folderId: value }));
+
   const [image, setImage] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [filterFolder, setFilterFolder] = useState<string>("all");
@@ -98,6 +125,26 @@ function NotesPage() {
   const [query, setQuery] = useState("");
   const [newFolder, setNewFolder] = useState("");
   const [newFolderParent, setNewFolderParent] = useState<string>(NONE);
+
+  // Studio sheet state
+  const [browseOpen, setBrowseOpen] = useState(false);
+  const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
+  const [isCreatingNew, setIsCreatingNew] = useState(false);
+  const [sheetEditing, setSheetEditing] = useState(false);
+  const [draftPreview, setDraftPreview] = useState(false);
+  const [sTitle, setSTitle] = useState("");
+  const [sContent, setSContent] = useState("");
+  const [sTags, setSTags] = useState("");
+  const [sFolderId, setSFolderId] = useState<string | null>(null);
+  const [sImage, setSImage] = useState<File | null>(null);
+  const [sImagePreview, setSImagePreview] = useState<string | null>(null);
+  const [confirmDeleteActive, setConfirmDeleteActive] = useState(false);
+  const [linkPromptOpen, setLinkPromptOpen] = useState(false);
+  const [linkUrl, setLinkUrl] = useState("");
+  const [linkText, setLinkText] = useState("");
+
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     if (!image) {
@@ -108,6 +155,16 @@ function NotesPage() {
     setImagePreview(url);
     return () => URL.revokeObjectURL(url);
   }, [image]);
+
+  useEffect(() => {
+    if (!sImage) {
+      setSImagePreview(null);
+      return;
+    }
+    const url = URL.createObjectURL(sImage);
+    setSImagePreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [sImage]);
 
   const folders = useQuery({
     enabled: !!key,
@@ -206,8 +263,78 @@ function NotesPage() {
     });
   }, [notes.data, folders.data, filterFolder, sort, query]);
 
+  const activeNote = useMemo(
+    () => (selectedNoteId ? (notes.data ?? []).find((n) => n.id === selectedNoteId) ?? null : null),
+    [selectedNoteId, notes.data],
+  );
+
+  // Restore last viewed note or default to most recent saved note when notes load (including after logout/login)
+  useEffect(() => {
+    if (isCreatingNew) return;
+    const list = notes.data;
+    if (!list || list.length === 0) return;
+
+    if (selectedNoteId && list.some((n) => n.id === selectedNoteId)) {
+      return;
+    }
+
+    if (draftActiveNoteId && list.some((n) => n.id === draftActiveNoteId)) {
+      setSelectedNoteId(draftActiveNoteId);
+      return;
+    }
+
+    // If user is not actively typing an unsaved draft, show the most recently saved/updated note
+    if (!title.trim() && !content.trim()) {
+      const latest = [...list].sort(
+        (a, b) =>
+          new Date(b.updated_at || b.created_at).getTime() -
+          new Date(a.updated_at || a.created_at).getTime(),
+      )[0];
+      if (latest) {
+        setSelectedNoteId(latest.id);
+      }
+    }
+  }, [notes.data, isCreatingNew, selectedNoteId, draftActiveNoteId, title, content]);
+
+  // Sync active note fields when selection changes
+  useEffect(() => {
+    if (activeNote) {
+      setSTitle(activeNote.title);
+      setSContent(activeNote.content);
+      setSTags(activeNote.tags.join(", "));
+      setSFolderId(activeNote.folder_id);
+      setSImage(null);
+    }
+  }, [activeNote]);
+
+  const openNoteInSheet = useCallback(
+    (n: Note, editMode = false) => {
+      setIsCreatingNew(false);
+      setSelectedNoteId(n.id);
+      setDraft((c) => ({ ...c, activeNoteId: n.id }));
+      setSTitle(n.title);
+      setSContent(n.content);
+      setSTags(n.tags.join(", "));
+      setSFolderId(n.folder_id);
+      setSImage(null);
+      setSheetEditing(editMode);
+      setBrowseOpen(false);
+    },
+    [setDraft],
+  );
+
+  const startNewNote = useCallback(() => {
+    setIsCreatingNew(true);
+    setSelectedNoteId(null);
+    setDraft((c) => ({ ...c, activeNoteId: null }));
+    setSheetEditing(false);
+    setDraftPreview(false);
+    setBrowseOpen(false);
+    setTimeout(() => textareaRef.current?.focus(), 30);
+  }, [setDraft]);
+
   const create = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (): Promise<Note> => {
       if (!key) throw new Error("Vault is locked");
       let img: { path: string; iv: string; mime: string } | null = null;
       if (image) img = await uploadEncrypted(user.id, key, image);
@@ -222,20 +349,55 @@ function NotesPage() {
         ...(img ? { ii: img.iv, im: img.mime } : {}),
       };
       const { ct, iv } = await encryptText(key, JSON.stringify(payload));
-      const { error } = await supabase.from("notes").insert({
-        user_id: user.id,
-        title: null,
-        content: ct,
-        iv,
-        tags: null,
-        image_url: img?.path ?? null,
-        folder_id: folderId,
-      } as never);
+      const { data: inserted, error } = await supabase
+        .from("notes")
+        .insert({
+          user_id: user.id,
+          title: null,
+          content: ct,
+          iv,
+          tags: null,
+          image_url: img?.path ?? null,
+          folder_id: folderId,
+        } as never)
+        .select("id,created_at,updated_at")
+        .single();
       if (error) throw error;
+      const row = inserted as { id: string; created_at: string; updated_at: string };
+      return {
+        id: row.id,
+        title,
+        content,
+        tags: tagArr,
+        image_url: img?.path ?? null,
+        image_iv: img?.iv ?? null,
+        image_mime: img?.mime ?? null,
+        folder_id: folderId,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+      };
     },
-    onSuccess: () => {
-      clearDraft();
+    onSuccess: (createdNote) => {
+      qc.setQueryData<Note[]>(["notes", user.id], (old) => [
+        createdNote,
+        ...(old ?? []).filter((n) => n.id !== createdNote.id),
+      ]);
+      setIsCreatingNew(false);
+      setSelectedNoteId(createdNote.id);
+      setSTitle(createdNote.title);
+      setSContent(createdNote.content);
+      setSTags(createdNote.tags.join(", "));
+      setSFolderId(createdNote.folder_id);
+      setSheetEditing(false);
+      setDraft({
+        title: "",
+        content: "",
+        tags: "",
+        folderId: null,
+        activeNoteId: createdNote.id,
+      });
       setImage(null);
+      setDraftPreview(false);
       toast.success("Note saved");
       qc.invalidateQueries({ queryKey: ["notes"] });
       qc.invalidateQueries({ queryKey: ["heatmap-activity"] });
@@ -250,19 +412,33 @@ function NotesPage() {
       content: string;
       tags: string;
       folder_id: string | null;
-    }) => {
+      newImage?: File | null;
+    }): Promise<Note> => {
       if (!key) throw new Error("Vault is locked");
       const tagArr = vars.tags
         .split(",")
         .map((t) => t.trim())
         .filter(Boolean);
       const n = vars.note;
+      let imgUrl = n.image_url;
+      let imgIv = n.image_iv;
+      let imgMime = n.image_mime;
+      if (vars.newImage) {
+        if (n.image_url) {
+          await supabase.storage.from(MEDIA_BUCKET).remove([n.image_url]);
+        }
+        const up = await uploadEncrypted(user.id, key, vars.newImage);
+        imgUrl = up.path;
+        imgIv = up.iv;
+        imgMime = up.mime;
+      }
       const payload: Payload = {
         t: vars.title,
         c: vars.content,
         g: tagArr,
-        ...(n.image_iv ? { ii: n.image_iv, im: n.image_mime ?? undefined } : {}),
+        ...(imgIv ? { ii: imgIv, im: imgMime ?? undefined } : {}),
       };
+      const updatedAt = new Date().toISOString();
       const { ct, iv } = await encryptText(key, JSON.stringify(payload));
       const { error } = await supabase
         .from("notes")
@@ -271,13 +447,29 @@ function NotesPage() {
           iv,
           title: null,
           tags: null,
+          image_url: imgUrl,
           folder_id: vars.folder_id,
-          updated_at: new Date().toISOString(),
+          updated_at: updatedAt,
         } as never)
         .eq("id", n.id);
       if (error) throw error;
+      return {
+        ...n,
+        title: vars.title,
+        content: vars.content,
+        tags: tagArr,
+        image_url: imgUrl,
+        image_iv: imgIv,
+        image_mime: imgMime,
+        folder_id: vars.folder_id,
+        updated_at: updatedAt,
+      };
     },
-    onSuccess: () => {
+    onSuccess: (updatedNote) => {
+      qc.setQueryData<Note[]>(["notes", user.id], (old) =>
+        (old ?? []).map((n) => (n.id === updatedNote.id ? updatedNote : n)),
+      );
+      setSImage(null);
       toast.success("Note updated");
       qc.invalidateQueries({ queryKey: ["notes"] });
     },
@@ -291,8 +483,17 @@ function NotesPage() {
       }
       const { error } = await supabase.from("notes").delete().eq("id", note.id);
       if (error) throw error;
+      return note.id;
     },
-    onSuccess: () => {
+    onSuccess: (deletedId) => {
+      const remaining = (qc.getQueryData<Note[]>(["notes", user.id]) ?? []).filter((n) => n.id !== deletedId);
+      qc.setQueryData<Note[]>(["notes", user.id], remaining);
+      if (selectedNoteId === deletedId) {
+        const nextNote = remaining[0] ?? null;
+        setSelectedNoteId(nextNote?.id ?? null);
+        setDraft((c) => ({ ...c, activeNoteId: nextNote?.id ?? null }));
+        setSheetEditing(false);
+      }
       qc.invalidateQueries({ queryKey: ["notes"] });
       qc.invalidateQueries({ queryKey: ["heatmap-activity"] });
     },
@@ -334,195 +535,493 @@ function NotesPage() {
     onError: (e: Error) => toast.error(e.message),
   });
 
-  const handleDeleteNote = useCallback((note: Note) => remove.mutate(note), [remove]);
-  const handleSaveNote = useCallback(
-    (note: Note, v: { title: string; content: string; tags: string; folder_id: string | null }) => {
-      update.mutate({ note, ...v });
+  const currentTitle = activeNote ? sTitle : title;
+  const titleInputRef = useRef<HTMLTextAreaElement>(null);
+
+  const syncTitleHeight = useCallback(() => {
+    const el = titleInputRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, []);
+
+  useEffect(() => {
+    syncTitleHeight();
+  }, [currentTitle, syncTitleHeight]);
+
+  useEffect(() => {
+    window.addEventListener("resize", syncTitleHeight);
+    return () => window.removeEventListener("resize", syncTitleHeight);
+  }, [syncTitleHeight]);
+
+  const currentText = activeNote ? sContent : content;
+  const updateCurrentText = useCallback(
+    (next: string) => {
+      if (activeNote) {
+        setSContent(next);
+      } else {
+        setDraft((c) => ({ ...c, content: next }));
+      }
     },
-    [update],
+    [activeNote, setDraft],
   );
 
+  const totalNotesCount = filtered.length;
+  const activeFolderValue = (activeNote ? sFolderId : folderId) ?? NONE;
+  const hasActiveNoteChanges =
+    !!activeNote &&
+    (sTitle !== activeNote.title ||
+      sContent !== activeNote.content ||
+      sTags !== activeNote.tags.join(", ") ||
+      sFolderId !== activeNote.folder_id ||
+      sImage !== null ||
+      sheetEditing);
+
   return (
-    <div className="space-y-6">
-      <div>
-        <p className="font-hand text-2xl text-sepia">scraps and reminders</p>
-        <h1 className="font-serif text-4xl text-primary">Notes</h1>
-        <p className="mt-1 text-xs uppercase tracking-wide text-muted-foreground">end-to-end encrypted</p>
+    <div className="space-y-5">
+      {/* Header Row with Right-Side Browse Pages Menu Button & New Note */}
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <p className="font-hand text-2xl text-sepia">scraps and reminders</p>
+          <h1 className="font-serif text-4xl text-primary">Notes</h1>
+          <p className="mt-1 text-xs uppercase tracking-wide text-muted-foreground">end-to-end encrypted</p>
+        </div>
+
+        <div className="relative flex items-center gap-2.5">
+          <button
+            type="button"
+            onClick={startNewNote}
+            className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-sm transition hover:opacity-95"
+          >
+            <Plus className="size-4" />
+            <span>New Note</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setBrowseOpen((o) => !o)}
+            className="flex items-center gap-2 rounded-xl border border-border bg-card px-4 py-2 text-sm font-medium text-primary shadow-sm transition hover:bg-secondary/60"
+          >
+            <Folder className="size-4 text-sepia" />
+            <span>Browse Pages ({totalNotesCount})</span>
+            {browseOpen ? (
+              <ChevronDown className="size-4 text-muted-foreground" />
+            ) : (
+              <ChevronRight className="size-4 text-muted-foreground" />
+            )}
+          </button>
+
+          {/* Translucent, Blurry, Warm Sepia-Tinted Floating Menu Matching Website Theme */}
+          {browseOpen && (
+            <>
+              <div
+                className="fixed inset-0 z-30 bg-[oklch(0.28_0.04_50_/_0.08)] backdrop-blur-[1px]"
+                onClick={() => setBrowseOpen(false)}
+              />
+              <div className="absolute right-0 top-full z-40 mt-2.5 w-[min(92vw,31rem)] space-y-3 rounded-2xl border border-border/85 bg-[oklch(0.94_0.032_76_/_0.82)] p-4 text-foreground shadow-xl backdrop-blur-2xl">
+                <div className="flex items-center justify-between gap-2 px-1">
+                  <div className="flex items-center gap-2">
+                    <Folder className="size-4 text-sepia" />
+                    <span className="font-serif text-lg font-medium text-primary">
+                      Browse Pages ({totalNotesCount})
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={startNewNote}
+                      className="flex items-center gap-1 rounded-lg border border-border/80 bg-card/75 px-2.5 py-1 text-xs font-medium text-primary shadow-2xs backdrop-blur-md transition hover:bg-card"
+                    >
+                      <Plus className="size-3.5" /> New Note
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setBrowseOpen(false)}
+                      className="rounded-lg p-1 text-muted-foreground transition hover:bg-secondary/70 hover:text-primary"
+                      aria-label="Close menu"
+                    >
+                      <X className="size-4" />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Search Box (Translucent Warm-Tinted Box) */}
+                <label className="flex items-center gap-2 rounded-xl border border-border/75 bg-[oklch(0.89_0.038_74_/_0.52)] px-3.5 py-2 text-sm backdrop-blur-md transition focus-within:border-primary/40 focus-within:bg-card/80">
+                  <Search className="size-4 text-sepia" />
+                  <input
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    placeholder="Search notes..."
+                    className="min-w-0 flex-1 bg-transparent text-foreground outline-none placeholder:text-muted-foreground/80"
+                  />
+                  {query && (
+                    <button type="button" onClick={() => setQuery("")} aria-label="Clear search">
+                      <X className="size-4 text-muted-foreground hover:text-foreground" />
+                    </button>
+                  )}
+                </label>
+
+                {/* Folder Filter & Sort Box (Translucent Warm-Tinted Box) */}
+                <div className="flex flex-wrap items-center justify-between gap-2.5 rounded-xl border border-border/75 bg-[oklch(0.89_0.038_74_/_0.52)] p-3 text-xs backdrop-blur-md sm:text-sm">
+                  <div className="flex items-center gap-1.5">
+                    <Folder className="size-4 text-sepia" />
+                    <AppSelect
+                      value={filterFolder}
+                      onValueChange={(v) => setFilterFolder(v)}
+                      triggerClassName="border-border/80 bg-card/80 text-foreground hover:bg-card"
+                      options={[{ value: "all", label: "All notes" }, { value: "none", label: "No folder" }, ...fOpts]}
+                    />
+                    {filterFolder !== "all" && filterFolder !== "none" && (
+                      <button
+                        type="button"
+                        onClick={() => deleteFolder.mutate(filterFolder)}
+                        title="Delete selected folder"
+                        className="rounded-md p-1.5 text-muted-foreground hover:bg-secondary/70 hover:text-destructive"
+                      >
+                        <Trash2 className="size-3.5" />
+                      </button>
+                    )}
+                  </div>
+
+                  <label className="flex items-center gap-2">
+                    <span className="text-muted-foreground">Sort</span>
+                    <AppSelect
+                      value={sort}
+                      onValueChange={(v) => setSort(v as Sort)}
+                      triggerClassName="border-border/80 bg-card/80 text-foreground hover:bg-card"
+                      options={[
+                        { value: "newest", label: "Newest first" },
+                        { value: "oldest", label: "Oldest first" },
+                        { value: "edited", label: "Recently edited" },
+                        { value: "title", label: "Title A–Z" },
+                      ]}
+                    />
+                  </label>
+                </div>
+
+                {/* New Folder Creation Box (Translucent Warm-Tinted Box) */}
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    if (newFolder.trim()) createFolder.mutate(newFolder.trim());
+                  }}
+                  className="flex flex-wrap items-center gap-2 rounded-xl border border-border/75 bg-[oklch(0.89_0.038_74_/_0.52)] p-3 text-xs backdrop-blur-md sm:text-sm"
+                >
+                  <input
+                    value={newFolder}
+                    onChange={(e) => setNewFolder(e.target.value)}
+                    placeholder="New folder"
+                    className="min-w-[7rem] flex-1 rounded-md border border-border/80 bg-card/80 px-2.5 py-1 text-sm text-foreground outline-none placeholder:text-muted-foreground/80 focus:border-primary/40"
+                  />
+                  <AppSelect
+                    value={newFolderParent}
+                    onValueChange={setNewFolderParent}
+                    triggerClassName="border-border/80 bg-card/80 text-foreground hover:bg-card"
+                    options={[
+                      { value: NONE, label: "Top level" },
+                      ...fOpts.map((o) => ({ value: o.value, label: `inside ${o.label}` })),
+                    ]}
+                  />
+                  <button
+                    type="submit"
+                    className="flex items-center gap-1 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground shadow-2xs transition hover:opacity-95"
+                  >
+                    <FolderPlus className="size-3.5" /> Add
+                  </button>
+                </form>
+
+                {/* Saved Pages List (Each in a Translucent Warm-Tinted Box) */}
+                <div className="max-h-72 space-y-2 overflow-y-auto pr-0.5">
+                  {notes.isLoading && (
+                    <div className="rounded-xl border border-border/75 bg-[oklch(0.89_0.038_74_/_0.52)] p-3 font-hand text-sepia backdrop-blur-md">
+                      gathering notes...
+                    </div>
+                  )}
+                  {!notes.isLoading && filtered.length === 0 && (
+                    <div className="rounded-xl border border-border/75 bg-[oklch(0.89_0.038_74_/_0.52)] p-3 text-sm text-muted-foreground backdrop-blur-md">
+                      {notes.data?.length === 0 ? "No notes yet." : "No notes match."}
+                    </div>
+                  )}
+                  {filtered.map((n) => {
+                    const isSelected = n.id === selectedNoteId;
+                    const folderLabel = fOpts.find((f) => f.value === n.folder_id)?.label?.trim();
+                    return (
+                      <button
+                        key={n.id}
+                        type="button"
+                        onClick={() => openNoteInSheet(n, false)}
+                        className={`flex w-full items-center justify-between gap-3 rounded-xl border px-3.5 py-2.5 text-left backdrop-blur-md transition ${
+                          isSelected
+                            ? "border-primary/45 bg-card/90 shadow-2xs"
+                            : "border-border/75 bg-[oklch(0.89_0.038_74_/_0.52)] hover:border-primary/30 hover:bg-card/80"
+                        }`}
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-start gap-2">
+                            <FileText className="mt-1 size-3.5 shrink-0 text-sepia" />
+                            <div className="min-w-0 flex-1">
+                              <span className="break-words font-serif text-base font-medium leading-snug text-primary">
+                                {n.title || "Untitled"}
+                              </span>
+                              {folderLabel && (
+                                <span className="ml-1.5 inline-block text-xs text-muted-foreground">
+                                  · {folderLabel}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          {n.tags.length > 0 && (
+                            <div className="mt-0.5 flex flex-wrap gap-1 pl-5">
+                              {n.tags.map((t) => (
+                                <span key={t} className="text-[11px] text-sepia">
+                                  #{t}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                        <span className="shrink-0 self-start pt-0.5 text-xs text-muted-foreground">
+                          {formatSheetDate(n.updated_at || n.created_at)}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </>
+          )}
+        </div>
       </div>
 
+      {/* Metadata Row Above the Main Studio Sheet (Date · Folder Selector · Tags · Delete Icon) */}
+      <div className="flex flex-wrap items-center justify-between gap-3 px-1 text-sm text-muted-foreground">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+          <div className="inline-flex items-center gap-1.5 text-foreground/85">
+            <span>{formatSheetDate(activeNote?.updated_at ?? activeNote?.created_at)}</span>
+            <ChevronDown className="size-3.5 text-muted-foreground" />
+          </div>
+
+          <span className="text-muted-foreground/60">·</span>
+
+          <div className="inline-flex items-center gap-1.5">
+            <AppSelect
+              value={activeFolderValue}
+              onValueChange={(v) => {
+                const nextFolder = v === NONE ? null : v;
+                if (activeNote) {
+                  setSFolderId(nextFolder);
+                  update.mutate({
+                    note: activeNote,
+                    title: sTitle,
+                    content: sContent,
+                    tags: sTags,
+                    folder_id: nextFolder,
+                  });
+                } else {
+                  setFolderId(nextFolder);
+                }
+              }}
+              options={[{ value: NONE, label: "Unfiled Notes" }, ...fOpts]}
+            />
+          </div>
+
+          <span className="hidden text-muted-foreground/60 sm:inline">·</span>
+
+          <input
+            value={activeNote ? sTags : tags}
+            onChange={(e) => (activeNote ? setSTags(e.target.value) : setTags(e.target.value))}
+            placeholder="tags, separated, by, commas"
+            className="min-w-[180px] bg-transparent text-xs text-sepia outline-none placeholder:text-muted-foreground/60 sm:text-sm"
+          />
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              if (activeNote) {
+                setConfirmDeleteActive(true);
+              } else if (title || content || tags || image) {
+                clearDraft();
+                setImage(null);
+                toast.success("Draft cleared");
+              }
+            }}
+            title={activeNote ? "Delete this note" : "Clear draft"}
+            aria-label={activeNote ? "Delete this note" : "Clear draft"}
+            className="rounded-md p-1.5 text-muted-foreground transition hover:bg-secondary hover:text-destructive"
+          >
+            <Trash2 className="size-4" />
+          </button>
+        </div>
+      </div>
+
+      {/* Main Studio Sheet Card with Instant WYSIWYG RichEditor */}
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          if (content.trim() || title.trim()) create.mutate();
+          if (activeNote) {
+            update.mutate(
+              {
+                note: activeNote,
+                title: sTitle,
+                content: sContent,
+                tags: sTags,
+                folder_id: sFolderId,
+                newImage: sImage,
+              },
+              {
+                onSuccess: () => setSheetEditing(false),
+              },
+            );
+          } else if (content.trim() || title.trim() || image) {
+            create.mutate();
+          }
         }}
-        className="paper-card space-y-3 p-6"
+        className="rounded-2xl border border-border bg-card shadow-sm"
       >
         <input
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          placeholder="Title"
-          className="w-full bg-transparent font-serif text-2xl outline-none placeholder:text-muted-foreground/60"
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) {
+              if (f.size > 5 * 1024 * 1024) {
+                toast.error("Image must be smaller than 5 MB");
+              } else if (activeNote) {
+                setSImage(f);
+                setSheetEditing(true);
+              } else {
+                setImage(f);
+              }
+            }
+            e.currentTarget.value = "";
+          }}
         />
-        <input
-          value={tags}
-          onChange={(e) => setTags(e.target.value)}
-          placeholder="tags, separated, by, commas"
-          className="w-full bg-transparent text-sm text-accent outline-none placeholder:text-muted-foreground/60"
-        />
-        <textarea
-          value={content}
-          onChange={(e) => setContent(e.target.value)}
-          rows={5}
+
+        <RichEditor
+          value={currentText}
+          onChange={updateCurrentText}
           placeholder="Jot something down..."
-          className="w-full resize-y bg-transparent leading-relaxed outline-none placeholder:text-muted-foreground/60"
-        />
-        {hasImageLinks(content) && (
-          <div className="rounded-md border border-border bg-secondary/30 p-3 text-sm">
-            <p className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">Preview</p>
-            <RichText>{content}</RichText>
-          </div>
-        )}
-        {imagePreview && (
-          <div className="relative inline-block">
-            <img src={imagePreview} className="max-h-56 rounded-md border border-border" alt="" />
-            <button
-              type="button"
-              onClick={() => setImage(null)}
-              className="absolute -right-2 -top-2 rounded-full bg-background p-1 shadow"
-            >
-              <X className="size-4" />
-            </button>
-          </div>
-        )}
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <label className="flex cursor-pointer items-center gap-2 text-sm text-accent hover:text-primary">
-            <ImagePlus className="size-4" />
-            <span>{image ? "Change image" : "Attach image"}</span>
-            <input
-              type="file"
-              accept="image/*"
-              className="hidden"
+          minHeightClass="min-h-[260px]"
+          onPhotoClick={() => fileInputRef.current?.click()}
+          photoLabel="Photo"
+          headerSlot={
+            <textarea
+              ref={titleInputRef}
+              rows={1}
+              value={currentTitle}
               onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) {
-                  if (f.size > 5 * 1024 * 1024) toast.error("Image must be smaller than 5 MB");
-                  else setImage(f);
+                const next = e.target.value.replace(/\r?\n/g, " ");
+                if (activeNote) {
+                  setSTitle(next);
+                } else {
+                  setTitle(next);
                 }
-                e.currentTarget.value = "";
               }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                }
+              }}
+              placeholder="Title"
+              className="block w-full resize-none overflow-hidden break-words bg-transparent font-serif text-3xl leading-tight text-primary outline-none placeholder:text-muted-foreground/50 sm:text-4xl"
             />
-          </label>
-          <label className="flex items-center gap-2 text-sm">
-            <span className="text-muted-foreground">Folder</span>
-            <AppSelect
-              value={folderId ?? NONE}
-              onValueChange={(v) => setFolderId(v === NONE ? null : v)}
-              options={[{ value: NONE, label: "— none —" }, ...fOpts]}
-            />
-          </label>
-          <button
-            type="submit"
-            disabled={create.isPending || !key}
-            className="rounded-md bg-primary px-5 py-2 text-sm text-primary-foreground disabled:opacity-50"
-          >
-            {create.isPending ? "Saving..." : "Save note"}
-          </button>
-        </div>
+          }
+          footerSlot={
+            <>
+              {/* Attached image preview for new note or updated note */}
+              {(activeNote ? sImagePreview : imagePreview) && (
+                <div className="relative rounded-2xl border border-border bg-secondary/35 p-3 sm:p-4">
+                  <div className="overflow-hidden rounded-xl border border-border/80 bg-card">
+                    <img
+                      src={(activeNote ? sImagePreview : imagePreview) ?? ""}
+                      className="max-h-96 w-full object-contain"
+                      alt=""
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => (activeNote ? setSImage(null) : setImage(null))}
+                    className="absolute right-5 top-5 rounded-full border border-border bg-card p-1.5 shadow-sm hover:bg-secondary"
+                    aria-label="Remove attached image"
+                  >
+                    <X className="size-4" />
+                  </button>
+                </div>
+              )}
+
+              {activeNote && !sImagePreview && activeNote.image_url && (
+                <NoteImage
+                  path={activeNote.image_url}
+                  iv={activeNote.image_iv}
+                  mime={activeNote.image_mime}
+                  cryptoKey={key}
+                  framed
+                />
+              )}
+
+              {/* Sheet Footer Action Bar */}
+              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border/60 pt-4">
+                <span className="text-xs uppercase tracking-wide text-muted-foreground">
+                  {(() => {
+                    const words = currentText.trim() ? currentText.trim().split(/\s+/).length : 0;
+                    return `${words} ${words === 1 ? "word" : "words"}`;
+                  })()}
+                </span>
+
+                <div className="flex items-center gap-2">
+                  {activeNote && hasActiveNoteChanges && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSTitle(activeNote.title);
+                        setSContent(activeNote.content);
+                        setSTags(activeNote.tags.join(", "));
+                        setSFolderId(activeNote.folder_id);
+                        setSImage(null);
+                        setSheetEditing(false);
+                      }}
+                      className="flex items-center gap-1 rounded-lg border border-border px-3.5 py-2 text-sm hover:bg-secondary"
+                    >
+                      <X className="size-4" /> Cancel
+                    </button>
+                  )}
+                  <button
+                    type="submit"
+                    disabled={(activeNote ? update.isPending : create.isPending) || !key}
+                    className="rounded-xl bg-primary px-5 py-2 text-sm font-medium text-primary-foreground shadow-sm transition hover:opacity-95 disabled:opacity-50"
+                  >
+                    {activeNote
+                      ? update.isPending
+                        ? "Saving..."
+                        : "Save changes"
+                      : create.isPending
+                        ? "Saving..."
+                        : "Save note"}
+                  </button>
+                </div>
+              </div>
+            </>
+          }
+        />
       </form>
 
-      <div className="paper-card space-y-3 p-3 text-sm">
-        <label className="flex items-center gap-2 rounded-md border border-input bg-card px-3 py-2">
-          <Search className="size-4 text-muted-foreground" />
-          <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search notes..."
-            className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-muted-foreground/60"
-          />
-          {query && (
-            <button type="button" onClick={() => setQuery("")} aria-label="Clear search">
-              <X className="size-4 text-muted-foreground" />
-            </button>
-          )}
-        </label>
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="flex items-center gap-1.5">
-            <Folder className="size-4 text-muted-foreground" />
-            <AppSelect
-              value={filterFolder}
-              onValueChange={(v) => setFilterFolder(v)}
-              options={[{ value: "all", label: "All notes" }, { value: "none", label: "No folder" }, ...fOpts]}
-            />
-            {filterFolder !== "all" && filterFolder !== "none" && (
-              <button
-                type="button"
-                onClick={() => deleteFolder.mutate(filterFolder)}
-                title="Delete selected folder"
-                className="rounded p-1.5 text-muted-foreground hover:bg-secondary hover:text-destructive"
-              >
-                <Trash2 className="size-3.5" />
-              </button>
-            )}
-          </div>
-          <label className="flex items-center gap-2">
-            <span className="text-muted-foreground">Sort</span>
-            <AppSelect
-              value={sort}
-              onValueChange={(v) => setSort(v as Sort)}
-              options={[
-                { value: "newest", label: "Newest first" },
-                { value: "oldest", label: "Oldest first" },
-                { value: "edited", label: "Recently edited" },
-                { value: "title", label: "Title A–Z" },
-              ]}
-            />
-          </label>
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              if (newFolder.trim()) createFolder.mutate(newFolder.trim());
-            }}
-            className="flex flex-wrap items-center gap-1 sm:ml-auto"
-          >
-            <input
-              value={newFolder}
-              onChange={(e) => setNewFolder(e.target.value)}
-              placeholder="New folder"
-              className="w-32 rounded-md border border-input bg-card px-2 py-1"
-            />
-            <AppSelect
-              value={newFolderParent}
-              onValueChange={setNewFolderParent}
-              options={[{ value: NONE, label: "Top level" }, ...fOpts.map((o) => ({ value: o.value, label: `inside ${o.label}` }))]}
-            />
-            <button
-              type="submit"
-              className="flex items-center gap-1 rounded-md bg-primary px-2.5 py-1 text-xs text-primary-foreground"
-            >
-              <FolderPlus className="size-3.5" /> Add
-            </button>
-          </form>
-        </div>
-      </div>
-
-      <div className="columns-1 gap-4 sm:columns-2">
-        {notes.isLoading && <p className="font-hand text-sepia">gathering notes...</p>}
-        {notes.data?.length === 0 && <p className="text-muted-foreground">No notes yet.</p>}
-        {notes.data && notes.data.length > 0 && filtered.length === 0 && (
-          <p className="text-muted-foreground">No notes match.</p>
-        )}
-        {filtered.map((n) => (
-          <div key={n.id} className="mb-4 break-inside-avoid">
-            <NoteCard
-              note={n}
-              folderOpts={fOpts}
-              cryptoKey={key}
-              onDelete={handleDeleteNote}
-              onSave={handleSaveNote}
-            />
-          </div>
-        ))}
-      </div>
+      <ConfirmDialog
+        open={confirmDeleteActive}
+        onOpenChange={setConfirmDeleteActive}
+        title="Delete this note?"
+        description="This can't be undone."
+        confirmText="Delete"
+        onConfirm={() => {
+          if (activeNote) {
+            remove.mutate(activeNote);
+          }
+          setConfirmDeleteActive(false);
+        }}
+      />
     </div>
   );
 }
@@ -532,11 +1031,13 @@ function NoteImage({
   iv,
   mime,
   cryptoKey,
+  framed = false,
 }: {
   path: string;
   iv: string | null;
   mime: string | null;
   cryptoKey: CryptoKey | null;
+  framed?: boolean;
 }) {
   const [src, setSrc] = useState<string | null>(null);
   useEffect(() => {
@@ -565,152 +1066,16 @@ function NoteImage({
     };
   }, [path, iv, mime, cryptoKey]);
   if (!src) return null;
+  if (framed) {
+    return (
+      <div className="mt-4 rounded-2xl border border-border bg-secondary/35 p-3 sm:p-4">
+        <div className="overflow-hidden rounded-xl border border-border/80 bg-card">
+          <img src={src} className="max-h-[30rem] w-full object-contain" alt="" loading="lazy" />
+        </div>
+      </div>
+    );
+  }
   return <img src={src} className="mt-3 max-h-56 w-full rounded-md border border-border object-cover" alt="" loading="lazy" />;
 }
 
-const NoteCard = memo(function NoteCard({
-  note: n,
-  folderOpts,
-  cryptoKey,
-  onDelete,
-  onSave,
-}: {
-  note: Note;
-  folderOpts: { value: string; label: string }[];
-  cryptoKey: CryptoKey | null;
-  onDelete: (note: Note) => void;
-  onSave: (note: Note, v: { title: string; content: string; tags: string; folder_id: string | null }) => void;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [open, setOpen] = useState(false);
-  const [eTitle, setETitle] = useState(n.title);
-  const [eContent, setEContent] = useState(n.content);
-  const [eTags, setETags] = useState(n.tags.join(", "));
-  const [eFolder, setEFolder] = useState<string | null>(n.folder_id);
-  const [confirmDel, setConfirmDel] = useState(false);
-  const pv = useMemo(() => previewText(n.content, 220), [n.content]);
-  const long = pv.truncated;
 
-  if (editing) {
-    return (
-      <article className="paper-card space-y-2 p-4">
-        <input
-          value={eTitle}
-          onChange={(e) => setETitle(e.target.value)}
-          placeholder="Title"
-          className="w-full bg-transparent font-serif text-xl outline-none"
-        />
-        <input
-          value={eTags}
-          onChange={(e) => setETags(e.target.value)}
-          placeholder="tags, separated, by, commas"
-          className="w-full bg-transparent text-sm text-accent outline-none"
-        />
-        <textarea
-          value={eContent}
-          onChange={(e) => setEContent(e.target.value)}
-          rows={6}
-          className="w-full resize-y bg-transparent leading-relaxed outline-none"
-        />
-        {hasImageLinks(eContent) && (
-          <div className="text-sm">
-            <RichText>{eContent}</RichText>
-          </div>
-        )}
-        <label className="flex items-center gap-2 text-sm">
-          <span className="text-muted-foreground">Folder</span>
-          <AppSelect
-            value={eFolder ?? NONE}
-            onValueChange={(v) => setEFolder(v === NONE ? null : v)}
-            options={[{ value: NONE, label: "— none —" }, ...folderOpts]}
-          />
-        </label>
-        <div className="flex justify-end gap-2">
-          <button
-            onClick={() => setEditing(false)}
-            className="flex items-center gap-1 rounded-md border border-border px-3 py-1.5 text-sm"
-          >
-            <X className="size-4" /> Cancel
-          </button>
-          <button
-            onClick={() => {
-              onSave(n, { title: eTitle, content: eContent, tags: eTags, folder_id: eFolder });
-              setEditing(false);
-            }}
-            className="flex items-center gap-1 rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground"
-          >
-            <Check className="size-4" /> Save
-          </button>
-        </div>
-      </article>
-    );
-  }
-
-  return (
-    <article className="paper-card min-w-0 p-4">
-      <header className="flex items-start justify-between gap-2">
-        <h3 className="min-w-0 break-words font-serif text-lg text-primary">{n.title || "Untitled"}</h3>
-        <div className="flex shrink-0 items-center gap-2">
-          <button
-            onClick={() => {
-              setETitle(n.title);
-              setEContent(n.content);
-              setETags(n.tags.join(", "));
-              setEFolder(n.folder_id);
-              setEditing(true);
-            }}
-            className="text-muted-foreground hover:text-primary"
-            aria-label="Edit"
-          >
-            <Pencil className="size-4" />
-          </button>
-          <button
-            onClick={() => setConfirmDel(true)}
-            className="text-muted-foreground hover:text-destructive"
-            aria-label="Delete"
-          >
-            <Trash2 className="size-4" />
-          </button>
-        </div>
-      </header>
-      {n.tags.length > 0 && (
-        <div className="mt-1 flex flex-wrap gap-1">
-          {n.tags.map((t) => (
-            <span key={t} className="rounded-full bg-secondary px-2 py-0.5 text-[11px] text-secondary-foreground">
-              #{t}
-            </span>
-          ))}
-        </div>
-      )}
-      <div className="mt-2 break-words text-sm">
-        <RichText>{open ? n.content : pv.text}</RichText>
-      </div>
-      {long && (
-        <button onClick={() => setOpen((o) => !o)} className="mt-1 flex items-center gap-1 text-sm text-accent hover:text-primary">
-          {open ? (
-            <>
-              <Minus className="size-3.5" /> Collapse
-            </>
-          ) : (
-            <>
-              <Plus className="size-3.5" /> Expand
-            </>
-          )}
-        </button>
-      )}
-      {n.image_url && <NoteImage path={n.image_url} iv={n.image_iv} mime={n.image_mime} cryptoKey={cryptoKey} />}
-      <p className="mt-2 text-[11px] text-muted-foreground">{new Date(n.updated_at).toLocaleString()}</p>
-      <ConfirmDialog
-        open={confirmDel}
-        onOpenChange={setConfirmDel}
-        title="Delete this note?"
-        description="This can't be undone."
-        confirmText="Delete"
-        onConfirm={() => {
-          onDelete(n);
-          setConfirmDel(false);
-        }}
-      />
-    </article>
-  );
-});

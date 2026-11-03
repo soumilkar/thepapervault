@@ -1,12 +1,13 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { memo, useCallback, useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
-import { ImagePlus, Trash2, X, Download, Pencil, Check, Globe, Lock, FolderPlus, Folder, Search } from "lucide-react";
+import { Trash2, X, Download, Pencil, Check, Globe, Lock, FolderPlus, Folder, Search } from "lucide-react";
 import { RichText } from "@/components/RichText";
+import { RichEditor } from "@/components/RichEditor";
 import { folderOptions, folderWithDescendants, type FolderRow } from "@/lib/folders";
-import { hasImageLinks, previewText } from "@/lib/rich-text";
+import { previewText } from "@/lib/rich-text";
 import { downloadTextFile } from "@/lib/download";
 import { useVault } from "@/lib/vault";
 import { decryptBytes, decryptField, decryptText, encryptBlob, encryptField, encryptText } from "@/lib/crypto";
@@ -104,6 +105,7 @@ function DiaryPage() {
   const setMusic = (value: SelectedTrack | null) => setDraft((current) => ({ ...current, music: value }));
   const [photo, setPhoto] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+  const photoInputRef = useRef<HTMLInputElement | null>(null);
   const [filterFolder, setFilterFolder] = useState<string | "all">("all");
   const [sort, setSort] = useState<Sort>("newest");
   const [newFolder, setNewFolder] = useState("");
@@ -523,107 +525,111 @@ function DiaryPage() {
           e.preventDefault();
           if (content.trim()) create.mutate();
         }}
-        className="paper-card space-y-3 p-6"
+        className="paper-card overflow-hidden"
       >
         <input
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          placeholder="Title"
-          className="w-full bg-transparent font-serif text-2xl outline-none placeholder:text-muted-foreground/60"
+          ref={photoInputRef}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) {
+              if (f.size >= 5 * 1024 * 1024) toast.error("Photo must be smaller than 5 MB");
+              else setPhoto(f);
+            }
+            e.currentTarget.value = "";
+          }}
         />
-        <input
-          value={mood}
-          onChange={(e) => setMood(e.target.value)}
-          placeholder="How are you feeling?"
-          className="w-full bg-transparent text-sm text-accent outline-none placeholder:text-muted-foreground/60"
-        />
-        <textarea
+
+        <RichEditor
           value={content}
-          onChange={(e) => setContent(e.target.value)}
+          onChange={setContent}
           placeholder="Pour it out..."
-          rows={6}
-          className="w-full resize-none bg-transparent leading-relaxed outline-none placeholder:text-muted-foreground/60"
+          minHeightClass="min-h-[180px]"
+          onPhotoClick={!isPublic ? () => photoInputRef.current?.click() : undefined}
+          photoLabel={photo ? "Change photo" : "Photo"}
+          bodyClassName="space-y-4 p-6"
+          headerSlot={
+            <div className="space-y-2">
+              <input
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder="Title"
+                className="w-full bg-transparent font-serif text-2xl text-primary outline-none placeholder:text-muted-foreground/60 sm:text-3xl"
+              />
+              <input
+                value={mood}
+                onChange={(e) => setMood(e.target.value)}
+                placeholder="How are you feeling?"
+                className="w-full bg-transparent text-sm text-accent outline-none placeholder:text-muted-foreground/60"
+              />
+            </div>
+          }
+          footerSlot={
+            <div className="space-y-4 pt-2">
+              {photoPreview && !isPublic && (
+                <div className="relative inline-block">
+                  <img src={photoPreview} alt="preview" className="max-h-56 rounded-md border border-border" />
+                  <button
+                    type="button"
+                    onClick={() => setPhoto(null)}
+                    className="absolute -right-2 -top-2 rounded-full bg-background p-1 shadow"
+                  >
+                    <X className="size-4" />
+                  </button>
+                </div>
+              )}
+
+              <MusicSearch selected={music} onChange={setMusic} />
+
+              <div className="flex flex-wrap items-center gap-3 text-sm">
+                <label className="flex items-center gap-2">
+                  <span className="text-muted-foreground">Visibility</span>
+                  <AppSelect
+                    value={isPublic ? "public" : "private"}
+                    onValueChange={(v) => setIsPublic(v === "public")}
+                    options={[
+                      { value: "private", label: "Private (encrypted)" },
+                      { value: "public", label: "Public · anonymous" },
+                    ]}
+                  />
+                </label>
+                <label className="flex items-center gap-2">
+                  <span className="text-muted-foreground">Folder</span>
+                  <AppSelect
+                    value={folderId ?? NONE}
+                    onValueChange={(v) => setFolderId(v === NONE ? null : v)}
+                    options={[{ value: NONE, label: "— none —" }, ...fOpts]}
+                  />
+                </label>
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border/60 pt-3">
+                <div className="flex flex-wrap items-center gap-3">
+                  <span className="text-xs uppercase tracking-wide text-muted-foreground">
+                    {(() => {
+                      const words = countWords(content);
+                      return `${words} ${words === 1 ? "word" : "words"}`;
+                    })()}
+                  </span>
+                  {isPublic && (
+                    <span className="text-xs text-muted-foreground">
+                      Public entries appear anonymously in the community Feed.
+                    </span>
+                  )}
+                </div>
+                <button
+                  type="submit"
+                  disabled={!content.trim() || create.isPending}
+                  className="rounded-md bg-primary px-5 py-2 text-sm text-primary-foreground disabled:opacity-50"
+                >
+                  {create.isPending ? "Saving..." : "Save entry"}
+                </button>
+              </div>
+            </div>
+          }
         />
-
-        {hasImageLinks(content) && (
-          <div className="rounded-md border border-border bg-secondary/30 p-3">
-            <p className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">Preview</p>
-            <RichText>{content}</RichText>
-          </div>
-        )}
-
-        {photoPreview && !isPublic && (
-          <div className="relative inline-block">
-            <img src={photoPreview} alt="preview" className="max-h-56 rounded-md border border-border" />
-            <button
-              type="button"
-              onClick={() => setPhoto(null)}
-              className="absolute -right-2 -top-2 rounded-full bg-background p-1 shadow"
-            >
-              <X className="size-4" />
-            </button>
-          </div>
-        )}
-
-        <MusicSearch selected={music} onChange={setMusic} />
-
-        <div className="flex flex-wrap items-center gap-3 text-sm">
-          <label className="flex items-center gap-2">
-            <span className="text-muted-foreground">Visibility</span>
-            <AppSelect
-              value={isPublic ? "public" : "private"}
-              onValueChange={(v) => setIsPublic(v === "public")}
-              options={[
-                { value: "private", label: "Private (encrypted)" },
-                { value: "public", label: "Public · anonymous" },
-              ]}
-            />
-          </label>
-          <label className="flex items-center gap-2">
-            <span className="text-muted-foreground">Folder</span>
-            <AppSelect
-              value={folderId ?? NONE}
-              onValueChange={(v) => setFolderId(v === NONE ? null : v)}
-              options={[{ value: NONE, label: "— none —" }, ...fOpts]}
-            />
-          </label>
-        </div>
-
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-3">
-            {!isPublic && (
-              <label className="flex cursor-pointer items-center gap-2 text-sm text-accent hover:text-primary">
-                <ImagePlus className="size-4" />
-                <span>{photo ? "Change photo" : "Add a photo (also saved to gallery)"}</span>
-                <input
-                  type="file"
-                  accept="image/*"
-                  className="hidden"
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    if (f) {
-                      if (f.size >= 5 * 1024 * 1024) toast.error("Photo must be smaller than 5 MB");
-                      else setPhoto(f);
-                    }
-                    e.currentTarget.value = "";
-                  }}
-                />
-              </label>
-            )}
-          </div>
-          {isPublic && (
-            <span className="text-xs text-muted-foreground">
-              Public entries appear anonymously in the community Feed.
-            </span>
-          )}
-          <button
-            type="submit"
-            disabled={!content.trim() || create.isPending}
-            className="rounded-md bg-primary px-5 py-2 text-sm text-primary-foreground disabled:opacity-50"
-          >
-            {create.isPending ? "Saving..." : "Save entry"}
-          </button>
-        </div>
       </form>
 
       <label className="paper-card flex items-center gap-2 px-3 py-2 text-sm">
@@ -797,58 +803,76 @@ const DiaryCard = memo(function DiaryCard({
 
   if (editing) {
     return (
-      <article className="paper-card space-y-3 p-6">
-        <input
-          value={eTitle}
-          onChange={(ev) => setETitle(ev.target.value)}
-          placeholder="Title"
-          className="w-full bg-transparent font-serif text-2xl outline-none"
-        />
-        <input
-          value={eMood}
-          onChange={(ev) => setEMood(ev.target.value)}
-          placeholder="Feeling"
-          className="w-full bg-transparent text-sm text-accent outline-none"
-        />
-        <textarea
+      <article className="paper-card overflow-hidden">
+        <RichEditor
           value={eContent}
-          onChange={(ev) => setEContent(ev.target.value)}
-          rows={8}
-          className="w-full resize-y bg-transparent leading-relaxed outline-none"
+          onChange={setEContent}
+          placeholder="Pour it out..."
+          minHeightClass="min-h-[180px]"
+          bodyClassName="space-y-3 p-6"
+          headerSlot={
+            <div className="space-y-2">
+              <input
+                value={eTitle}
+                onChange={(ev) => setETitle(ev.target.value)}
+                placeholder="Title"
+                className="w-full bg-transparent font-serif text-2xl text-primary outline-none"
+              />
+              <input
+                value={eMood}
+                onChange={(ev) => setEMood(ev.target.value)}
+                placeholder="How are you feeling?"
+                className="w-full bg-transparent text-sm text-accent outline-none"
+              />
+            </div>
+          }
+          footerSlot={
+            <div className="space-y-3 pt-2">
+              <MusicSearch selected={eMusic} onChange={setEMusic} />
+              <label className="flex items-center gap-2 text-sm">
+                <span className="text-muted-foreground">Folder</span>
+                <AppSelect
+                  value={eFolder ?? NONE}
+                  onValueChange={(v) => setEFolder(v === NONE ? null : v)}
+                  options={[{ value: NONE, label: "— none —" }, ...folderOpts]}
+                />
+              </label>
+              <div className="flex items-center justify-between gap-2 border-t border-border/60 pt-3">
+                <span className="text-xs uppercase tracking-wide text-muted-foreground">
+                  {(() => {
+                    const words = countWords(eContent);
+                    return `${words} ${words === 1 ? "word" : "words"}`;
+                  })()}
+                </span>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setEditing(false)}
+                    className="flex items-center gap-1 rounded-md border border-border px-3 py-1.5 text-sm"
+                  >
+                    <X className="size-4" /> Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onSave(e.id, !e.is_public, {
+                        title: eTitle,
+                        content: eContent,
+                        mood: eMood,
+                        folder_id: eFolder,
+                        music: eMusic,
+                      });
+                      setEditing(false);
+                    }}
+                    className="flex items-center gap-1 rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground"
+                  >
+                    <Check className="size-4" /> Save
+                  </button>
+                </div>
+              </div>
+            </div>
+          }
         />
-        {hasImageLinks(eContent) && <RichText>{eContent}</RichText>}
-        <MusicSearch selected={eMusic} onChange={setEMusic} />
-        <label className="flex items-center gap-2 text-sm">
-          <span className="text-muted-foreground">Folder</span>
-          <AppSelect
-            value={eFolder ?? NONE}
-            onValueChange={(v) => setEFolder(v === NONE ? null : v)}
-            options={[{ value: NONE, label: "— none —" }, ...folderOpts]}
-          />
-        </label>
-        <div className="flex justify-end gap-2">
-          <button
-            onClick={() => setEditing(false)}
-            className="flex items-center gap-1 rounded-md border border-border px-3 py-1.5 text-sm"
-          >
-            <X className="size-4" /> Cancel
-          </button>
-          <button
-            onClick={() => {
-              onSave(e.id, !e.is_public, {
-                title: eTitle,
-                content: eContent,
-                mood: eMood,
-                folder_id: eFolder,
-                music: eMusic,
-              });
-              setEditing(false);
-            }}
-            className="flex items-center gap-1 rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground"
-          >
-            <Check className="size-4" /> Save
-          </button>
-        </div>
       </article>
     );
   }

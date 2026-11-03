@@ -18,10 +18,10 @@ type Msg = { role: "user" | "assistant"; content: string };
 type Source = "both" | "diary" | "blog";
 
 const PROMPTS = [
-  "What recurring themes appear in my recent diary entries?",
-  "How has my mood shifted over the past few weeks?",
-  "Give me a journaling prompt based on what I've written lately.",
-  "What do I seem most grateful for?",
+  "I just need a soft, comforting place to rest my thoughts today.",
+  "Help me feel a little lighter about what's been on my mind lately.",
+  "What gentle patterns or bright spots do you notice in my recent entries?",
+  "Give me a cozy, low-pressure reflection prompt for tonight.",
 ];
 
 function isoDay(d: Date) { return d.toISOString().slice(0, 10); }

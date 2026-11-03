@@ -20,27 +20,68 @@ type GroqStreamPart = {
   error?: { message?: string };
 };
 
-const GROQ_MODEL = "qwen/qwen3.8-27b";
+const GROQ_MODELS = [
+  "llama-3.3-70b-versatile",
+  "meta-llama/llama-4-scout-17b-16e-instruct",
+  "qwen/qwen3-32b",
+  "llama-3.1-8b-instant",
+] as const;
+
+type RuntimeRequest = Request & {
+  runtime?: {
+    cloudflare?: {
+      env?: Record<string, unknown>;
+    };
+  };
+};
+
+function readRuntimeEnv(key: string, request?: Request): string {
+  const reqEnv = (request as RuntimeRequest | undefined)?.runtime?.cloudflare?.env;
+  if (reqEnv && typeof reqEnv[key] === "string" && reqEnv[key]) {
+    return (reqEnv[key] as string).trim();
+  }
+  const globalEnv = (globalThis as { __env__?: Record<string, unknown> }).__env__;
+  if (globalEnv && typeof globalEnv[key] === "string" && globalEnv[key]) {
+    return (globalEnv[key] as string).trim();
+  }
+  if (typeof process !== "undefined" && process.env) {
+    const val = process.env[key];
+    if (typeof val === "string" && val.trim()) {
+      return val.trim();
+    }
+  }
+  return "";
+}
+
+function getGroqApiKey(request?: Request): string {
+  return (
+    readRuntimeEnv("GROQ_API_KEY", request) ||
+    readRuntimeEnv("VITE_GROQ_API_KEY", request) ||
+    (typeof process !== "undefined" && process.env.GROQ_API_KEY ? process.env.GROQ_API_KEY.trim() : "") ||
+    ""
+  );
+}
 
 function companionInstructions(name: string, context: string) {
-  return `You are Inkwell, a warm, thoughtful companion for ${name} — think of yourself as a close friend who's also part-therapist and part-counsellor. Your job is to help them navigate their life: their thoughts, feelings, decisions, relationships, patterns, and anything else they bring up.
+  return `You are Inkwell, ${name}'s deeply warm, soft, cuddly, and endlessly caring companion. Think of yourself as their safest harbor — like a gentle, affectionate best friend wrapping them in a cozy blanket with a warm cup of tea at the end of a long day. Your whole presence should feel relieving, tender, soothing, and safe.
 
-How to talk:
-- Speak like a real friend, not a chatbot. Be direct, curious, warm, and human. Use their name occasionally when it feels natural, never mechanically.
-- Do NOT open with "Thank you for sharing", "Thanks for opening up", "I appreciate you sharing", or any variation. Never thank them for their entries or for confiding in you. Just engage with what they said.
-- Skip preambles that summarize what they just told you. Get to the substance.
-- Don't lecture. Don't moralize. Don't dump bullet lists on every reply — use prose when a friend would, use structure only when it truly helps.
-- Ask a real question back when it will help them think, but don't interrogate. Sometimes reflection or a small observation is better than a question.
-- Match their register. If they're casual, be casual. If they're hurting, be gentle and slow down.
+Your heart & tone:
+- Be genuinely sweet, soft-spoken, affectionate, and comforting. Let ${name} feel held, cared for, and completely unjudged from the very first word.
+- Offer immediate emotional relief: help take the weight and pressure off their shoulders. Remind them they don't have to carry everything alone or have it all figured out right now.
+- Use gentle, cozy, reassuring language — soft warmth, tender encouragement, and affectionate care (like "oh sweetheart", "take a slow breath with me", "I've got you", "you're safe here", or using ${name}'s name warmly when it feels natural).
+- When they are tired, anxious, overwhelmed, or hurting, slow everything down. Soothe first, validate their heart, and wrap them in comfort before offering any gentle perspective or tiny, low-pressure steps.
+- When they are happy or excited, celebrate with them wholeheartedly and affectionately!
+- Speak in flowing, cozy, natural prose like someone sitting right beside them on a couch — never stiff, clinical, robotic, or lecturing. Avoid cold bullet lists unless they specifically ask for a checklist or plan.
+- Never open with stiff chatbot phrases like "Thank you for sharing" or "I appreciate you opening up" — instead, respond immediately with warmth, tenderness, and genuine closeness.
+- Ask at most one gentle, caring question at a time when it helps them feel heard, or simply offer a comforting reflection so they never feel interrogated.
 
-How to think:
-- You've been given their private diary/blog context below (they decrypted it in their browser to share with you). Treat it as memory you already hold about them — reference it naturally, don't re-announce that "you shared entries with me".
-- Remember the whole conversation. Earlier turns in this chat are yours to build on.
-- You are not limited to journaling prompts. If they ask for advice, opinions, a plan, a rant partner, a devil's advocate, help drafting a message, help thinking through a decision, or anything else — do that. Follow their lead.
-- When something isn't in what you know about them, say so honestly instead of guessing.
-- Never invent entries, moods, dates, or events they didn't actually write.
+How you remember & help:
+- Below are ${name}'s private writings (decrypted in their browser just for this moment). Hold them tenderly as shared memories you already know by heart — weave them in naturally and lovingly without announcing "I read your entries".
+- Remember the whole conversation and build on earlier moments with care.
+- Whether they want a soft place to vent, a comforting hug in words, gentle advice, help untangling a heavy feeling, or help with a practical decision — follow their lead with warmth and sweetness.
+- Never invent entries, moods, dates, or events they didn't write. If you don't know something yet, ask softly.
 
-=== WHAT YOU KNOW ABOUT ${name.toUpperCase()} (from their private writings) ===
+=== WHAT YOU HOLD IN YOUR HEART ABOUT ${name.toUpperCase()} (from their private writings) ===
 ${context || "(no entries shared yet)"}`;
 }
 
@@ -49,12 +90,20 @@ async function authenticate(request: Request) {
   if (!authorization?.startsWith("Bearer ")) return false;
 
   const token = authorization.slice("Bearer ".length);
-  const url = process.env["SUPABASE_URL"] || process.env["VITE_SUPABASE_URL"];
+  const url =
+    readRuntimeEnv("SUPABASE_URL", request) ||
+    readRuntimeEnv("VITE_SUPABASE_URL", request) ||
+    process.env.SUPABASE_URL ||
+    import.meta.env.VITE_SUPABASE_URL;
   const key =
-    process.env["SUPABASE_PUBLISHABLE_KEY"] ||
-    process.env["SUPABASE_ANON_KEY"] ||
-    process.env["VITE_SUPABASE_PUBLISHABLE_KEY"] ||
-    process.env["VITE_SUPABASE_ANON_KEY"];
+    readRuntimeEnv("SUPABASE_PUBLISHABLE_KEY", request) ||
+    readRuntimeEnv("SUPABASE_ANON_KEY", request) ||
+    readRuntimeEnv("VITE_SUPABASE_PUBLISHABLE_KEY", request) ||
+    readRuntimeEnv("VITE_SUPABASE_ANON_KEY", request) ||
+    process.env.SUPABASE_PUBLISHABLE_KEY ||
+    process.env.SUPABASE_ANON_KEY ||
+    import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY ||
+    import.meta.env.VITE_SUPABASE_ANON_KEY;
   if (!url || !key) {
     return Boolean(token);
   }
@@ -113,6 +162,37 @@ function streamGroqResponse(response: Response, signal: AbortSignal) {
   });
 }
 
+async function fetchGroqStream(
+  apiKey: string,
+  messages: { role: "system" | "user" | "assistant"; content: string }[],
+  signal: AbortSignal,
+): Promise<Response> {
+  let lastResponse: Response | undefined;
+  for (const model of GROQ_MODELS) {
+    const body: Record<string, unknown> = {
+      model,
+      stream: true,
+      temperature: 0.78,
+      top_p: 0.92,
+      max_tokens: 2048,
+      messages,
+    };
+    if (model.startsWith("qwen/")) {
+      body.reasoning_effort = "none";
+    }
+    const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+      signal,
+      body: JSON.stringify(body),
+    });
+    if (res.ok) return res;
+    lastResponse = res;
+    if (res.status === 401 || res.status === 403) break;
+  }
+  return lastResponse!;
+}
+
 export const Route = createFileRoute("/api/companion-stream")({
   server: {
     handlers: {
@@ -127,29 +207,22 @@ export const Route = createFileRoute("/api/companion-stream")({
             return new Response("The Companion request is invalid", { status: 400 });
           }
 
-          const apiKey = process.env["GROQ_API_KEY"];
+          const apiKey = getGroqApiKey(request);
           if (!apiKey) {
-            return new Response("The Companion is not configured yet", { status: 500 });
+            return new Response(
+              "The Companion is not configured yet. Please add GROQ_API_KEY in your environment variables and redeploy.",
+              { status: 500 },
+            );
           }
 
           const data = parsed.data;
-          const upstream = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-            method: "POST",
-            headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-            signal: request.signal,
-            body: JSON.stringify({
-              model: GROQ_MODEL,
-              stream: true,
-              temperature: 0.7,
-              max_tokens: 2048,
-              reasoning_effort: "none",
-              messages: [
-                { role: "system", content: companionInstructions(data.name, data.context) },
-                ...data.history.map((m) => ({ role: m.role, content: m.content })),
-                { role: "user", content: data.question },
-              ],
-            }),
-          });
+          const messages: { role: "system" | "user" | "assistant"; content: string }[] = [
+            { role: "system", content: companionInstructions(data.name, data.context) },
+            ...data.history.map((m) => ({ role: m.role, content: m.content })),
+            { role: "user", content: data.question },
+          ];
+
+          const upstream = await fetchGroqStream(apiKey, messages, request.signal);
           if (!upstream.ok) {
             console.error("Companion upstream error", upstream.status, (await upstream.text()).slice(0, 300));
             return new Response("The Companion is temporarily unavailable. Please try again.", { status: 503 });

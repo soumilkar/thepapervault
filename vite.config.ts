@@ -9,35 +9,71 @@ import { loadEnv, type Plugin } from "vite";
 import type { RollupLog } from "rollup";
 
 function suppressUseClientDirectiveWarnings(): Plugin {
+  let resolvedGroqKey = "";
+  let resolvedSupabaseUrl = "";
+  let resolvedSupabasePublishableKey = "";
+  let resolvedSupabaseAnonKey = "";
+
   return {
     name: "suppress-use-client-directives",
     config(_, { mode }) {
       const env = { ...loadEnv(mode, process.cwd(), ""), ...process.env };
-      const supabaseUrl = env.VITE_SUPABASE_URL || env.SUPABASE_URL || "";
-      const supabasePublishableKey =
+      resolvedSupabaseUrl = env.VITE_SUPABASE_URL || env.SUPABASE_URL || "";
+      resolvedSupabasePublishableKey =
         env.VITE_SUPABASE_PUBLISHABLE_KEY ||
         env.SUPABASE_PUBLISHABLE_KEY ||
         env.VITE_SUPABASE_ANON_KEY ||
         env.SUPABASE_ANON_KEY ||
         "";
-      const supabaseAnonKey =
+      resolvedSupabaseAnonKey =
         env.VITE_SUPABASE_ANON_KEY ||
         env.SUPABASE_ANON_KEY ||
         env.VITE_SUPABASE_PUBLISHABLE_KEY ||
         env.SUPABASE_PUBLISHABLE_KEY ||
         "";
+      resolvedGroqKey = env.GROQ_API_KEY || env.VITE_GROQ_API_KEY || "";
+
+      if (resolvedGroqKey && !process.env.GROQ_API_KEY) {
+        process.env.GROQ_API_KEY = resolvedGroqKey;
+      }
+      if (resolvedSupabaseUrl && !process.env.SUPABASE_URL) {
+        process.env.SUPABASE_URL = resolvedSupabaseUrl;
+      }
+      if (resolvedSupabasePublishableKey && !process.env.SUPABASE_PUBLISHABLE_KEY) {
+        process.env.SUPABASE_PUBLISHABLE_KEY = resolvedSupabasePublishableKey;
+      }
+      if (resolvedSupabaseAnonKey && !process.env.SUPABASE_ANON_KEY) {
+        process.env.SUPABASE_ANON_KEY = resolvedSupabaseAnonKey;
+      }
 
       return {
         define: {
-          "import.meta.env.VITE_SUPABASE_URL": JSON.stringify(supabaseUrl),
-          "import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY": JSON.stringify(supabasePublishableKey),
-          "import.meta.env.VITE_SUPABASE_ANON_KEY": JSON.stringify(supabaseAnonKey),
+          "import.meta.env.VITE_SUPABASE_URL": JSON.stringify(resolvedSupabaseUrl),
+          "import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY": JSON.stringify(resolvedSupabasePublishableKey),
+          "import.meta.env.VITE_SUPABASE_ANON_KEY": JSON.stringify(resolvedSupabaseAnonKey),
         },
       };
     },
-    configEnvironment(_name, config) {
+    configEnvironment(name, config) {
       const prevOnwarn = config.build?.rollupOptions?.onwarn;
+      const serverDefines: Record<string, string> = {};
+      if (name !== "client") {
+        if (resolvedGroqKey) {
+          serverDefines["process.env.GROQ_API_KEY"] = JSON.stringify(resolvedGroqKey);
+        }
+        if (resolvedSupabaseUrl) {
+          serverDefines["process.env.SUPABASE_URL"] = JSON.stringify(resolvedSupabaseUrl);
+        }
+        if (resolvedSupabasePublishableKey) {
+          serverDefines["process.env.SUPABASE_PUBLISHABLE_KEY"] = JSON.stringify(resolvedSupabasePublishableKey);
+        }
+        if (resolvedSupabaseAnonKey) {
+          serverDefines["process.env.SUPABASE_ANON_KEY"] = JSON.stringify(resolvedSupabaseAnonKey);
+        }
+      }
+
       return {
+        ...(Object.keys(serverDefines).length > 0 ? { define: serverDefines } : {}),
         build: {
           rollupOptions: {
             onwarn(warning, warn) {

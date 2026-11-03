@@ -37,9 +37,22 @@ async function normalizeCatastrophicSsrResponse(response: Response): Promise<Res
   });
 }
 
+function syncRuntimeEnv(env: unknown) {
+  if (!env || typeof env !== "object") return;
+  (globalThis as { __env__?: unknown }).__env__ = env;
+  if (typeof process !== "undefined" && process.env) {
+    for (const [key, value] of Object.entries(env as Record<string, unknown>)) {
+      if (typeof value === "string" && value && !process.env[key]) {
+        process.env[key] = value;
+      }
+    }
+  }
+}
+
 export default {
   async fetch(request: Request, env: unknown, ctx: unknown) {
     try {
+      syncRuntimeEnv(env);
       const handler = await getServerEntry();
       const response = await handler.fetch(request, env, ctx);
       return await normalizeCatastrophicSsrResponse(response);
@@ -52,3 +65,4 @@ export default {
     }
   },
 };
+

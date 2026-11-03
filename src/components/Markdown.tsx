@@ -5,18 +5,18 @@ import remarkGfm from "remark-gfm";
 const REMARK_PLUGINS = [remarkGfm];
 
 const MARKDOWN_COMPONENTS: Components = {
-  h1: ({ node: _node, ...p }) => <h1 className="font-serif text-2xl text-primary mt-4 mb-2" {...p} />,
-  h2: ({ node: _node, ...p }) => <h2 className="font-serif text-xl text-primary mt-4 mb-2" {...p} />,
-  h3: ({ node: _node, ...p }) => <h3 className="font-serif text-lg text-primary mt-3 mb-1.5" {...p} />,
-  p: ({ node: _node, ...p }) => <p className="leading-relaxed my-2" {...p} />,
-  ul: ({ node: _node, ...p }) => <ul className="my-2 list-disc pl-5 space-y-1" {...p} />,
-  ol: ({ node: _node, ...p }) => <ol className="my-2 list-decimal pl-5 space-y-1" {...p} />,
+  h1: ({ node: _node, ...p }) => <h1 className="font-serif text-3xl text-primary mt-5 mb-2.5" {...p} />,
+  h2: ({ node: _node, ...p }) => <h2 className="font-serif text-2xl text-primary mt-5 mb-2" {...p} />,
+  h3: ({ node: _node, ...p }) => <h3 className="font-serif text-xl text-primary mt-4 mb-1.5" {...p} />,
+  p: ({ node: _node, ...p }) => <p className="leading-relaxed my-2.5" {...p} />,
+  ul: ({ node: _node, ...p }) => <ul className="my-3 list-disc pl-5 space-y-1.5" {...p} />,
+  ol: ({ node: _node, ...p }) => <ol className="my-3 list-decimal pl-5 space-y-1.5" {...p} />,
   li: ({ node: _node, ...p }) => <li className="leading-relaxed" {...p} />,
   a: ({ node: _node, ...p }) => (
     <a className="text-accent underline underline-offset-2 hover:text-primary" target="_blank" rel="noreferrer" {...p} />
   ),
   blockquote: ({ node: _node, ...p }) => (
-    <blockquote className="my-2 border-l-2 border-accent/60 pl-3 italic text-sepia" {...p} />
+    <blockquote className="my-3 border-l-2 border-accent/60 pl-3.5 italic text-sepia" {...p} />
   ),
   code: ({ node: _node, className, children, ...p }) => {
     const isBlock = (className || "").includes("language-");
@@ -37,14 +37,16 @@ const MARKDOWN_COMPONENTS: Components = {
   },
   hr: () => <hr className="my-4 border-border" />,
   img: ({ node: _node, src, alt }) => (
-    <img
-      src={typeof src === "string" ? src : undefined}
-      alt={alt ?? ""}
-      loading="lazy"
-      decoding="async"
-      referrerPolicy="no-referrer"
-      className="my-3 block max-h-[28rem] max-w-full rounded-md border border-border object-contain"
-    />
+    <span className="my-4 block rounded-2xl border border-border bg-secondary/35 p-2.5 sm:p-3.5">
+      <img
+        src={typeof src === "string" ? src : undefined}
+        alt={alt ?? ""}
+        loading="lazy"
+        decoding="async"
+        referrerPolicy="no-referrer"
+        className="block max-h-[28rem] w-full rounded-xl border border-border/80 bg-card object-contain"
+      />
+    </span>
   ),
   strong: ({ node: _node, ...p }) => <strong className="font-semibold text-primary" {...p} />,
   table: ({ node: _node, ...p }) => (
