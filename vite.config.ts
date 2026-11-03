@@ -88,7 +88,7 @@ export default defineConfig({
     },
     build: {
       rollupOptions: {
-        onwarn(warning, warn) {
+        onwarn(warning: RollupLog, warn: (w: RollupLog) => void) {
           if (
             warning.code === "MODULE_LEVEL_DIRECTIVE" &&
             typeof warning.message === "string" &&
