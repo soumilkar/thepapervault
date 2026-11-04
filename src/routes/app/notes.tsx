@@ -391,6 +391,22 @@ function NotesPage() {
         .select("id,created_at,updated_at")
         .single();
       if (error) throw error;
+      if (img) {
+        try {
+          const captionPlain = title || "Note attachment";
+          const { ct: capCt, iv: capIv } = await encryptText(key, captionPlain);
+          await supabase.from("gallery_images").insert({
+            user_id: user.id,
+            storage_path: img.path,
+            caption: capCt,
+            iv: img.iv,
+            caption_iv: capIv,
+            mime: img.mime,
+          });
+        } catch {
+          // non-blocking
+        }
+      }
       const row = inserted as { id: string; created_at: string; updated_at: string };
       return {
         id: row.id,
@@ -453,12 +469,33 @@ function NotesPage() {
       let imgMime = n.image_mime;
       if (vars.newImage) {
         if (n.image_url) {
-          await supabase.storage.from(MEDIA_BUCKET).remove([n.image_url]);
+          try {
+            await Promise.all([
+              supabase.storage.from(MEDIA_BUCKET).remove([n.image_url]),
+              supabase.from("gallery_images").delete().eq("user_id", user.id).eq("storage_path", n.image_url),
+            ]);
+          } catch {
+            // ignore
+          }
         }
         const up = await uploadEncrypted(user.id, key, vars.newImage);
         imgUrl = up.path;
         imgIv = up.iv;
         imgMime = up.mime;
+        try {
+          const captionPlain = vars.title || "Note attachment";
+          const { ct: capCt, iv: capIv } = await encryptText(key, captionPlain);
+          await supabase.from("gallery_images").insert({
+            user_id: user.id,
+            storage_path: up.path,
+            caption: capCt,
+            iv: up.iv,
+            caption_iv: capIv,
+            mime: up.mime,
+          });
+        } catch {
+          // ignore
+        }
       }
       const payload: Payload = {
         t: vars.title,
@@ -501,6 +538,7 @@ function NotesPage() {
       setSheetEditing(false);
       toast.success("Note updated");
       qc.invalidateQueries({ queryKey: ["notes"] });
+      qc.invalidateQueries({ queryKey: ["gallery"] });
     },
     onError: (e: Error) => toast.error(e.message),
   });
@@ -508,13 +546,21 @@ function NotesPage() {
   const remove = useMutation({
     mutationFn: async (note: Note) => {
       if (note.image_url) {
-        await supabase.storage.from(MEDIA_BUCKET).remove([note.image_url]);
+        try {
+          await Promise.all([
+            supabase.storage.from(MEDIA_BUCKET).remove([note.image_url]),
+            supabase.from("gallery_images").delete().eq("user_id", user.id).eq("storage_path", note.image_url),
+          ]);
+        } catch {
+          // ignore
+        }
       }
       const { error } = await supabase.from("notes").delete().eq("id", note.id);
       if (error) throw error;
       return note.id;
     },
     onSuccess: (deletedId) => {
+      qc.invalidateQueries({ queryKey: ["gallery"] });
       const remaining = (qc.getQueryData<Note[]>(["notes", user.id]) ?? []).filter(
         (n) => n.id !== deletedId,
       );

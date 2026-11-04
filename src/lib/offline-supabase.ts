@@ -735,21 +735,24 @@ export async function flushOfflineSyncQueue(): Promise<void> {
           });
 
           if (blobRec?.buffer) {
-            let activeHeaders = buildSanitizedHeaders(
-              token,
-              true,
-              blobRec.contentType || item.contentType,
-            );
+            const proxyUploadUrl = `/api/storage-proxy?action=upload&bucket=${encodeURIComponent(
+              item.storageBucket,
+            )}&path=${encodeURIComponent(item.storagePath)}`;
+
             let res = await quickFetch(
-              item.url,
+              proxyUploadUrl,
               {
-                method: item.method,
-                headers: activeHeaders,
+                method: "POST",
+                headers: {
+                  authorization: token ? `Bearer ${token}` : "",
+                  "content-type":
+                    blobRec.contentType || item.contentType || "application/octet-stream",
+                },
                 body: new Blob([blobRec.buffer], {
                   type: blobRec.contentType || item.contentType || "application/octet-stream",
                 }),
               },
-              25000,
+              30000,
             );
 
             // Attempt session refresh if 401 unauthorized
@@ -760,21 +763,20 @@ export async function flushOfflineSyncQueue(): Promise<void> {
                 token = null;
               }
               if (token) {
-                activeHeaders = buildSanitizedHeaders(
-                  token,
-                  true,
-                  blobRec.contentType || item.contentType,
-                );
                 res = await quickFetch(
-                  item.url,
+                  proxyUploadUrl,
                   {
-                    method: item.method,
-                    headers: activeHeaders,
+                    method: "POST",
+                    headers: {
+                      authorization: `Bearer ${token}`,
+                      "content-type":
+                        blobRec.contentType || item.contentType || "application/octet-stream",
+                    },
                     body: new Blob([blobRec.buffer], {
                       type: blobRec.contentType || item.contentType || "application/octet-stream",
                     }),
                   },
-                  25000,
+                  30000,
                 );
               }
             }
@@ -789,6 +791,29 @@ export async function flushOfflineSyncQueue(): Promise<void> {
           } else {
             // Blob missing locally; remove stale queue reference
             await removeSyncItem(item.queueId);
+          }
+        } else if (item.kind === "storage" && item.method === "DELETE" && item.storageBucket) {
+          const proxyRemoveUrl = `/api/storage-proxy?action=remove&bucket=${encodeURIComponent(
+            item.storageBucket,
+          )}`;
+          const res = await quickFetch(
+            proxyRemoveUrl,
+            {
+              method: "POST",
+              headers: {
+                authorization: token ? `Bearer ${token}` : "",
+                "content-type": "application/json",
+              },
+              body: item.body ?? undefined,
+            },
+            10000,
+          );
+          if (res.ok || res.status === 404) {
+            await removeSyncItem(item.queueId);
+            successfullySyncedCount++;
+            syncedTables.add("storage");
+          } else if (res.status === 401 || res.status === 403) {
+            break;
           }
         } else {
           let activeHeaders = buildSanitizedHeaders(token, false);
@@ -965,8 +990,20 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
 
       if (navigator.onLine) {
         try {
-          const res = await quickFetch(req.clone(), undefined, 2500);
-          if (res.ok) return res;
+          const authHeader = req.headers.get("authorization") || req.headers.get("Authorization") || "";
+          const proxyRes = await quickFetch(
+            `/api/storage-proxy?action=remove&bucket=${encodeURIComponent(bucket)}`,
+            {
+              method: "POST",
+              headers: {
+                authorization: authHeader,
+                "content-type": "application/json",
+              },
+              body: JSON.stringify(bodyJson),
+            },
+            6000,
+          );
+          if (proxyRes.ok) return proxyRes;
         } catch {
           // Queue below
         }
@@ -999,9 +1036,21 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
 
       if (navigator.onLine) {
         try {
-          const res = await quickFetch(req.clone(), undefined, 2500);
-          if (res.ok) {
-            const list = (await res.clone().json()) as {
+          const authHeader = req.headers.get("authorization") || req.headers.get("Authorization") || "";
+          const proxyRes = await quickFetch(
+            `/api/storage-proxy?action=sign&bucket=${encodeURIComponent(bucket)}`,
+            {
+              method: "POST",
+              headers: {
+                authorization: authHeader,
+                "content-type": "application/json",
+              },
+              body: JSON.stringify(bodyJson),
+            },
+            8000,
+          );
+          if (proxyRes.ok) {
+            const list = (await proxyRes.clone().json()) as {
               path: string;
               signedURL?: string;
               signedUrl?: string;
@@ -1009,7 +1058,7 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
             const enhanced = await Promise.all(
               list.map(async (item) => {
                 const localUrl = await getStorageBlobUrl(bucket, item.path);
-                if (localUrl) {
+                if (localUrl && !item.signedUrl) {
                   return { ...item, signedURL: localUrl, signedUrl: localUrl };
                 }
                 return item;
@@ -1051,8 +1100,20 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
 
       if (navigator.onLine) {
         try {
-          const res = await quickFetch(req.clone(), undefined, 2500);
-          if (res.ok) return res;
+          const authHeader = req.headers.get("authorization") || req.headers.get("Authorization") || "";
+          const proxyRes = await quickFetch(
+            `/api/storage-proxy?action=sign-single&bucket=${encodeURIComponent(bucket)}&path=${encodeURIComponent(objectPath)}`,
+            {
+              method: "POST",
+              headers: {
+                authorization: authHeader,
+                "content-type": "application/json",
+              },
+              body: JSON.stringify({ path: objectPath }),
+            },
+            6000,
+          );
+          if (proxyRes.ok) return proxyRes;
         } catch {
           // Fall through to local blob URL
         }
@@ -1095,8 +1156,20 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
 
       if (navigator.onLine) {
         try {
-          const res = await quickFetch(req.clone(), undefined, 4000);
-          if (res.ok) return res;
+          const authHeader = req.headers.get("authorization") || req.headers.get("Authorization") || "";
+          const proxyRes = await quickFetch(
+            `/api/storage-proxy?action=upload&bucket=${encodeURIComponent(bucket)}&path=${encodeURIComponent(objectPath)}`,
+            {
+              method: "POST",
+              headers: {
+                authorization: authHeader,
+                "content-type": targetType || "application/octet-stream",
+              },
+              body: targetBlob,
+            },
+            30000,
+          );
+          if (proxyRes.ok) return proxyRes;
         } catch {
           // Queue below
         }

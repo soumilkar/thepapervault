@@ -13,6 +13,7 @@ function suppressUseClientDirectiveWarnings(): Plugin {
   let resolvedSupabaseUrl = "";
   let resolvedSupabasePublishableKey = "";
   let resolvedSupabaseAnonKey = "";
+  let resolvedSupabaseServiceRoleKey = "";
 
   return {
     name: "suppress-use-client-directives",
@@ -31,6 +32,8 @@ function suppressUseClientDirectiveWarnings(): Plugin {
         env.VITE_SUPABASE_PUBLISHABLE_KEY ||
         env.SUPABASE_PUBLISHABLE_KEY ||
         "";
+      resolvedSupabaseServiceRoleKey =
+        env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || "";
       resolvedGroqKey = env.GROQ_API_KEY || env.VITE_GROQ_API_KEY || "";
 
       if (resolvedGroqKey && !process.env.GROQ_API_KEY) {
@@ -44,6 +47,9 @@ function suppressUseClientDirectiveWarnings(): Plugin {
       }
       if (resolvedSupabaseAnonKey && !process.env.SUPABASE_ANON_KEY) {
         process.env.SUPABASE_ANON_KEY = resolvedSupabaseAnonKey;
+      }
+      if (resolvedSupabaseServiceRoleKey && !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+        process.env.SUPABASE_SERVICE_ROLE_KEY = resolvedSupabaseServiceRoleKey;
       }
 
       return {
@@ -73,6 +79,11 @@ function suppressUseClientDirectiveWarnings(): Plugin {
         }
         if (resolvedSupabaseAnonKey) {
           serverDefines["process.env.SUPABASE_ANON_KEY"] = JSON.stringify(resolvedSupabaseAnonKey);
+        }
+        if (resolvedSupabaseServiceRoleKey) {
+          serverDefines["process.env.SUPABASE_SERVICE_ROLE_KEY"] = JSON.stringify(
+            resolvedSupabaseServiceRoleKey,
+          );
         }
       }
 
