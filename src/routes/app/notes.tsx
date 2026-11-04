@@ -476,7 +476,11 @@ function NotesPage() {
           try {
             await Promise.all([
               supabase.storage.from(MEDIA_BUCKET).remove([n.image_url]),
-              supabase.from("gallery_images").delete().eq("user_id", user.id).eq("storage_path", n.image_url),
+              supabase
+                .from("gallery_images")
+                .delete()
+                .eq("user_id", user.id)
+                .eq("storage_path", n.image_url),
             ]);
           } catch {
             // ignore
@@ -553,7 +557,11 @@ function NotesPage() {
         try {
           await Promise.all([
             supabase.storage.from(MEDIA_BUCKET).remove([note.image_url]),
-            supabase.from("gallery_images").delete().eq("user_id", user.id).eq("storage_path", note.image_url),
+            supabase
+              .from("gallery_images")
+              .delete()
+              .eq("user_id", user.id)
+              .eq("storage_path", note.image_url),
           ]);
         } catch {
           // ignore

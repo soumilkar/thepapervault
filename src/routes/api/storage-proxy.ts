@@ -32,7 +32,9 @@ function getAdminClient(request: Request) {
   const url =
     readRuntimeEnv("SUPABASE_URL", request) ||
     readRuntimeEnv("VITE_SUPABASE_URL", request) ||
-    (typeof process !== "undefined" ? process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL : "") ||
+    (typeof process !== "undefined"
+      ? process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
+      : "") ||
     "https://lffxkhqwyvgpqkkqhznm.supabase.co";
 
   const serviceKey =
@@ -50,7 +52,8 @@ function getAdminClient(request: Request) {
 }
 
 async function authenticateUser(request: Request, adminClient: ReturnType<typeof getAdminClient>) {
-  const authorization = request.headers.get("authorization") || request.headers.get("Authorization");
+  const authorization =
+    request.headers.get("authorization") || request.headers.get("Authorization");
   if (!authorization?.startsWith("Bearer ")) {
     return null;
   }
@@ -128,10 +131,13 @@ export const Route = createFileRoute("/api/storage-proxy")({
                 }
               }
               if (!foundBlob) {
-                return new Response(JSON.stringify({ error: "No file found in multipart upload" }), {
-                  status: 400,
-                  headers: { "Content-Type": "application/json" },
-                });
+                return new Response(
+                  JSON.stringify({ error: "No file found in multipart upload" }),
+                  {
+                    status: 400,
+                    headers: { "Content-Type": "application/json" },
+                  },
+                );
               }
               fileBuffer = await foundBlob.arrayBuffer();
             } else {
@@ -168,7 +174,9 @@ export const Route = createFileRoute("/api/storage-proxy")({
           // 2. Batch Signed URLs
           if (action === "sign") {
             const body = (await request.json().catch(() => ({}))) as { paths?: string[] };
-            const paths = (body.paths ?? []).filter((p): p is string => typeof p === "string" && Boolean(p));
+            const paths = (body.paths ?? []).filter(
+              (p): p is string => typeof p === "string" && Boolean(p),
+            );
 
             if (paths.length === 0) {
               return new Response(JSON.stringify([]), {
@@ -177,7 +185,9 @@ export const Route = createFileRoute("/api/storage-proxy")({
               });
             }
 
-            const { data, error } = await adminClient.storage.from(bucket).createSignedUrls(paths, 60 * 60);
+            const { data, error } = await adminClient.storage
+              .from(bucket)
+              .createSignedUrls(paths, 60 * 60);
             if (error) {
               return new Response(JSON.stringify({ error: error.message }), {
                 status: 400,
@@ -185,7 +195,22 @@ export const Route = createFileRoute("/api/storage-proxy")({
               });
             }
 
-            return new Response(JSON.stringify(data ?? []), {
+            const marker = "/storage/v1";
+            const normalized = (data ?? []).map((item) => {
+              const raw =
+                (item as unknown as { signedURL?: string; signedUrl?: string }).signedURL ||
+                (item as unknown as { signedURL?: string; signedUrl?: string }).signedUrl ||
+                "";
+              const idx = raw.indexOf(marker);
+              const rel = idx !== -1 ? raw.slice(idx + marker.length) : raw;
+              return {
+                ...item,
+                signedURL: rel,
+                signedUrl: raw,
+              };
+            });
+
+            return new Response(JSON.stringify(normalized), {
               status: 200,
               headers: { "Content-Type": "application/json" },
             });
@@ -216,7 +241,8 @@ export const Route = createFileRoute("/api/storage-proxy")({
             const rawSignedUrl = data?.signedUrl ?? "";
             const marker = "/storage/v1";
             const idx = rawSignedUrl.indexOf(marker);
-            const relativeSignedURL = idx !== -1 ? rawSignedUrl.slice(idx + marker.length) : rawSignedUrl;
+            const relativeSignedURL =
+              idx !== -1 ? rawSignedUrl.slice(idx + marker.length) : rawSignedUrl;
 
             return new Response(
               JSON.stringify({ signedURL: relativeSignedURL, signedUrl: rawSignedUrl }),

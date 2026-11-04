@@ -30,7 +30,26 @@ type VaultContextValue = {
 
 const IDLE_LOCK_MS = 15 * 60 * 1000; // 15 minutes of inactivity auto-locks the vault
 
-const VaultContext = createContext<VaultContextValue | null>(null);
+const GLOBAL_VAULT_CTX_KEY = "__papervault_vault_context_v1__";
+const globalStore = globalThis as unknown as Record<
+  string,
+  ReturnType<typeof createContext<VaultContextValue | null>> | undefined
+>;
+const VaultContext =
+  globalStore[GLOBAL_VAULT_CTX_KEY] ??
+  (globalStore[GLOBAL_VAULT_CTX_KEY] = createContext<VaultContextValue | null>(null));
+
+const FALLBACK_VAULT_CONTEXT: VaultContextValue = {
+  status: "loading",
+  key: null,
+  setup: async () => {
+    throw new Error("Vault is still initializing");
+  },
+  unlock: async () => {
+    throw new Error("Vault is still initializing");
+  },
+  lock: () => {},
+};
 
 const VAULT_META_PREFIX = "papervault:vault_meta:";
 
@@ -211,13 +230,18 @@ export function VaultProvider({ userId, children }: { userId: string; children: 
     [status, key, setup, unlock, lock],
   );
 
+  (globalThis as unknown as Record<string, VaultContextValue | undefined>).__papervault_vault_value__ =
+    value;
+
   return <VaultContext.Provider value={value}>{children}</VaultContext.Provider>;
 }
 
-export function useVault() {
+export function useVault(): VaultContextValue {
   const v = useContext(VaultContext);
-  if (!v) throw new Error("useVault must be used within VaultProvider");
-  return v;
+  if (v) return v;
+  const globalVal = (globalThis as unknown as Record<string, VaultContextValue | undefined>)
+    .__papervault_vault_value__;
+  return globalVal ?? FALLBACK_VAULT_CONTEXT;
 }
 
 // Throws if the vault is locked. Use inside mutations to fail fast with a helpful message.

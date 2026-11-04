@@ -1094,7 +1094,8 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
 
       if (navigator.onLine) {
         try {
-          const authHeader = req.headers.get("authorization") || req.headers.get("Authorization") || "";
+          const authHeader =
+            req.headers.get("authorization") || req.headers.get("Authorization") || "";
           const proxyRes = await quickFetch(
             `/api/storage-proxy?action=remove&bucket=${encodeURIComponent(bucket)}`,
             {
@@ -1140,7 +1141,8 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
 
       if (navigator.onLine) {
         try {
-          const authHeader = req.headers.get("authorization") || req.headers.get("Authorization") || "";
+          const authHeader =
+            req.headers.get("authorization") || req.headers.get("Authorization") || "";
           const proxyRes = await quickFetch(
             `/api/storage-proxy?action=sign&bucket=${encodeURIComponent(bucket)}`,
             {
@@ -1204,7 +1206,8 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
 
       if (navigator.onLine) {
         try {
-          const authHeader = req.headers.get("authorization") || req.headers.get("Authorization") || "";
+          const authHeader =
+            req.headers.get("authorization") || req.headers.get("Authorization") || "";
           const proxyRes = await quickFetch(
             `/api/storage-proxy?action=sign-single&bucket=${encodeURIComponent(bucket)}&path=${encodeURIComponent(objectPath)}`,
             {
@@ -1260,7 +1263,8 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
 
       if (navigator.onLine) {
         try {
-          const authHeader = req.headers.get("authorization") || req.headers.get("Authorization") || "";
+          const authHeader =
+            req.headers.get("authorization") || req.headers.get("Authorization") || "";
           const proxyRes = await quickFetch(
             `/api/storage-proxy?action=upload&bucket=${encodeURIComponent(bucket)}&path=${encodeURIComponent(objectPath)}`,
             {
