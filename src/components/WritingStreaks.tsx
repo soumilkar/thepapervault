@@ -1,9 +1,10 @@
 import { memo, useMemo } from "react";
 import { Flame, Trophy, PenLine, TrendingUp } from "lucide-react";
 import { useDiaryMetrics } from "@/lib/diary-metrics";
+import { toBrowserLocalDate } from "@/lib/browser-time";
 
 function isoDay(d: Date) {
-  return d.toISOString().slice(0, 10);
+  return toBrowserLocalDate(d);
 }
 
 function getStreaks(dates: string[]) {

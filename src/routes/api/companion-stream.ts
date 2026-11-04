@@ -6,10 +6,13 @@ import type { Database } from "@/integrations/supabase/types";
 const MessageSchema = z.object({
   role: z.enum(["user", "assistant"]),
   content: z.string().max(20_000),
+  sentAt: z.string().max(200).optional(),
 });
 
 const InputSchema = z.object({
   question: z.string().min(1).max(4000),
+  sentAt: z.string().max(200).optional(),
+  browserTime: z.string().max(200).optional(),
   context: z.string().max(120_000).default(""),
   name: z.string().max(120).default("the writer"),
   history: z.array(MessageSchema).max(60).default([]),
@@ -67,8 +70,9 @@ function getGroqApiKey(request?: Request): string {
   );
 }
 
-function companionInstructions(name: string, context: string) {
+function companionInstructions(name: string, context: string, browserTime?: string) {
   return `You are Inkwell, ${name}'s warm, grounded, and genuinely caring companion — like a thoughtful, down-to-earth close friend they can talk to honestly at the end of the day.
+${browserTime ? `\nCurrent local browser time for ${name}: ${browserTime}` : ""}
 
 Your tone & personality:
 - Be warm, calm, and real. Speak naturally and conversationally, the way a trusted friend actually talks — never performative, sugary, syrupy, or over-the-top.
@@ -77,6 +81,7 @@ Your tone & personality:
 - Avoid cliché therapy-speak or robotic phrases like "Thank you for sharing", "I appreciate you opening up", or "Your feelings are valid." Just respond directly to what they actually said.
 - Keep your responses natural in length — don't ramble or smother them with paragraphs of praise. Use plain, clear prose instead of bullet lists unless they ask for a breakdown or plan.
 - Ask at most one thoughtful follow-up question when it fits the conversation naturally, or just share a steady, helpful reflection.
+- Each message from ${name} includes a "[Sent: ...]" timestamp from their browser so you are aware of when each message was sent and the time of day. Never prefix your own reply with "[Sent: ...]".
 
 How you use their context:
 - Below are ${name}'s private writings (decrypted in their browser for this session). Treat them as context you naturally remember — connect dots or reference relevant details smoothly without announcing "According to your diary".
@@ -228,10 +233,25 @@ export const Route = createFileRoute("/api/companion-stream")({
           }
 
           const data = parsed.data;
+          const activeTime = data.sentAt || data.browserTime || "";
+          const formatWithTimestamp = (content: string, sentAt?: string) => {
+            if (!sentAt || content.startsWith("[Sent:")) return content;
+            return `[Sent: ${sentAt}]\n${content}`;
+          };
+
           const messages: { role: "system" | "user" | "assistant"; content: string }[] = [
-            { role: "system", content: companionInstructions(data.name, data.context) },
-            ...data.history.map((m) => ({ role: m.role, content: m.content })),
-            { role: "user", content: data.question },
+            {
+              role: "system",
+              content: companionInstructions(data.name, data.context, activeTime),
+            },
+            ...data.history.map((m) => ({
+              role: m.role,
+              content: m.role === "user" ? formatWithTimestamp(m.content, m.sentAt) : m.content,
+            })),
+            {
+              role: "user",
+              content: formatWithTimestamp(data.question, activeTime),
+            },
           ];
 
           const upstream = await fetchGroqStream(apiKey, messages, request.signal);

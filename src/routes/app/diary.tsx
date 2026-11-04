@@ -23,6 +23,7 @@ import { folderOptions, folderWithDescendants, type FolderRow } from "@/lib/fold
 import { previewText } from "@/lib/rich-text";
 import { downloadTextFile } from "@/lib/download";
 import { useVault } from "@/lib/vault";
+import { getBrowserNow } from "@/lib/browser-time";
 import {
   fetchStorageBytesWithOfflineCache,
   fetchStorageUrlWithOfflineCache,
@@ -324,6 +325,7 @@ function DiaryPage() {
 
   const create = useMutation({
     mutationFn: async (): Promise<Entry> => {
+      const browserNow = getBrowserNow();
       const musicPatch = {
         music_track_id: music?.music_track_id ?? null,
         music_track_name: music?.music_track_name ?? null,
@@ -343,6 +345,8 @@ function DiaryPage() {
             folder_id: folderId,
             visibility: "public_anon",
             word_count: countWords(content),
+            entry_date: browserNow.localDate,
+            created_at: browserNow.iso,
             ...musicPatch,
           } as never)
           .select("id,created_at,entry_date")
@@ -354,12 +358,12 @@ function DiaryPage() {
           title: title || "",
           content,
           mood: mood || "",
-          entry_date: row.entry_date || new Date().toISOString().slice(0, 10),
+          entry_date: row.entry_date || browserNow.localDate,
           image_path: null,
           is_public: true,
           folder_id: folderId,
           music,
-          created_at: row.created_at || new Date().toISOString(),
+          created_at: row.created_at || browserNow.iso,
         };
       }
       if (!key) throw new Error("Vault is locked");
@@ -389,6 +393,7 @@ function DiaryPage() {
           iv: imgIv,
           caption_iv: capIv,
           mime: photo.type,
+          created_at: browserNow.iso,
         });
       }
       const payload: DiaryEncryptedPayload = {
@@ -412,6 +417,8 @@ function DiaryPage() {
           folder_id: folderId,
           iv,
           word_count: 0,
+          entry_date: browserNow.localDate,
+          created_at: browserNow.iso,
           ...NULL_MUSIC_COLUMNS,
         } as never)
         .select("id,created_at,entry_date")
@@ -423,12 +430,12 @@ function DiaryPage() {
         title: title || "",
         content,
         mood: mood || "",
-        entry_date: row.entry_date || new Date().toISOString().slice(0, 10),
+        entry_date: row.entry_date || browserNow.localDate,
         image_path: imagePath,
         is_public: false,
         folder_id: folderId,
         music,
-        created_at: row.created_at || new Date().toISOString(),
+        created_at: row.created_at || browserNow.iso,
       };
     },
     onSuccess: (createdEntry) => {

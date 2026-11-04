@@ -32,6 +32,7 @@ import {
   fetchStorageUrlWithOfflineCache,
 } from "@/lib/offline-supabase";
 import { useGalleryFolders, type GalleryFolder } from "@/lib/gallery-folders";
+import { getBrowserNow } from "@/lib/browser-time";
 
 export const Route = createFileRoute("/app/gallery")({
   head: () => ({
@@ -642,6 +643,7 @@ function GalleryPage() {
         iv,
         caption_iv: enc.iv,
         mime: file.type,
+        created_at: getBrowserNow().iso,
       });
       if (dbErr) throw dbErr;
 

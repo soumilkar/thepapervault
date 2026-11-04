@@ -4,6 +4,8 @@
 // This layer caches only those encrypted rows/blobs in IndexedDB and queues offline mutations
 // so the entire app works 100% offline (except live AI generation, which requires internet).
 
+import { getBrowserNow } from "@/lib/browser-time";
+
 const DB_NAME = "papervault_offline_v1";
 const DB_VERSION = 1;
 
@@ -562,7 +564,8 @@ function filterAndSortRows(
 }
 
 function withTableDefaults(table: string, raw: Record<string, unknown>): Record<string, unknown> {
-  const now = new Date().toISOString();
+  const browserNow = getBrowserNow();
+  const now = browserNow.iso;
   const row: Record<string, unknown> = { ...raw };
   const pk = getPrimaryKey(table);
 
@@ -582,7 +585,7 @@ function withTableDefaults(table: string, raw: Record<string, unknown>): Record<
   }
 
   if (table === "diary_entries") {
-    if (!row.entry_date) row.entry_date = now.slice(0, 10);
+    if (!row.entry_date) row.entry_date = browserNow.localDate;
     if (row.is_public === undefined) row.is_public = false;
     if (!row.visibility) row.visibility = row.is_public ? "public" : "private";
     if (row.word_count === undefined) row.word_count = 0;

@@ -9,12 +9,18 @@ import { decryptText, encryptText } from "@/lib/crypto";
 import { AppSelect } from "@/components/AppSelect";
 import { CHAT_SESSIONS_UPDATED } from "./chat";
 import { useBrowserDraft } from "@/lib/browser-drafts";
+import {
+  formatBrowserFullDateTime,
+  getBrowserNow,
+  getChatGapSeparatorLabel,
+  toBrowserLocalDate,
+} from "@/lib/browser-time";
 
 export const Route = createFileRoute("/app/chat/$sessionId")({
   component: SessionChat,
 });
 
-type Msg = { role: "user" | "assistant"; content: string };
+type Msg = { role: "user" | "assistant"; content: string; createdAt?: string };
 type Source = "both" | "diary" | "blog";
 
 const PROMPTS = [
@@ -25,7 +31,7 @@ const PROMPTS = [
 ];
 
 function isoDay(d: Date) {
-  return d.toISOString().slice(0, 10);
+  return toBrowserLocalDate(d);
 }
 
 async function buildContext(
@@ -128,7 +134,7 @@ function isCorruptedWarmupMessage(content: string): boolean {
 }
 
 function SessionChat() {
-  const { user } = Route.useRouteContext();
+  const { user, profileDisplayName } = Route.useRouteContext();
   const { sessionId } = Route.useParams();
   const { key } = useVault();
   const [messages, setMessages] = useState<Msg[]>([]);
@@ -175,7 +181,7 @@ function SessionChat() {
     (async () => {
       const { data, error } = await supabase
         .from("chat_messages")
-        .select("id,role,content,iv")
+        .select("id,role,content,iv,created_at")
         .eq("session_id", sessionId)
         .order("created_at", { ascending: true });
       if (cancelled) return;
@@ -203,7 +209,11 @@ function SessionChat() {
               void supabase.from("chat_messages").delete().eq("id", r.id);
               return null;
             }
-            return { role: r.role as "user" | "assistant", content };
+            return {
+              role: r.role as "user" | "assistant",
+              content,
+              createdAt: r.created_at,
+            };
           }),
         );
         if (cancelled) return;
@@ -220,14 +230,15 @@ function SessionChat() {
   const send = async (question: string) => {
     if (!question.trim() || loading) return;
     inputRef.current?.blur();
+    const sentSnap = getBrowserNow();
     const priorHistory = messages.filter((m) => !isCorruptedWarmupMessage(m.content));
-    const userMsg: Msg = { role: "user", content: question };
+    const userMsg: Msg = { role: "user", content: question, createdAt: sentSnap.iso };
     setMessages((m) => [...m, userMsg]);
     setLoading(true);
     scrollToBottom("smooth");
     try {
       if (!key) throw new Error("Unlock your vault to continue");
-      // Persist user message, encrypted
+      // Persist user message with browser timestamp, encrypted
       const encQ = await encryptText(key, question);
       const { error: userMessageError } = await supabase.from("chat_messages").insert({
         session_id: sessionId,
@@ -235,12 +246,14 @@ function SessionChat() {
         role: "user",
         content: encQ.ct,
         iv: encQ.iv,
+        created_at: sentSnap.iso,
       });
       if (userMessageError) throw userMessageError;
       clearDraft();
 
       const context = await buildContext(user.id, key, source, startDate, endDate);
       const name =
+        profileDisplayName ||
         user.user_metadata?.display_name ||
         user.user_metadata?.full_name ||
         user.user_metadata?.name ||
@@ -256,7 +269,18 @@ function SessionChat() {
           "Content-Type": "application/json",
           Authorization: `Bearer ${accessToken}`,
         },
-        body: JSON.stringify({ question, context, name, history: priorHistory }),
+        body: JSON.stringify({
+          question,
+          sentAt: sentSnap.localDateTime,
+          browserTime: sentSnap.localDateTime,
+          context,
+          name,
+          history: priorHistory.map((m) => ({
+            role: m.role,
+            content: m.content,
+            sentAt: m.createdAt ? formatBrowserFullDateTime(m.createdAt) : undefined,
+          })),
+        }),
       });
       const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
       if (!response.ok) {
@@ -279,7 +303,11 @@ function SessionChat() {
 
       const decoder = new TextDecoder();
       let answer = "";
-      setMessages((current) => [...current, { role: "assistant", content: "" }]);
+      const streamStartSnap = getBrowserNow();
+      setMessages((current) => [
+        ...current,
+        { role: "assistant", content: "", createdAt: streamStartSnap.iso },
+      ]);
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -290,12 +318,21 @@ function SessionChat() {
             "The server is warming up — please try sending your message again in a moment.",
           );
         }
-        setMessages((current) => [...current.slice(0, -1), { role: "assistant", content: answer }]);
+        setMessages((current) => [
+          ...current.slice(0, -1),
+          { role: "assistant", content: answer, createdAt: streamStartSnap.iso },
+        ]);
       }
       answer += decoder.decode();
       if (!answer.trim() || isCorruptedWarmupMessage(answer)) {
         throw new Error("The Companion returned an empty response");
       }
+
+      const replySnap = getBrowserNow();
+      setMessages((current) => [
+        ...current.slice(0, -1),
+        { role: "assistant", content: answer, createdAt: replySnap.iso },
+      ]);
 
       const encA = await encryptText(key, answer);
       await supabase.from("chat_messages").insert({
@@ -304,11 +341,12 @@ function SessionChat() {
         role: "assistant",
         content: encA.ct,
         iv: encA.iv,
+        created_at: replySnap.iso,
       });
 
       // If this is the first exchange, title the session from the question
       const patch: { last_message_at: string; title?: string; title_iv?: string } = {
-        last_message_at: new Date().toISOString(),
+        last_message_at: replySnap.iso,
       };
       if (priorHistory.length === 0) {
         const encT = await encryptText(key, question.slice(0, 60));
@@ -407,20 +445,35 @@ function SessionChat() {
 
       <div className="space-y-3">
         {hydrating && <p className="font-hand text-sepia">loading conversation...</p>}
-        {messages.map((m, i) => (
-          <div key={i} className={m.role === "user" ? "flex justify-end" : ""}>
-            {m.role === "user" ? (
-              <div className="max-w-[80%] rounded-2xl bg-primary px-4 py-2.5 text-primary-foreground">
-                <Markdown>{m.content}</Markdown>
+        {messages.map((m, i) => {
+          const prevCreatedAt = i > 0 ? messages[i - 1]?.createdAt : null;
+          const gapSeparator = getChatGapSeparatorLabel(prevCreatedAt, m.createdAt);
+          return (
+            <div key={i} className="space-y-3">
+              {gapSeparator && (
+                <div className="my-4 flex items-center gap-3">
+                  <div className="h-px flex-1 bg-border/70" />
+                  <span className="shrink-0 text-[11px] font-medium tracking-wide text-muted-foreground">
+                    {gapSeparator}
+                  </span>
+                  <div className="h-px flex-1 bg-border/70" />
+                </div>
+              )}
+              <div className={m.role === "user" ? "flex justify-end" : ""}>
+                {m.role === "user" ? (
+                  <div className="max-w-[80%] rounded-2xl bg-primary px-4 py-2.5 text-primary-foreground">
+                    <Markdown>{m.content}</Markdown>
+                  </div>
+                ) : (
+                  <div className="paper-card max-w-[90%] p-4">
+                    <p className="mb-2 font-hand text-lg leading-none text-sepia">companion</p>
+                    <Markdown>{m.content}</Markdown>
+                  </div>
+                )}
               </div>
-            ) : (
-              <div className="paper-card max-w-[90%] p-4">
-                <p className="mb-2 font-hand text-sepia text-lg leading-none">companion</p>
-                <Markdown>{m.content}</Markdown>
-              </div>
-            )}
-          </div>
-        ))}
+            </div>
+          );
+        })}
         {loading && messages.at(-1)?.role !== "assistant" && (
           <p className="font-hand text-sepia">thinking...</p>
         )}
