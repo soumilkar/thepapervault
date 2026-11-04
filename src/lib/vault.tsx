@@ -1,7 +1,21 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
-import { deriveDataKey, deriveVerifier, randomBytes, timingSafeEqualStr, toB64 } from "@/lib/crypto";
+import {
+  deriveDataKey,
+  deriveVerifier,
+  randomBytes,
+  timingSafeEqualStr,
+  toB64,
+} from "@/lib/crypto";
 import { clearOfflineBlobUrls } from "@/lib/offline-supabase";
 
 type VaultStatus = "loading" | "needs_setup" | "locked" | "unlocked";
@@ -20,7 +34,9 @@ const VaultContext = createContext<VaultContextValue | null>(null);
 
 const VAULT_META_PREFIX = "papervault:vault_meta:";
 
-function getCachedVaultMeta(userId: string): { kdf_salt: string; verifier: string; verifier_salt: string } | null {
+function getCachedVaultMeta(
+  userId: string,
+): { kdf_salt: string; verifier: string; verifier_salt: string } | null {
   if (typeof window === "undefined") return null;
   try {
     const raw = window.localStorage.getItem(`${VAULT_META_PREFIX}${userId}`);
@@ -31,7 +47,10 @@ function getCachedVaultMeta(userId: string): { kdf_salt: string; verifier: strin
   return null;
 }
 
-function cacheVaultMeta(userId: string, meta: { kdf_salt: string; verifier: string; verifier_salt: string }) {
+function cacheVaultMeta(
+  userId: string,
+  meta: { kdf_salt: string; verifier: string; verifier_salt: string },
+) {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(`${VAULT_META_PREFIX}${userId}`, JSON.stringify(meta));
@@ -47,7 +66,9 @@ export function VaultProvider({ userId, children }: { userId: string; children: 
   const [key, setKey] = useState<CryptoKey | null>(null);
   const [kdfSalt, setKdfSalt] = useState<string | null>(initialCached?.kdf_salt ?? null);
   const [verifier, setVerifier] = useState<string | null>(initialCached?.verifier ?? null);
-  const [verifierSalt, setVerifierSalt] = useState<string | null>(initialCached?.verifier_salt ?? null);
+  const [verifierSalt, setVerifierSalt] = useState<string | null>(
+    initialCached?.verifier_salt ?? null,
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -62,8 +83,28 @@ export function VaultProvider({ userId, children }: { userId: string; children: 
       }
 
       try {
-        const { data } = await supabase.from("vault_keys").select("*").eq("user_id", userId).maybeSingle();
+        let { data, error } = await supabase
+          .from("vault_keys")
+          .select("*")
+          .eq("user_id", userId)
+          .maybeSingle();
         if (cancelled) return;
+
+        // If transient error and no cache, retry once after 1.5s
+        if (error && !cached) {
+          await new Promise((r) => setTimeout(r, 1500));
+          if (cancelled) return;
+          const retry = await supabase
+            .from("vault_keys")
+            .select("*")
+            .eq("user_id", userId)
+            .maybeSingle();
+          data = retry.data;
+          error = retry.error;
+        }
+
+        if (cancelled) return;
+
         if (data) {
           setKdfSalt(data.kdf_salt);
           setVerifier(data.verifier);
@@ -76,7 +117,16 @@ export function VaultProvider({ userId, children }: { userId: string; children: 
           setStatus("locked");
           return;
         }
-        if (!cached) {
+
+        if (cached) {
+          setStatus("locked");
+          return;
+        }
+
+        if (!error) {
+          setStatus("needs_setup");
+        } else {
+          // If error happened and no cache, wait or fallback
           setStatus("needs_setup");
         }
       } catch {
@@ -90,41 +140,47 @@ export function VaultProvider({ userId, children }: { userId: string; children: 
     };
   }, [userId]);
 
-  const setup = useCallback(async (passphrase: string): Promise<CryptoKey> => {
-    if (passphrase.length < 8) throw new Error("Passphrase must be at least 8 characters");
-    const newKdfSalt = toB64(randomBytes(16));
-    const newVerifierSalt = toB64(randomBytes(16));
-    const newVerifier = await deriveVerifier(passphrase, newVerifierSalt);
-    const dataKey = await deriveDataKey(passphrase, newKdfSalt);
-    cacheVaultMeta(userId, {
-      kdf_salt: newKdfSalt,
-      verifier: newVerifier,
-      verifier_salt: newVerifierSalt,
-    });
-    const { error } = await supabase.from("vault_keys").insert({
-      user_id: userId,
-      kdf_salt: newKdfSalt,
-      verifier: newVerifier,
-      verifier_salt: newVerifierSalt,
-    });
-    if (error) throw error;
-    setKdfSalt(newKdfSalt);
-    setVerifier(newVerifier);
-    setVerifierSalt(newVerifierSalt);
-    setKey(dataKey);
-    setStatus("unlocked");
-    return dataKey;
-  }, [userId]);
+  const setup = useCallback(
+    async (passphrase: string): Promise<CryptoKey> => {
+      if (passphrase.length < 8) throw new Error("Passphrase must be at least 8 characters");
+      const newKdfSalt = toB64(randomBytes(16));
+      const newVerifierSalt = toB64(randomBytes(16));
+      const newVerifier = await deriveVerifier(passphrase, newVerifierSalt);
+      const dataKey = await deriveDataKey(passphrase, newKdfSalt);
+      cacheVaultMeta(userId, {
+        kdf_salt: newKdfSalt,
+        verifier: newVerifier,
+        verifier_salt: newVerifierSalt,
+      });
+      const { error } = await supabase.from("vault_keys").insert({
+        user_id: userId,
+        kdf_salt: newKdfSalt,
+        verifier: newVerifier,
+        verifier_salt: newVerifierSalt,
+      });
+      if (error) throw error;
+      setKdfSalt(newKdfSalt);
+      setVerifier(newVerifier);
+      setVerifierSalt(newVerifierSalt);
+      setKey(dataKey);
+      setStatus("unlocked");
+      return dataKey;
+    },
+    [userId],
+  );
 
-  const unlock = useCallback(async (passphrase: string): Promise<CryptoKey> => {
-    if (!kdfSalt || !verifier || !verifierSalt) throw new Error("Vault not initialized");
-    const check = await deriveVerifier(passphrase, verifierSalt);
-    if (!timingSafeEqualStr(check, verifier)) throw new Error("Wrong passphrase");
-    const dataKey = await deriveDataKey(passphrase, kdfSalt);
-    setKey(dataKey);
-    setStatus("unlocked");
-    return dataKey;
-  }, [kdfSalt, verifier, verifierSalt]);
+  const unlock = useCallback(
+    async (passphrase: string): Promise<CryptoKey> => {
+      if (!kdfSalt || !verifier || !verifierSalt) throw new Error("Vault not initialized");
+      const check = await deriveVerifier(passphrase, verifierSalt);
+      if (!timingSafeEqualStr(check, verifier)) throw new Error("Wrong passphrase");
+      const dataKey = await deriveDataKey(passphrase, kdfSalt);
+      setKey(dataKey);
+      setStatus("unlocked");
+      return dataKey;
+    },
+    [kdfSalt, verifier, verifierSalt],
+  );
 
   const lock = useCallback(() => {
     setKey(null);
@@ -150,7 +206,10 @@ export function VaultProvider({ userId, children }: { userId: string; children: 
     };
   }, [status, key, lock]);
 
-  const value = useMemo(() => ({ status, key, setup, unlock, lock }), [status, key, setup, unlock, lock]);
+  const value = useMemo(
+    () => ({ status, key, setup, unlock, lock }),
+    [status, key, setup, unlock, lock],
+  );
 
   return <VaultContext.Provider value={value}>{children}</VaultContext.Provider>;
 }

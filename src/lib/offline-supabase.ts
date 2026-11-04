@@ -61,7 +61,9 @@ let currentSyncState: OfflineSyncState = {
 function notifySyncState(patch: Partial<OfflineSyncState>) {
   currentSyncState = { ...currentSyncState, ...patch };
   if (typeof window !== "undefined") {
-    window.dispatchEvent(new CustomEvent<OfflineSyncState>(OFFLINE_SYNC_EVENT, { detail: currentSyncState }));
+    window.dispatchEvent(
+      new CustomEvent<OfflineSyncState>(OFFLINE_SYNC_EVENT, { detail: currentSyncState }),
+    );
   }
 }
 
@@ -156,7 +158,12 @@ async function idbDeleteKeys(storeName: string, keys: (string | number)[]): Prom
   }
 }
 
-async function saveStorageBlob(bucket: string, path: string, blob: Blob, contentType?: string): Promise<void> {
+async function saveStorageBlob(
+  bucket: string,
+  path: string,
+  blob: Blob,
+  contentType?: string,
+): Promise<void> {
   try {
     const db = await openOfflineDB();
     const buffer = await blob.arrayBuffer();
@@ -206,7 +213,9 @@ async function getStorageBlobUrl(bucket: string, path: string): Promise<string |
     if (!record?.buffer) return null;
     const existing = blobUrlCache.get(key);
     if (existing) URL.revokeObjectURL(existing);
-    const blob = new Blob([record.buffer], { type: record.contentType || "application/octet-stream" });
+    const blob = new Blob([record.buffer], {
+      type: record.contentType || "application/octet-stream",
+    });
     const url = URL.createObjectURL(blob);
     blobUrlCache.set(key, url);
     return url;
@@ -318,7 +327,11 @@ function splitTopLevelCommas(input: string): string[] {
   return parts.map((p) => p.trim()).filter(Boolean);
 }
 
-function evaluateGroupExpr(row: Record<string, unknown>, group: string, mode: "or" | "and"): boolean {
+function evaluateGroupExpr(
+  row: Record<string, unknown>,
+  group: string,
+  mode: "or" | "and",
+): boolean {
   const inner = group.startsWith("(") && group.endsWith(")") ? group.slice(1, -1) : group;
   const clauses = splitTopLevelCommas(inner);
   const results = clauses.map((clause) => {
@@ -337,10 +350,19 @@ function evaluateGroupExpr(row: Record<string, unknown>, group: string, mode: "o
   return mode === "or" ? results.some(Boolean) : results.every(Boolean);
 }
 
-function filterAndSortRows(rows: Record<string, unknown>[], searchParams: URLSearchParams): Record<string, unknown>[] {
+function filterAndSortRows(
+  rows: Record<string, unknown>[],
+  searchParams: URLSearchParams,
+): Record<string, unknown>[] {
   let result = rows.filter((row) => {
     for (const [key, value] of searchParams.entries()) {
-      if (key === "select" || key === "order" || key === "limit" || key === "offset" || key === "on_conflict") {
+      if (
+        key === "select" ||
+        key === "order" ||
+        key === "limit" ||
+        key === "offset" ||
+        key === "on_conflict"
+      ) {
         continue;
       }
       if (key === "or") {
@@ -512,6 +534,34 @@ export function cacheAuthSession(session: unknown) {
   try {
     if (!session) {
       window.localStorage.removeItem(OFFLINE_AUTH_SESSION_KEY);
+      try {
+        const keysToRemove: string[] = [];
+        for (let i = 0; i < window.localStorage.length; i++) {
+          const k = window.localStorage.key(i);
+          if (k && (k.startsWith("sb-") || k.includes("auth-token") || k.includes("supabase"))) {
+            keysToRemove.push(k);
+          }
+        }
+        for (const k of keysToRemove) {
+          window.localStorage.removeItem(k);
+        }
+      } catch {
+        // ignore
+      }
+      try {
+        const sessionKeys: string[] = [];
+        for (let i = 0; i < window.sessionStorage.length; i++) {
+          const k = window.sessionStorage.key(i);
+          if (k && (k.startsWith("sb-") || k.includes("auth-token") || k.includes("supabase"))) {
+            sessionKeys.push(k);
+          }
+        }
+        for (const k of sessionKeys) {
+          window.sessionStorage.removeItem(k);
+        }
+      } catch {
+        // ignore
+      }
     } else {
       window.localStorage.setItem(OFFLINE_AUTH_SESSION_KEY, JSON.stringify(session));
     }
@@ -558,7 +608,9 @@ export function getCachedAuthSession(): Record<string, unknown> | null {
 }
 
 const nativeFetch: typeof fetch =
-  typeof globalThis.fetch === "function" ? globalThis.fetch.bind(globalThis) : (() => Promise.reject(new Error("fetch unavailable"))) as unknown as typeof fetch;
+  typeof globalThis.fetch === "function"
+    ? globalThis.fetch.bind(globalThis)
+    : ((() => Promise.reject(new Error("fetch unavailable"))) as unknown as typeof fetch);
 
 async function quickFetch(
   input: RequestInfo | URL,
@@ -599,9 +651,13 @@ export async function flushOfflineSyncQueue(): Promise<void> {
         }
         if (item.kind === "storage" && item.storageBucket && item.storagePath) {
           const db = await openOfflineDB();
-          const blobRec = await new Promise<{ buffer: ArrayBuffer; contentType: string } | undefined>((res, rej) => {
+          const blobRec = await new Promise<
+            { buffer: ArrayBuffer; contentType: string } | undefined
+          >((res, rej) => {
             const tx = db.transaction("storage_blobs", "readonly");
-            const req = tx.objectStore("storage_blobs").get(`${item.storageBucket}/${item.storagePath}`);
+            const req = tx
+              .objectStore("storage_blobs")
+              .get(`${item.storageBucket}/${item.storagePath}`);
             req.onsuccess = () => res(req.result);
             req.onerror = () => rej(req.error);
           });
@@ -676,7 +732,7 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
   if (url.pathname.includes("/auth/v1/")) {
     if (navigator.onLine) {
       try {
-        const res = await quickFetch(req.clone(), undefined, 2500);
+        const res = await nativeFetch(input, init);
         if (res.ok && (url.pathname.endsWith("/token") || url.pathname.endsWith("/signup"))) {
           try {
             const cloneData = await res.clone().json();
@@ -691,28 +747,35 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
           cacheAuthSession(null);
         }
         return res;
-      } catch {
-        // Fall through to offline auth fallback
+      } catch (err) {
+        if (navigator.onLine) {
+          throw err;
+        }
       }
     }
 
-    // Offline auth fallback: keep existing session alive so the user stays signed in offline
-    const cached = getCachedAuthSession();
-    if (url.pathname.endsWith("/token") && cached) {
-      return new Response(JSON.stringify(cached), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    }
-    if (url.pathname.endsWith("/user") && cached?.user) {
-      return new Response(JSON.stringify(cached.user), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    }
-    if (url.pathname.endsWith("/logout")) {
-      cacheAuthSession(null);
-      return new Response(JSON.stringify({}), { status: 200, headers: { "Content-Type": "application/json" } });
+    // Offline auth fallback: only when strictly offline
+    if (!navigator.onLine) {
+      const cached = getCachedAuthSession();
+      if (url.pathname.endsWith("/token") && cached) {
+        return new Response(JSON.stringify(cached), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.pathname.endsWith("/user") && cached?.user) {
+        return new Response(JSON.stringify(cached.user), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.pathname.endsWith("/logout")) {
+        cacheAuthSession(null);
+        return new Response(JSON.stringify({}), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
     }
   }
 
@@ -722,7 +785,10 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
     const batchDeleteMatch = /\/storage\/v1\/object\/([^/]+)$/.exec(url.pathname);
     if (batchDeleteMatch && method === "DELETE") {
       const bucket = decodeURIComponent(batchDeleteMatch[1]);
-      const bodyJson = (await req.clone().json().catch(() => ({}))) as { prefixes?: string[] };
+      const bodyJson = (await req
+        .clone()
+        .json()
+        .catch(() => ({}))) as { prefixes?: string[] };
       const prefixes = bodyJson.prefixes ?? [];
       for (const p of prefixes) {
         try {
@@ -762,14 +828,21 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
     const batchSignMatch = /\/storage\/v1\/object\/sign\/([^/]+)$/.exec(url.pathname);
     if (batchSignMatch && method === "POST") {
       const bucket = decodeURIComponent(batchSignMatch[1]);
-      const bodyJson = (await req.clone().json().catch(() => ({}))) as { paths?: string[] };
+      const bodyJson = (await req
+        .clone()
+        .json()
+        .catch(() => ({}))) as { paths?: string[] };
       const paths = bodyJson.paths ?? [];
 
       if (navigator.onLine) {
         try {
           const res = await quickFetch(req.clone(), undefined, 2500);
           if (res.ok) {
-            const list = (await res.clone().json()) as { path: string; signedURL?: string; signedUrl?: string }[];
+            const list = (await res.clone().json()) as {
+              path: string;
+              signedURL?: string;
+              signedUrl?: string;
+            }[];
             const enhanced = await Promise.all(
               list.map(async (item) => {
                 const localUrl = await getStorageBlobUrl(bucket, item.path);
@@ -877,10 +950,13 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
         contentType: targetType ?? "application/octet-stream",
       });
 
-      return new Response(JSON.stringify({ Key: `${bucket}/${objectPath}`, Id: crypto.randomUUID() }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
+      return new Response(
+        JSON.stringify({ Key: `${bucket}/${objectPath}`, Id: crypto.randomUUID() }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
     }
 
     // Downloading a signed storage object while online: cache encrypted blob in IndexedDB for offline viewing
@@ -893,7 +969,12 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
           const res = await quickFetch(req.clone(), undefined, 3000);
           if (res.ok) {
             const clonedBlob = await res.clone().blob();
-            void saveStorageBlob(bucket, objectPath, clonedBlob, res.headers.get("content-type") ?? undefined);
+            void saveStorageBlob(
+              bucket,
+              objectPath,
+              clonedBlob,
+              res.headers.get("content-type") ?? undefined,
+            );
             return res;
           }
         } catch {
@@ -918,23 +999,15 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
       if (method === "GET" || method === "HEAD") {
         if (navigator.onLine) {
           try {
-            const queue = await idbGetAll<SyncQueueItem>("sync_queue");
-            const hasPendingForTable = queue.some((q) => q.table === table);
-            if (hasPendingForTable) {
-              await flushOfflineSyncQueue();
-              const remaining = await idbGetAll<SyncQueueItem>("sync_queue");
-              if (remaining.some((q) => q.table === table)) {
-                const allLocal = await idbGetAll<Record<string, unknown>>(table);
-                const filtered = filterAndSortRows(allLocal, url.searchParams);
-                return buildPostgrestResponse(filtered, method, req.headers, 200);
-              }
-            } else {
-              void flushOfflineSyncQueue();
-            }
+            // Flush sync queue in background without blocking this read
+            void flushOfflineSyncQueue();
 
-            const res = await quickFetch(req.clone(), undefined, 2500);
+            const res = await quickFetch(req.clone(), undefined, 15000);
             if (res.ok && method === "GET") {
-              const data = await res.clone().json().catch(() => null);
+              const data = await res
+                .clone()
+                .json()
+                .catch(() => null);
               if (Array.isArray(data)) {
                 await idbPutMany(table, data as Record<string, unknown>[]);
               } else if (data && typeof data === "object") {
@@ -943,7 +1016,7 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
             }
             if (res.ok) return res;
           } catch {
-            // Fall through to IndexedDB offline query
+            // Fall through to IndexedDB offline query on network failure
           }
         }
 
@@ -955,13 +1028,17 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
       // INSERT / UPSERT
       if (method === "POST") {
         const bodyText = await req.clone().text();
-        const parsed = bodyText ? (JSON.parse(bodyText) as Record<string, unknown> | Record<string, unknown>[]) : [];
+        const parsed = bodyText
+          ? (JSON.parse(bodyText) as Record<string, unknown> | Record<string, unknown>[])
+          : [];
         const rawList = Array.isArray(parsed) ? parsed : [parsed];
         const normalizedRows = rawList.map((r) => withTableDefaults(table, r));
 
         await idbPutMany(table, normalizedRows);
 
-        const forwardBody = JSON.stringify(Array.isArray(parsed) ? normalizedRows : normalizedRows[0]);
+        const forwardBody = JSON.stringify(
+          Array.isArray(parsed) ? normalizedRows : normalizedRows[0],
+        );
         if (navigator.onLine) {
           try {
             const res = await quickFetch(
@@ -971,10 +1048,13 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
                 headers: req.headers,
                 body: forwardBody,
               },
-              2500,
+              8000,
             );
             if (res.ok) {
-              const serverData = await res.clone().json().catch(() => null);
+              const serverData = await res
+                .clone()
+                .json()
+                .catch(() => null);
               if (Array.isArray(serverData)) {
                 await idbPutMany(table, serverData as Record<string, unknown>[]);
               } else if (serverData && typeof serverData === "object") {
@@ -1009,13 +1089,15 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
         const updatedRows = matched.map((row) => ({
           ...row,
           ...patchObj,
-          ...(row.updated_at !== undefined && patchObj.updated_at === undefined ? { updated_at: now } : {}),
+          ...(row.updated_at !== undefined && patchObj.updated_at === undefined
+            ? { updated_at: now }
+            : {}),
         }));
         await idbPutMany(table, updatedRows);
 
         if (navigator.onLine) {
           try {
-            const res = await quickFetch(req.clone(), undefined, 2500);
+            const res = await quickFetch(req.clone(), undefined, 8000);
             if (res.ok) return res;
           } catch {
             // Enqueue below
@@ -1045,7 +1127,7 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
 
         if (navigator.onLine) {
           try {
-            const res = await quickFetch(req.clone(), undefined, 2500);
+            const res = await quickFetch(req.clone(), undefined, 8000);
             if (res.ok) return res;
           } catch {
             // Enqueue below

@@ -1,18 +1,18 @@
-import { createClient, type Session, type SupabaseClient } from '@supabase/supabase-js';
-import type { Database } from './types';
-import { brokeredPreviewStorage } from './previewAuthStorage';
+import { createClient, type Session, type SupabaseClient } from "@supabase/supabase-js";
+import type { Database } from "./types";
+import { brokeredPreviewStorage } from "./previewAuthStorage";
 import {
   cacheAuthSession,
   getCachedAuthSession,
   offlineAwareSupabaseFetch,
-} from '@/lib/offline-supabase';
+} from "@/lib/offline-supabase";
 
 const MISSING_ENV_MESSAGE =
-  'Supabase is not configured yet. Please add VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY (or VITE_SUPABASE_ANON_KEY) in your environment secrets.';
+  "Supabase is not configured yet. Please add VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY (or VITE_SUPABASE_ANON_KEY) in your environment secrets.";
 
-if (typeof window !== 'undefined') {
+if (typeof window !== "undefined") {
   try {
-    window.localStorage.removeItem('papervault:mock-auth-user');
+    window.localStorage.removeItem("papervault:mock-auth-user");
   } catch {
     // ignore storage errors
   }
@@ -66,7 +66,7 @@ function createUnconfiguredSupabaseClient(): SupabaseClient<Database> {
         return { data: { user: null, session: null }, error: new Error(MISSING_ENV_MESSAGE) };
       },
       async signInWithOAuth() {
-        return { data: { provider: 'google', url: null }, error: new Error(MISSING_ENV_MESSAGE) };
+        return { data: { provider: "google", url: null }, error: new Error(MISSING_ENV_MESSAGE) };
       },
       async signInWithIdToken() {
         return { data: { user: null, session: null }, error: new Error(MISSING_ENV_MESSAGE) };
@@ -136,7 +136,7 @@ function createSupabaseClient(): SupabaseClient<Database> {
     },
   });
 
-  if (typeof window !== 'undefined') {
+  if (typeof window !== "undefined") {
     const origGetSession = client.auth.getSession.bind(client.auth);
     client.auth.getSession = async () => {
       try {
@@ -145,12 +145,22 @@ function createSupabaseClient(): SupabaseClient<Database> {
           cacheAuthSession(res.data.session);
           return res;
         }
-      } catch {
-        // Fall through to cached offline session
+        // When online, if Supabase has no active session, the user is signed out
+        if (typeof navigator !== "undefined" && navigator.onLine) {
+          return { data: { session: null }, error: null };
+        }
+      } catch (err) {
+        if (typeof navigator !== "undefined" && navigator.onLine) {
+          return { data: { session: null }, error: err as any };
+        }
       }
-      const cached = getCachedAuthSession() as Session | null;
-      if (cached?.user) {
-        return { data: { session: cached }, error: null };
+
+      // ONLY when truly offline (!navigator.onLine), allow the cached offline session
+      if (typeof navigator !== "undefined" && !navigator.onLine) {
+        const cached = getCachedAuthSession() as Session | null;
+        if (cached?.user) {
+          return { data: { session: cached }, error: null };
+        }
       }
       return { data: { session: null }, error: null };
     };
@@ -159,7 +169,8 @@ function createSupabaseClient(): SupabaseClient<Database> {
     client.auth.signOut = async (options) => {
       cacheAuthSession(null);
       try {
-        return await origSignOut(options);
+        const res = await origSignOut(options);
+        return res;
       } catch {
         return { error: null };
       }
@@ -177,4 +188,3 @@ export const supabase = new Proxy({} as ReturnType<typeof createSupabaseClient>,
     return Reflect.get(_supabase, prop, receiver);
   },
 });
-

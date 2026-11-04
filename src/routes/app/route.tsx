@@ -1,8 +1,25 @@
-import { createFileRoute, Outlet, redirect, Link, useRouter, useRouterState } from "@tanstack/react-router";
-import { useEffect } from "react";
+import {
+  createFileRoute,
+  Outlet,
+  redirect,
+  Link,
+  useRouter,
+  useRouterState,
+} from "@tanstack/react-router";
+import { useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
-import { BookOpen, Image as ImageIcon, PenLine, Sparkles, LogOut, Home, ChevronDown, Lock, StickyNote } from "lucide-react";
+import {
+  BookOpen,
+  Image as ImageIcon,
+  PenLine,
+  Sparkles,
+  LogOut,
+  Home,
+  ChevronDown,
+  Lock,
+  StickyNote,
+} from "lucide-react";
 import { VaultProvider, useVault } from "@/lib/vault";
 import { VaultGate } from "@/components/VaultGate";
 import {
@@ -43,7 +60,7 @@ function AuthedLayout() {
   const handleSignOut = async () => {
     qc.clear();
     await supabase.auth.signOut();
-    router.navigate({ to: "/auth", replace: true });
+    window.location.href = "/auth";
   };
 
   return (
@@ -52,15 +69,26 @@ function AuthedLayout() {
         <header className="fixed top-4 left-4 right-4 z-50 rounded-2xl border border-border/60 bg-card/80 shadow-lg backdrop-blur sm:left-6 sm:right-6 lg:left-1/2 lg:right-auto lg:w-full lg:max-w-6xl lg:-translate-x-1/2">
           <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-3 sm:px-6 sm:py-4">
             <Link to="/app" className="flex min-w-0 items-center gap-2">
-              <span className="truncate font-serif text-xl text-primary sm:text-2xl">The PaperVault</span>
+              <span className="truncate font-serif text-xl text-primary sm:text-2xl">
+                The PaperVault
+              </span>
             </Link>
 
             <nav className="hidden items-center gap-1 text-sm lg:flex">
               {NAV.map((n) => (
-                <NavLink key={n.to} to={n.to} exact={n.exact} icon={<n.icon className="size-4" />} label={n.label} />
+                <NavLink
+                  key={n.to}
+                  to={n.to}
+                  exact={n.exact}
+                  icon={<n.icon className="size-4" />}
+                  label={n.label}
+                />
               ))}
               <VaultLockButton />
-              <button onClick={handleSignOut} className="ml-2 flex items-center gap-1.5 rounded-md px-3 py-2 text-muted-foreground hover:text-primary">
+              <button
+                onClick={handleSignOut}
+                className="ml-2 flex items-center gap-1.5 rounded-md px-3 py-2 text-muted-foreground hover:text-primary"
+              >
                 <LogOut className="size-4" /> Sign out
               </button>
             </nav>
@@ -103,19 +131,65 @@ function AuthedLayout() {
 
 function VaultOfflineWarmer({ userId }: { userId: string }) {
   const { status, key } = useVault();
+  const hasWarmed = useRef(false);
+
   useEffect(() => {
     if (status !== "unlocked" || !key || typeof window === "undefined" || !navigator.onLine) return;
-    // Quietly pre-fetch tables so IndexedDB contains existing rows for full offline access
-    void supabase.from("notes").select("*").eq("user_id", userId);
-    void supabase.from("note_folders").select("id,name,parent_id").eq("user_id", userId);
-    void supabase
-      .from("diary_entries")
-      .select("*")
-      .eq("user_id", userId)
-      .order("entry_date", { ascending: false })
-      .order("created_at", { ascending: false });
-    void supabase.from("diary_folders").select("id,name,parent_id").eq("user_id", userId);
+    if (hasWarmed.current) return;
+    hasWarmed.current = true;
+
+    // Use idle time to smoothly cache past entries, notes, folders, and images into IndexedDB
+    const scheduleWarm = (fn: () => Promise<unknown>, delayMs: number) => {
+      return window.setTimeout(() => {
+        if (typeof window !== "undefined" && "requestIdleCallback" in window) {
+          window.requestIdleCallback(() => void fn(), { timeout: 4000 });
+        } else {
+          void fn();
+        }
+      }, delayMs);
+    };
+
+    const timers: number[] = [];
+
+    // 1. Fetch note folders & up to 500 notes
+    timers.push(
+      scheduleWarm(async () => {
+        await supabase.from("note_folders").select("id,name,parent_id").eq("user_id", userId);
+        await supabase.from("notes").select("*").eq("user_id", userId).limit(500);
+      }, 600),
+    );
+
+    // 2. Fetch diary folders & past diary entries (up to 500)
+    timers.push(
+      scheduleWarm(async () => {
+        await supabase.from("diary_folders").select("id,name,parent_id").eq("user_id", userId);
+        await supabase
+          .from("diary_entries")
+          .select("*")
+          .eq("user_id", userId)
+          .order("entry_date", { ascending: false })
+          .order("created_at", { ascending: false })
+          .limit(500);
+      }, 1600),
+    );
+
+    // 3. Fetch gallery images (up to 200)
+    timers.push(
+      scheduleWarm(async () => {
+        await supabase
+          .from("gallery_images")
+          .select("*")
+          .eq("user_id", userId)
+          .order("created_at", { ascending: false })
+          .limit(200);
+      }, 3000),
+    );
+
+    return () => {
+      for (const t of timers) window.clearTimeout(t);
+    };
   }, [status, key, userId]);
+
   return null;
 }
 
@@ -123,7 +197,11 @@ function VaultLockButton() {
   const { status, lock } = useVault();
   if (status !== "unlocked") return null;
   return (
-    <button onClick={lock} title="Lock" className="ml-1 flex items-center gap-1.5 rounded-md px-3 py-2 text-muted-foreground hover:text-primary">
+    <button
+      onClick={lock}
+      title="Lock"
+      className="ml-1 flex items-center gap-1.5 rounded-md px-3 py-2 text-muted-foreground hover:text-primary"
+    >
       <Lock className="size-4" /> Lock
     </button>
   );
@@ -139,14 +217,25 @@ function VaultLockMenuItem() {
   );
 }
 
-function NavLink({ to, icon, label, exact }: { to: string; icon: React.ReactNode; label: string; exact?: boolean }) {
+function NavLink({
+  to,
+  icon,
+  label,
+  exact,
+}: {
+  to: string;
+  icon: React.ReactNode;
+  label: string;
+  exact?: boolean;
+}) {
   return (
     <Link
       to={to}
       activeOptions={{ exact: !!exact }}
       className="flex items-center gap-1.5 rounded-md px-3 py-2 text-foreground/70 transition-colors hover:bg-secondary hover:text-primary [&.active]:bg-secondary [&.active]:text-primary"
     >
-      {icon}{label}
+      {icon}
+      {label}
     </Link>
   );
 }
