@@ -235,7 +235,10 @@ export function clearOfflineBlobUrls(): void {
   blobUrlCache.clear();
 }
 
-async function getStorageBlobUrl(bucket: string, path: string): Promise<string | null> {
+export async function getStorageBlobRecord(
+  bucket: string,
+  path: string,
+): Promise<{ key: string; buffer: ArrayBuffer; contentType: string } | null> {
   const key = `${bucket}/${path}`;
   try {
     const db = await openOfflineDB();
@@ -247,18 +250,119 @@ async function getStorageBlobUrl(bucket: string, path: string): Promise<string |
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => reject(req.error);
     });
-    if (!record?.buffer) return null;
-    const existing = blobUrlCache.get(key);
-    if (existing) URL.revokeObjectURL(existing);
-    const blob = new Blob([record.buffer], {
-      type: record.contentType || "application/octet-stream",
-    });
-    const url = URL.createObjectURL(blob);
-    blobUrlCache.set(key, url);
-    return url;
+    return record?.buffer ? record : null;
   } catch {
     return null;
   }
+}
+
+export async function getStorageBlobUrl(bucket: string, path: string): Promise<string | null> {
+  const key = `${bucket}/${path}`;
+  const isMutable = path.endsWith("vault-trackers.bin");
+  if (!isMutable && blobUrlCache.has(key)) {
+    return blobUrlCache.get(key)!;
+  }
+  const record = await getStorageBlobRecord(bucket, path);
+  if (!record?.buffer) return null;
+  if (isMutable && blobUrlCache.has(key)) {
+    try {
+      URL.revokeObjectURL(blobUrlCache.get(key)!);
+    } catch {
+      // ignore
+    }
+  }
+  const blob = new Blob([record.buffer], {
+    type: record.contentType || "application/octet-stream",
+  });
+  const url = URL.createObjectURL(blob);
+  blobUrlCache.set(key, url);
+  return url;
+}
+
+const activeBlobDownloads = new Map<string, Promise<ArrayBuffer | null>>();
+
+export async function cacheRemoteStorageUrl(
+  bucket: string,
+  path: string,
+  signedUrl: string,
+): Promise<ArrayBuffer | null> {
+  if (!signedUrl || signedUrl.startsWith("blob:")) return null;
+  const key = `${bucket}/${path}`;
+  const inFlight = activeBlobDownloads.get(key);
+  if (inFlight) return inFlight;
+
+  const task = (async () => {
+    try {
+      const res = await nativeFetch(signedUrl);
+      if (!res.ok) return null;
+      const blob = await res.blob();
+      await saveStorageBlob(
+        bucket,
+        path,
+        blob,
+        res.headers.get("content-type") || "application/octet-stream",
+      );
+      return await blob.arrayBuffer();
+    } catch {
+      return null;
+    } finally {
+      activeBlobDownloads.delete(key);
+    }
+  })();
+
+  activeBlobDownloads.set(key, task);
+  return task;
+}
+
+export async function fetchStorageBytesWithOfflineCache(
+  bucket: string,
+  path: string,
+  signedUrl?: string,
+): Promise<ArrayBuffer | null> {
+  const isMutable = path.endsWith("vault-trackers.bin");
+  if (!isMutable) {
+    const cached = await getStorageBlobRecord(bucket, path);
+    if (cached?.buffer) {
+      return cached.buffer;
+    }
+  }
+
+  if (signedUrl) {
+    if (signedUrl.startsWith("blob:")) {
+      try {
+        const res = await nativeFetch(signedUrl);
+        if (res.ok) return await res.arrayBuffer();
+      } catch {
+        // fallback below
+      }
+    } else if (typeof navigator === "undefined" || navigator.onLine) {
+      const downloaded = await cacheRemoteStorageUrl(bucket, path, signedUrl);
+      if (downloaded) return downloaded;
+    }
+  }
+
+  const fallback = await getStorageBlobRecord(bucket, path);
+  return fallback?.buffer ?? null;
+}
+
+export async function fetchStorageUrlWithOfflineCache(
+  bucket: string,
+  path: string,
+  signedUrl?: string,
+): Promise<string | null> {
+  const localUrl = await getStorageBlobUrl(bucket, path);
+  if (localUrl) return localUrl;
+
+  if (signedUrl && (typeof navigator === "undefined" || navigator.onLine)) {
+    const downloaded = await cacheRemoteStorageUrl(bucket, path, signedUrl);
+    if (downloaded) {
+      const freshLocal = await getStorageBlobUrl(bucket, path);
+      if (freshLocal) return freshLocal;
+    }
+    return signedUrl;
+  }
+
+  return signedUrl || null;
 }
 
 async function enqueueSyncItem(item: Omit<SyncQueueItem, "queueId" | "createdAt">): Promise<void> {

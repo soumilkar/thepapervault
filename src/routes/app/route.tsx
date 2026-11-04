@@ -229,7 +229,18 @@ function VaultOfflineWarmer({ userId }: { userId: string }) {
       scheduleWarm(async () => {
         await supabase.from("profiles").select("id, display_name").eq("id", userId).maybeSingle();
         await supabase.from("note_folders").select("id,name,parent_id").eq("user_id", userId);
-        await supabase.from("notes").select("*").eq("user_id", userId).limit(500);
+        const { data: noteRows } = await supabase
+          .from("notes")
+          .select("*")
+          .eq("user_id", userId)
+          .limit(500);
+        const mediaPaths = (noteRows ?? [])
+          .map((n) => (n as { image_url?: string | null }).image_url)
+          .filter((p): p is string => typeof p === "string" && p.length > 0)
+          .slice(0, 60);
+        if (mediaPaths.length > 0) {
+          await supabase.storage.from("media").createSignedUrls(mediaPaths, 60 * 60);
+        }
       }, 600),
     );
 
@@ -247,15 +258,22 @@ function VaultOfflineWarmer({ userId }: { userId: string }) {
       }, 1600),
     );
 
-    // 3. Fetch gallery images (up to 200)
+    // 3. Fetch gallery images (up to 200) & pre-cache binary blobs into IndexedDB
     timers.push(
       scheduleWarm(async () => {
-        await supabase
+        const { data: galleryRows } = await supabase
           .from("gallery_images")
           .select("*")
           .eq("user_id", userId)
           .order("created_at", { ascending: false })
           .limit(200);
+        const galleryPaths = (galleryRows ?? [])
+          .map((g) => (g as { storage_path?: string | null }).storage_path)
+          .filter((p): p is string => typeof p === "string" && p.length > 0)
+          .slice(0, 60);
+        if (galleryPaths.length > 0) {
+          await supabase.storage.from("gallery").createSignedUrls(galleryPaths, 60 * 60);
+        }
       }, 3000),
     );
 

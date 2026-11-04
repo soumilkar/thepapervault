@@ -8,7 +8,9 @@ import type { Database } from "./types";
 import { brokeredPreviewStorage } from "./previewAuthStorage";
 import {
   cacheAuthSession,
+  cacheRemoteStorageUrl,
   getCachedAuthSession,
+  getStorageBlobUrl,
   offlineAwareSupabaseFetch,
   registerAuthTokenGetter,
   triggerAutoSync,
@@ -213,6 +215,90 @@ function createSupabaseClient(): SupabaseClient<Database> {
         cacheAuthSession(null);
       }
     });
+
+    const origStorageFrom = client.storage.from.bind(client.storage);
+    client.storage.from = (bucket: string) => {
+      const api = origStorageFrom(bucket);
+      const origCreateSignedUrl = api.createSignedUrl.bind(api);
+      const origCreateSignedUrls = api.createSignedUrls.bind(api);
+
+      api.createSignedUrl = async (path, expiresIn, options) => {
+        const isMutable = path.endsWith("vault-trackers.bin");
+        if (!isMutable) {
+          const cachedUrl = await getStorageBlobUrl(bucket, path);
+          if (cachedUrl) {
+            return { data: { signedUrl: cachedUrl }, error: null };
+          }
+        }
+        if (typeof navigator !== "undefined" && !navigator.onLine) {
+          const offlineUrl = await getStorageBlobUrl(bucket, path);
+          return { data: { signedUrl: offlineUrl ?? "" }, error: null };
+        }
+        try {
+          const res = await origCreateSignedUrl(path, expiresIn, options);
+          if (res.data?.signedUrl && !res.data.signedUrl.startsWith("blob:")) {
+            void cacheRemoteStorageUrl(bucket, path, res.data.signedUrl);
+            return res;
+          }
+        } catch {
+          // fallback below
+        }
+        const fallbackUrl = await getStorageBlobUrl(bucket, path);
+        return { data: { signedUrl: fallbackUrl ?? "" }, error: null };
+      };
+
+      api.createSignedUrls = async (paths, expiresIn, options) => {
+        if (typeof navigator !== "undefined" && !navigator.onLine) {
+          const offlineItems = await Promise.all(
+            paths.map(async (p) => {
+              const localUrl = await getStorageBlobUrl(bucket, p);
+              return {
+                error: null,
+                path: p,
+                signedURL: localUrl ?? "",
+                signedUrl: localUrl ?? "",
+              };
+            }),
+          );
+          return { data: offlineItems, error: null };
+        }
+        try {
+          const res = await origCreateSignedUrls(paths, expiresIn, options);
+          if (res.data) {
+            const enhanced = await Promise.all(
+              res.data.map(async (item) => {
+                if (!item.path) return item;
+                const localUrl = await getStorageBlobUrl(bucket, item.path);
+                if (localUrl) {
+                  return { ...item, signedURL: localUrl, signedUrl: localUrl };
+                }
+                if (item.signedUrl && !item.signedUrl.startsWith("blob:")) {
+                  void cacheRemoteStorageUrl(bucket, item.path, item.signedUrl);
+                }
+                return item;
+              }),
+            );
+            return { data: enhanced, error: null };
+          }
+        } catch {
+          // fallback below
+        }
+        const fallbackItems = await Promise.all(
+          paths.map(async (p) => {
+            const localUrl = await getStorageBlobUrl(bucket, p);
+            return {
+              error: null,
+              path: p,
+              signedURL: localUrl ?? "",
+              signedUrl: localUrl ?? "",
+            };
+          }),
+        );
+        return { data: fallbackItems, error: null };
+      };
+
+      return api;
+    };
   }
 
   return client;

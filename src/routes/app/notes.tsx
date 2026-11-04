@@ -24,6 +24,10 @@ import { AppSelect } from "@/components/AppSelect";
 import { useBrowserDraft } from "@/lib/browser-drafts";
 import { useVault } from "@/lib/vault";
 import {
+  fetchStorageBytesWithOfflineCache,
+  fetchStorageUrlWithOfflineCache,
+} from "@/lib/offline-supabase";
+import {
   decryptBytes,
   decryptField,
   decryptText,
@@ -1301,15 +1305,17 @@ function NoteImage({
     let cancelled = false;
     let objectUrl: string | null = null;
     (async () => {
-      const { data } = await supabase.storage.from(MEDIA_BUCKET).createSignedUrl(path, 60 * 60);
-      if (!data?.signedUrl || cancelled) return;
-      if (!iv) {
-        setSrc(data.signedUrl);
-        return;
-      }
-      if (!cryptoKey) return;
       try {
-        const bytes = await (await fetch(data.signedUrl)).arrayBuffer();
+        const { data } = await supabase.storage.from(MEDIA_BUCKET).createSignedUrl(path, 60 * 60);
+        if (cancelled) return;
+        if (!iv) {
+          const url = await fetchStorageUrlWithOfflineCache(MEDIA_BUCKET, path, data?.signedUrl);
+          if (!cancelled && url) setSrc(url);
+          return;
+        }
+        if (!cryptoKey) return;
+        const bytes = await fetchStorageBytesWithOfflineCache(MEDIA_BUCKET, path, data?.signedUrl);
+        if (!bytes || cancelled) return;
         const pt = await decryptBytes(cryptoKey, bytes, iv);
         objectUrl = URL.createObjectURL(new Blob([pt], { type: mime || "image/jpeg" }));
         if (!cancelled) setSrc(objectUrl);

@@ -25,6 +25,10 @@ import { useVault } from "@/lib/vault";
 import { decryptBytes, decryptField, decryptText, encryptBlob, encryptText } from "@/lib/crypto";
 import { useBrowserDraft } from "@/lib/browser-drafts";
 import { folderOptions, folderWithDescendants, type FolderRow } from "@/lib/folders";
+import {
+  fetchStorageBytesWithOfflineCache,
+  fetchStorageUrlWithOfflineCache,
+} from "@/lib/offline-supabase";
 
 export const Route = createFileRoute("/app/gallery")({
   component: GalleryPage,
@@ -735,6 +739,8 @@ export function GalleryPage() {
                   className="relative aspect-square cursor-pointer overflow-hidden bg-muted"
                 >
                   <DecryptedGalleryPhoto
+                    bucket={img.bucket}
+                    storagePath={img.storage_path}
                     signedUrl={img.signedUrl}
                     iv={img.iv}
                     mime={img.mime}
@@ -819,9 +825,7 @@ export function GalleryPage() {
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
-                            if (window.confirm("Delete this photo from your vault?")) {
-                              remove.mutate(img);
-                            }
+                            remove.mutate(img);
                           }}
                           className="rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
                           title="Delete photo"
@@ -858,6 +862,8 @@ export function GalleryPage() {
           >
             <div className="relative flex max-h-[75vh] items-center justify-center overflow-hidden bg-black/90">
               <DecryptedGalleryPhoto
+                bucket={lightboxItem.bucket}
+                storagePath={lightboxItem.storage_path}
                 signedUrl={lightboxItem.signedUrl}
                 iv={lightboxItem.iv}
                 mime={lightboxItem.mime}
@@ -887,11 +893,7 @@ export function GalleryPage() {
 
               <div className="flex items-center gap-2">
                 <button
-                  onClick={() => {
-                    if (window.confirm("Delete this photo from your vault?")) {
-                      remove.mutate(lightboxItem);
-                    }
-                  }}
+                  onClick={() => remove.mutate(lightboxItem)}
                   className="flex items-center gap-1 rounded-md px-3 py-1.5 text-xs text-destructive hover:bg-destructive/10"
                 >
                   <Trash2 className="size-3.5" /> Delete
@@ -912,6 +914,8 @@ export function GalleryPage() {
 }
 
 const DecryptedGalleryPhoto = memo(function DecryptedGalleryPhoto({
+  bucket,
+  storagePath,
   signedUrl,
   iv,
   mime,
@@ -919,6 +923,8 @@ const DecryptedGalleryPhoto = memo(function DecryptedGalleryPhoto({
   cryptoKey,
   fullscreen,
 }: {
+  bucket: "gallery" | "media";
+  storagePath: string;
   signedUrl: string;
   iv: string | null;
   mime: string | null;
@@ -929,19 +935,18 @@ const DecryptedGalleryPhoto = memo(function DecryptedGalleryPhoto({
   const [src, setSrc] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!signedUrl) return;
-    if (!iv) {
-      setSrc(signedUrl);
-      return;
-    }
-    if (!cryptoKey) return;
-
     let cancelled = false;
     let objectUrl: string | null = null;
     (async () => {
       try {
-        const res = await fetch(signedUrl);
-        const ct = await res.arrayBuffer();
+        if (!iv) {
+          const url = await fetchStorageUrlWithOfflineCache(bucket, storagePath, signedUrl);
+          if (!cancelled && url) setSrc(url);
+          return;
+        }
+        if (!cryptoKey) return;
+        const ct = await fetchStorageBytesWithOfflineCache(bucket, storagePath, signedUrl);
+        if (!ct || cancelled) return;
         const pt = await decryptBytes(cryptoKey, ct, iv);
         objectUrl = URL.createObjectURL(new Blob([pt], { type: mime || "image/jpeg" }));
         if (!cancelled) setSrc(objectUrl);
@@ -954,7 +959,7 @@ const DecryptedGalleryPhoto = memo(function DecryptedGalleryPhoto({
       cancelled = true;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [signedUrl, iv, mime, cryptoKey]);
+  }, [bucket, storagePath, signedUrl, iv, mime, cryptoKey]);
 
   if (!src) return <div className="size-full animate-pulse bg-secondary/50" />;
   return (

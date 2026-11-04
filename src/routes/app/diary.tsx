@@ -24,6 +24,10 @@ import { previewText } from "@/lib/rich-text";
 import { downloadTextFile } from "@/lib/download";
 import { useVault } from "@/lib/vault";
 import {
+  fetchStorageBytesWithOfflineCache,
+  fetchStorageUrlWithOfflineCache,
+} from "@/lib/offline-supabase";
+import {
   decryptBytes,
   decryptField,
   decryptText,
@@ -315,6 +319,7 @@ function DiaryPage() {
     qc.invalidateQueries({ queryKey: ["diary-metrics"] });
     qc.invalidateQueries({ queryKey: ["public-diary-feed"] });
     qc.invalidateQueries({ queryKey: ["dashboard-counts"] });
+    qc.invalidateQueries({ queryKey: ["gallery"] });
   }, [qc]);
 
   const create = useMutation({
@@ -955,27 +960,29 @@ function DiaryImage({
     let cancelled = false;
     let objectUrl: string | null = null;
     (async () => {
-      const { data: signed } = await supabase.storage
-        .from("gallery")
-        .createSignedUrl(path, 60 * 60);
-      if (!signed?.signedUrl || cancelled) return;
-      if (!encrypted || !cryptoKey) {
-        setSrc(signed.signedUrl);
-        return;
-      }
-      const { data: meta } = await supabase
-        .from("gallery_images")
-        .select("iv,mime" as never)
-        .eq("storage_path", path)
-        .maybeSingle();
-      const row = meta as unknown as { iv: string | null; mime: string | null } | null;
-      if (!row?.iv) {
-        if (!cancelled) setSrc(signed.signedUrl);
-        return;
-      }
       try {
-        const res = await fetch(signed.signedUrl);
-        const ct = await res.arrayBuffer();
+        const { data: signed } = await supabase.storage
+          .from("gallery")
+          .createSignedUrl(path, 60 * 60);
+        if (cancelled) return;
+        if (!encrypted || !cryptoKey) {
+          const url = await fetchStorageUrlWithOfflineCache("gallery", path, signed?.signedUrl);
+          if (!cancelled && url) setSrc(url);
+          return;
+        }
+        const { data: meta } = await supabase
+          .from("gallery_images")
+          .select("iv,mime" as never)
+          .eq("storage_path", path)
+          .maybeSingle();
+        const row = meta as unknown as { iv: string | null; mime: string | null } | null;
+        if (!row?.iv) {
+          const url = await fetchStorageUrlWithOfflineCache("gallery", path, signed?.signedUrl);
+          if (!cancelled && url) setSrc(url);
+          return;
+        }
+        const ct = await fetchStorageBytesWithOfflineCache("gallery", path, signed?.signedUrl);
+        if (!ct || cancelled) return;
         const pt = await decryptBytes(cryptoKey, ct, row.iv);
         objectUrl = URL.createObjectURL(new Blob([pt], { type: row.mime || "image/jpeg" }));
         if (!cancelled) setSrc(objectUrl);

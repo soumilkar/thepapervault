@@ -213,10 +213,18 @@ export const Route = createFileRoute("/api/storage-proxy")({
               });
             }
 
-            return new Response(JSON.stringify({ signedURL: data?.signedUrl, signedUrl: data?.signedUrl }), {
-              status: 200,
-              headers: { "Content-Type": "application/json" },
-            });
+            const rawSignedUrl = data?.signedUrl ?? "";
+            const marker = "/storage/v1";
+            const idx = rawSignedUrl.indexOf(marker);
+            const relativeSignedURL = idx !== -1 ? rawSignedUrl.slice(idx + marker.length) : rawSignedUrl;
+
+            return new Response(
+              JSON.stringify({ signedURL: relativeSignedURL, signedUrl: rawSignedUrl }),
+              {
+                status: 200,
+                headers: { "Content-Type": "application/json" },
+              },
+            );
           }
 
           // 4. Batch Remove Objects
