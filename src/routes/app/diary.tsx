@@ -15,6 +15,7 @@ import { MusicSearch, MusicPlayer, type SelectedTrack } from "@/components/Music
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { AppSelect } from "@/components/AppSelect";
 import { useBrowserDraft } from "@/lib/browser-drafts";
+import { type DiaryMetricRow } from "@/lib/diary-metrics";
 
 const NONE = "__none__";
 
@@ -273,7 +274,9 @@ function DiaryPage() {
     rows = [...rows].sort((a, b) => {
       if (sort === "title") return (a.title || "").localeCompare(b.title || "");
       const cmp = new Date(a.entry_date).getTime() - new Date(b.entry_date).getTime();
-      return sort === "newest" ? -cmp : cmp;
+      if (cmp !== 0) return sort === "newest" ? -cmp : cmp;
+      const cTime = new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+      return sort === "newest" ? -cTime : cTime;
     });
     return rows;
   }, [entries.data, folders.data, filterFolder, sort, query]);
@@ -286,7 +289,7 @@ function DiaryPage() {
   }, [qc]);
 
   const create = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (): Promise<Entry> => {
       const musicPatch = {
         music_track_id: music?.music_track_id ?? null,
         music_track_name: music?.music_track_name ?? null,
@@ -295,19 +298,35 @@ function DiaryPage() {
         music_artwork_url: music?.music_artwork_url ?? null,
       };
       if (isPublic) {
-        const { error } = await supabase.from("diary_entries").insert({
-          user_id: user.id,
-          title: title || null,
+        const { data: inserted, error } = await supabase
+          .from("diary_entries")
+          .insert({
+            user_id: user.id,
+            title: title || null,
+            content,
+            mood: mood || null,
+            is_public: true,
+            folder_id: folderId,
+            visibility: "public_anon",
+            word_count: countWords(content),
+            ...musicPatch,
+          } as never)
+          .select("id,created_at,entry_date")
+          .single();
+        if (error) throw error;
+        const row = inserted as { id: string; created_at: string; entry_date: string };
+        return {
+          id: row.id,
+          title: title || "",
           content,
-          mood: mood || null,
+          mood: mood || "",
+          entry_date: row.entry_date || new Date().toISOString().slice(0, 10),
+          image_path: null,
           is_public: true,
           folder_id: folderId,
-          visibility: "public_anon",
-          word_count: countWords(content),
-          ...musicPatch,
-        } as never);
-        if (error) throw error;
-        return;
+          music,
+          created_at: row.created_at || new Date().toISOString(),
+        };
       }
       if (!key) throw new Error("Vault is locked");
       let imagePath: string | null = null;
@@ -345,22 +364,50 @@ function DiaryPage() {
         mu: music,
       };
       const { ct, iv } = await encryptText(key, JSON.stringify(payload));
-      const { error } = await supabase.from("diary_entries").insert({
-        user_id: user.id,
-        title: null,
-        content: ct,
-        mood: null,
+      const { data: inserted, error } = await supabase
+        .from("diary_entries")
+        .insert({
+          user_id: user.id,
+          title: null,
+          content: ct,
+          mood: null,
+          image_path: imagePath,
+          visibility: "private",
+          is_public: false,
+          folder_id: folderId,
+          iv,
+          word_count: 0,
+          ...NULL_MUSIC_COLUMNS,
+        } as never)
+        .select("id,created_at,entry_date")
+        .single();
+      if (error) throw error;
+      const row = inserted as { id: string; created_at: string; entry_date: string };
+      return {
+        id: row.id,
+        title: title || "",
+        content,
+        mood: mood || "",
+        entry_date: row.entry_date || new Date().toISOString().slice(0, 10),
         image_path: imagePath,
-        visibility: "private",
         is_public: false,
         folder_id: folderId,
-        iv,
-        word_count: 0,
-        ...NULL_MUSIC_COLUMNS,
-      } as never);
-      if (error) throw error;
+        music,
+        created_at: row.created_at || new Date().toISOString(),
+      };
     },
-    onSuccess: () => {
+    onSuccess: (createdEntry) => {
+      qc.setQueryData<Entry[]>(["diary", user.id], (old) => [
+        createdEntry,
+        ...(old ?? []).filter((e) => e.id !== createdEntry.id),
+      ]);
+      qc.setQueryData<DiaryMetricRow[]>(["diary-metrics", user.id], (old) => [
+        ...(old ?? []),
+        {
+          entry_date: createdEntry.entry_date,
+          word_count: countWords(createdEntry.content),
+        },
+      ]);
       clearDraft();
       setPhoto(null);
       toast.success("Entry saved");
@@ -379,7 +426,7 @@ function DiaryPage() {
       folder_id: string | null;
       music: SelectedTrack | null;
       wasPrivate: boolean;
-    }) => {
+    }): Promise<{ id: string; title: string; content: string; mood: string; folder_id: string | null; music: SelectedTrack | null }> => {
       const musicPatch = {
         music_track_id: vars.music?.music_track_id ?? null,
         music_track_name: vars.music?.music_track_name ?? null,
@@ -424,8 +471,19 @@ function DiaryPage() {
           .eq("id", vars.id);
         if (error) throw error;
       }
+      return {
+        id: vars.id,
+        title: vars.title,
+        content: vars.content,
+        mood: vars.mood,
+        folder_id: vars.folder_id,
+        music: vars.music,
+      };
     },
-    onSuccess: () => {
+    onSuccess: (updated) => {
+      qc.setQueryData<Entry[]>(["diary", user.id], (old) =>
+        (old ?? []).map((e) => (e.id === updated.id ? { ...e, ...updated } : e)),
+      );
       toast.success("Entry updated");
       invalidateDiaryQueries();
     },
@@ -436,24 +494,41 @@ function DiaryPage() {
     mutationFn: async (id: string) => {
       const { error } = await supabase.from("diary_entries").delete().eq("id", id);
       if (error) throw error;
+      return id;
     },
-    onSuccess: () => {
+    onSuccess: (deletedId) => {
+      qc.setQueryData<Entry[]>(["diary", user.id], (old) =>
+        (old ?? []).filter((e) => e.id !== deletedId),
+      );
+      toast.success("Entry deleted");
       invalidateDiaryQueries();
     },
+    onError: (e: Error) => toast.error(e.message),
   });
 
   const createFolder = useMutation({
-    mutationFn: async (name: string) => {
+    mutationFn: async (name: string): Promise<FolderRow> => {
       if (!key) throw new Error("Vault is locked");
       const encName = await encryptField(key, name);
-      const { error } = await supabase.from("diary_folders").insert({
-        user_id: user.id,
-        name: encName,
-        parent_id: newFolderParent === NONE ? null : newFolderParent,
-      } as never);
+      const parentId = newFolderParent === NONE ? null : newFolderParent;
+      const { data: inserted, error } = await supabase
+        .from("diary_folders")
+        .insert({
+          user_id: user.id,
+          name: encName,
+          parent_id: parentId,
+        } as never)
+        .select("id")
+        .single();
       if (error) throw error;
+      const row = inserted as { id: string };
+      return { id: row.id, name, parent_id: parentId };
     },
-    onSuccess: () => {
+    onSuccess: (newF) => {
+      qc.setQueryData<FolderRow[]>(["diary-folders", user.id], (old) => [
+        ...(old ?? []),
+        newF,
+      ]);
       setNewFolder("");
       qc.invalidateQueries({ queryKey: ["diary-folders"] });
     },
@@ -468,8 +543,12 @@ function DiaryPage() {
         .eq("id", targetFolderId)
         .eq("user_id", user.id);
       if (error) throw error;
+      return targetFolderId;
     },
-    onSuccess: () => {
+    onSuccess: (deletedFolderId) => {
+      qc.setQueryData<FolderRow[]>(["diary-folders", user.id], (old) =>
+        (old ?? []).filter((f) => f.id !== deletedFolderId),
+      );
       setFilterFolder("all");
       toast.success("Folder deleted");
       qc.invalidateQueries({ queryKey: ["diary-folders"] });

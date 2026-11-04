@@ -17,27 +17,72 @@ const IDLE_LOCK_MS = 15 * 60 * 1000; // 15 minutes of inactivity auto-locks the 
 
 const VaultContext = createContext<VaultContextValue | null>(null);
 
+const VAULT_META_PREFIX = "papervault:vault_meta:";
+
+function getCachedVaultMeta(userId: string): { kdf_salt: string; verifier: string; verifier_salt: string } | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(`${VAULT_META_PREFIX}${userId}`);
+    if (raw) return JSON.parse(raw);
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+function cacheVaultMeta(userId: string, meta: { kdf_salt: string; verifier: string; verifier_salt: string }) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(`${VAULT_META_PREFIX}${userId}`, JSON.stringify(meta));
+  } catch {
+    // ignore
+  }
+}
+
 export function VaultProvider({ userId, children }: { userId: string; children: ReactNode }) {
   const qc = useQueryClient();
-  const [status, setStatus] = useState<VaultStatus>("loading");
+  const initialCached = getCachedVaultMeta(userId);
+  const [status, setStatus] = useState<VaultStatus>(initialCached ? "locked" : "loading");
   const [key, setKey] = useState<CryptoKey | null>(null);
-  const [kdfSalt, setKdfSalt] = useState<string | null>(null);
-  const [verifier, setVerifier] = useState<string | null>(null);
-  const [verifierSalt, setVerifierSalt] = useState<string | null>(null);
+  const [kdfSalt, setKdfSalt] = useState<string | null>(initialCached?.kdf_salt ?? null);
+  const [verifier, setVerifier] = useState<string | null>(initialCached?.verifier ?? null);
+  const [verifierSalt, setVerifierSalt] = useState<string | null>(initialCached?.verifier_salt ?? null);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const { data } = await supabase.from("vault_keys").select("*").eq("user_id", userId).maybeSingle();
-      if (cancelled) return;
-      if (!data) {
-        setStatus("needs_setup");
-        return;
+      // If we already have cached meta, status is locked and user can unlock offline immediately
+      const cached = getCachedVaultMeta(userId);
+      if (cached) {
+        setKdfSalt(cached.kdf_salt);
+        setVerifier(cached.verifier);
+        setVerifierSalt(cached.verifier_salt);
+        setStatus("locked");
       }
-      setKdfSalt(data.kdf_salt);
-      setVerifier(data.verifier);
-      setVerifierSalt(data.verifier_salt);
-      setStatus("locked");
+
+      try {
+        const { data } = await supabase.from("vault_keys").select("*").eq("user_id", userId).maybeSingle();
+        if (cancelled) return;
+        if (data) {
+          setKdfSalt(data.kdf_salt);
+          setVerifier(data.verifier);
+          setVerifierSalt(data.verifier_salt);
+          cacheVaultMeta(userId, {
+            kdf_salt: data.kdf_salt,
+            verifier: data.verifier,
+            verifier_salt: data.verifier_salt,
+          });
+          setStatus("locked");
+          return;
+        }
+        if (!cached) {
+          setStatus("needs_setup");
+        }
+      } catch {
+        if (!cached && !cancelled) {
+          setStatus("needs_setup");
+        }
+      }
     })();
     return () => {
       cancelled = true;
@@ -50,6 +95,11 @@ export function VaultProvider({ userId, children }: { userId: string; children: 
     const newVerifierSalt = toB64(randomBytes(16));
     const newVerifier = await deriveVerifier(passphrase, newVerifierSalt);
     const dataKey = await deriveDataKey(passphrase, newKdfSalt);
+    cacheVaultMeta(userId, {
+      kdf_salt: newKdfSalt,
+      verifier: newVerifier,
+      verifier_salt: newVerifierSalt,
+    });
     const { error } = await supabase.from("vault_keys").insert({
       user_id: userId,
       kdf_salt: newKdfSalt,

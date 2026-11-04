@@ -503,17 +503,28 @@ function NotesPage() {
   });
 
   const createFolder = useMutation({
-    mutationFn: async (name: string) => {
+    mutationFn: async (name: string): Promise<FolderRow> => {
       if (!key) throw new Error("Vault is locked");
       const encName = await encryptField(key, name);
-      const { error } = await supabase.from("note_folders").insert({
-        user_id: user.id,
-        name: encName,
-        parent_id: newFolderParent === NONE ? null : newFolderParent,
-      } as never);
+      const parentId = newFolderParent === NONE ? null : newFolderParent;
+      const { data: inserted, error } = await supabase
+        .from("note_folders")
+        .insert({
+          user_id: user.id,
+          name: encName,
+          parent_id: parentId,
+        } as never)
+        .select("id")
+        .single();
       if (error) throw error;
+      const row = inserted as { id: string };
+      return { id: row.id, name, parent_id: parentId };
     },
-    onSuccess: () => {
+    onSuccess: (newF) => {
+      qc.setQueryData<FolderRow[]>(["note-folders", user.id], (old) => [
+        ...(old ?? []),
+        newF,
+      ]);
       setNewFolder("");
       qc.invalidateQueries({ queryKey: ["note-folders"] });
     },
@@ -528,8 +539,12 @@ function NotesPage() {
         .eq("id", targetFolderId)
         .eq("user_id", user.id);
       if (error) throw error;
+      return targetFolderId;
     },
-    onSuccess: () => {
+    onSuccess: (deletedFolderId) => {
+      qc.setQueryData<FolderRow[]>(["note-folders", user.id], (old) =>
+        (old ?? []).filter((f) => f.id !== deletedFolderId),
+      );
       setFilterFolder("all");
       toast.success("Folder deleted");
       qc.invalidateQueries({ queryKey: ["note-folders"] });

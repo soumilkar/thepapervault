@@ -1,4 +1,5 @@
 import { createFileRoute, Outlet, redirect, Link, useRouter, useRouterState } from "@tanstack/react-router";
+import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { BookOpen, Image as ImageIcon, PenLine, Sparkles, LogOut, Home, ChevronDown, Lock, StickyNote } from "lucide-react";
@@ -90,6 +91,7 @@ function AuthedLayout() {
           </div>
         </header>
         <main className="mx-auto max-w-6xl px-4 pb-10 pt-28 sm:px-6 sm:pt-32">
+          <VaultOfflineWarmer userId={user.id} />
           <VaultGate userId={user.id}>
             <Outlet />
           </VaultGate>
@@ -97,6 +99,24 @@ function AuthedLayout() {
       </div>
     </VaultProvider>
   );
+}
+
+function VaultOfflineWarmer({ userId }: { userId: string }) {
+  const { status, key } = useVault();
+  useEffect(() => {
+    if (status !== "unlocked" || !key || typeof window === "undefined" || !navigator.onLine) return;
+    // Quietly pre-fetch tables so IndexedDB contains existing rows for full offline access
+    void supabase.from("notes").select("*").eq("user_id", userId);
+    void supabase.from("note_folders").select("id,name,parent_id").eq("user_id", userId);
+    void supabase
+      .from("diary_entries")
+      .select("*")
+      .eq("user_id", userId)
+      .order("entry_date", { ascending: false })
+      .order("created_at", { ascending: false });
+    void supabase.from("diary_folders").select("id,name,parent_id").eq("user_id", userId);
+  }, [status, key, userId]);
+  return null;
 }
 
 function VaultLockButton() {

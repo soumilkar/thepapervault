@@ -253,11 +253,13 @@ function matchesCondition(row: Record<string, unknown>, col: string, expr: strin
   }
   if (expr.startsWith("eq.")) {
     const target = parseScalar(expr.slice(3));
-    return String(val ?? "") === String(target ?? "");
+    if (target === null) return val === null || val === undefined;
+    return String(val ?? "") === String(target);
   }
   if (expr.startsWith("neq.")) {
     const target = parseScalar(expr.slice(4));
-    return String(val ?? "") !== String(target ?? "");
+    if (target === null) return val !== null && val !== undefined;
+    return String(val ?? "") !== String(target);
   }
   if (expr.startsWith("is.")) {
     const target = parseScalar(expr.slice(3));
@@ -343,15 +345,20 @@ function filterAndSortRows(rows: Record<string, unknown>[], searchParams: URLSea
     return true;
   });
 
-  const orderParam = searchParams.get("order");
-  if (orderParam) {
-    const specs = orderParam.split(",").map((s) => {
-      const parts = s.trim().split(".");
-      return {
-        col: parts[0],
-        asc: parts[1] !== "desc",
-      };
-    });
+  const orderParams = searchParams.getAll("order");
+  if (orderParams.length > 0) {
+    const specs: { col: string; asc: boolean }[] = [];
+    for (const op of orderParams) {
+      for (const s of op.split(",")) {
+        const parts = s.trim().split(".");
+        if (parts[0]) {
+          specs.push({
+            col: parts[0],
+            asc: parts[1] !== "desc",
+          });
+        }
+      }
+    }
     result = [...result].sort((a, b) => {
       for (const { col, asc } of specs) {
         const va = a[col];
@@ -445,11 +452,14 @@ function buildPostgrestResponse(
   status = 200,
 ): Response {
   const accept = (headers.get("accept") ?? "").toLowerCase();
+  const prefer = (headers.get("prefer") ?? "").toLowerCase();
   const isSingleObject = accept.includes("application/vnd.pgrst.object+json");
   const countRange = rows.length > 0 ? `0-${rows.length - 1}/${rows.length}` : "*/0";
 
   const resHeaders = new Headers({
-    "Content-Type": "application/json; charset=utf-8",
+    "Content-Type": isSingleObject
+      ? "application/vnd.pgrst.object+json; charset=utf-8"
+      : "application/json; charset=utf-8",
     "Content-Range": countRange,
   });
 
@@ -457,9 +467,30 @@ function buildPostgrestResponse(
     return new Response(null, { status: 200, headers: resHeaders });
   }
 
+  // PostgREST return=minimal returns 201/200/204 with empty body
+  if (
+    prefer.includes("return=minimal") &&
+    (method === "POST" || method === "PATCH" || method === "DELETE")
+  ) {
+    return new Response(null, { status, headers: resHeaders });
+  }
+
   if (isSingleObject) {
     const item = rows[0] ?? null;
-    return new Response(JSON.stringify(item), { status: 200, headers: resHeaders });
+    if (!item && status === 200) {
+      return new Response(
+        JSON.stringify({
+          code: "PGRST116",
+          details: "The result contains 0 rows",
+          message: "JSON object requested, multiple (or no) rows returned",
+        }),
+        {
+          status: 406,
+          headers: resHeaders,
+        },
+      );
+    }
+    return new Response(JSON.stringify(item), { status, headers: resHeaders });
   }
 
   return new Response(JSON.stringify(rows), { status, headers: resHeaders });
@@ -518,6 +549,23 @@ export function getCachedAuthSession(): Record<string, unknown> | null {
 const nativeFetch: typeof fetch =
   typeof globalThis.fetch === "function" ? globalThis.fetch.bind(globalThis) : (() => Promise.reject(new Error("fetch unavailable"))) as unknown as typeof fetch;
 
+async function quickFetch(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+  timeoutMs = 2500,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await nativeFetch(input, {
+      ...init,
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function flushOfflineSyncQueue(): Promise<void> {
   if (typeof window === "undefined" || syncInProgress || !navigator.onLine) return;
   const queue = await idbGetAll<SyncQueueItem>("sync_queue");
@@ -528,10 +576,16 @@ export async function flushOfflineSyncQueue(): Promise<void> {
   notifySyncState({ isSyncing: true });
 
   try {
+    const session = getCachedAuthSession();
+    const token = (session as { access_token?: string })?.access_token;
     const sorted = [...queue].sort((a, b) => a.createdAt - b.createdAt);
     for (const item of sorted) {
       if (!navigator.onLine) break;
       try {
+        const headers = { ...item.headers };
+        if (token) {
+          headers["authorization"] = `Bearer ${token}`;
+        }
         if (item.kind === "storage" && item.storageBucket && item.storagePath) {
           const db = await openOfflineDB();
           const blobRec = await new Promise<{ buffer: ArrayBuffer; contentType: string } | undefined>((res, rej) => {
@@ -541,25 +595,37 @@ export async function flushOfflineSyncQueue(): Promise<void> {
             req.onerror = () => rej(req.error);
           });
           if (blobRec?.buffer) {
-            const res = await nativeFetch(item.url, {
-              method: item.method,
-              headers: item.headers,
-              body: new Blob([blobRec.buffer], { type: blobRec.contentType }),
-            });
-            if (res.ok || (res.status >= 400 && res.status < 500)) {
+            const res = await quickFetch(
+              item.url,
+              {
+                method: item.method,
+                headers,
+                body: new Blob([blobRec.buffer], { type: blobRec.contentType }),
+              },
+              5000,
+            );
+            if (res.ok || res.status === 409) {
               await removeSyncItem(item.queueId);
+            } else if (res.status === 401 || res.status === 403) {
+              break;
             }
           } else {
             await removeSyncItem(item.queueId);
           }
         } else {
-          const res = await nativeFetch(item.url, {
-            method: item.method,
-            headers: item.headers,
-            body: item.body ?? undefined,
-          });
-          if (res.ok || (res.status >= 400 && res.status < 500)) {
+          const res = await quickFetch(
+            item.url,
+            {
+              method: item.method,
+              headers,
+              body: item.body ?? undefined,
+            },
+            5000,
+          );
+          if (res.ok || res.status === 409 || (item.method === "DELETE" && res.status === 404)) {
             await removeSyncItem(item.queueId);
+          } else if (res.status === 401 || res.status === 403) {
+            break;
           }
         }
       } catch {
@@ -599,7 +665,7 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
   if (url.pathname.includes("/auth/v1/")) {
     if (navigator.onLine) {
       try {
-        const res = await nativeFetch(req.clone());
+        const res = await quickFetch(req.clone(), undefined, 2500);
         if (res.ok && (url.pathname.endsWith("/token") || url.pathname.endsWith("/signup"))) {
           try {
             const cloneData = await res.clone().json();
@@ -641,6 +707,46 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
 
   // 2. Storage Endpoints (/storage/v1/*)
   if (url.pathname.includes("/storage/v1/")) {
+    // Storage object remove: DELETE /storage/v1/object/<bucket> (with JSON body { prefixes: string[] })
+    const batchDeleteMatch = /\/storage\/v1\/object\/([^/]+)$/.exec(url.pathname);
+    if (batchDeleteMatch && method === "DELETE") {
+      const bucket = decodeURIComponent(batchDeleteMatch[1]);
+      const bodyJson = (await req.clone().json().catch(() => ({}))) as { prefixes?: string[] };
+      const prefixes = bodyJson.prefixes ?? [];
+      for (const p of prefixes) {
+        try {
+          const db = await openOfflineDB();
+          const tx = db.transaction("storage_blobs", "readwrite");
+          tx.objectStore("storage_blobs").delete(`${bucket}/${p}`);
+        } catch {
+          // ignore
+        }
+      }
+
+      if (navigator.onLine) {
+        try {
+          const res = await quickFetch(req.clone(), undefined, 2500);
+          if (res.ok) return res;
+        } catch {
+          // Queue below
+        }
+      }
+
+      await enqueueSyncItem({
+        kind: "storage",
+        url: req.url,
+        method,
+        headers: extractHeadersRecord(req.headers),
+        body: JSON.stringify(bodyJson),
+        storageBucket: bucket,
+      });
+
+      return new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
     // Batch signed URLs: POST /storage/v1/object/sign/<bucket>
     const batchSignMatch = /\/storage\/v1\/object\/sign\/([^/]+)$/.exec(url.pathname);
     if (batchSignMatch && method === "POST") {
@@ -650,7 +756,7 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
 
       if (navigator.onLine) {
         try {
-          const res = await nativeFetch(req.clone());
+          const res = await quickFetch(req.clone(), undefined, 2500);
           if (res.ok) {
             const list = (await res.clone().json()) as { path: string; signedURL?: string; signedUrl?: string }[];
             const enhanced = await Promise.all(
@@ -698,7 +804,7 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
 
       if (navigator.onLine) {
         try {
-          const res = await nativeFetch(req.clone());
+          const res = await quickFetch(req.clone(), undefined, 2500);
           if (res.ok) return res;
         } catch {
           // Fall through to local blob URL
@@ -718,12 +824,31 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
     if (objectMatch && (method === "POST" || method === "PUT")) {
       const bucket = decodeURIComponent(objectMatch[1]);
       const objectPath = decodeURIComponent(objectMatch[2]);
-      const blob = await req.clone().blob();
-      await saveStorageBlob(bucket, objectPath, blob, req.headers.get("content-type") ?? undefined);
+
+      // If body is FormData (as sent by @supabase/storage-js for Blobs), extract actual binary file
+      let targetBlob: Blob = await req.clone().blob();
+      let targetType = req.headers.get("content-type") ?? undefined;
+      const contentType = (req.headers.get("content-type") ?? "").toLowerCase();
+      if (contentType.includes("multipart/form-data")) {
+        try {
+          const fd = await req.clone().formData();
+          for (const [, val] of fd.entries()) {
+            if (val instanceof Blob) {
+              targetBlob = val;
+              targetType = val.type || "application/octet-stream";
+              break;
+            }
+          }
+        } catch {
+          // fallback to raw body
+        }
+      }
+
+      await saveStorageBlob(bucket, objectPath, targetBlob, targetType);
 
       if (navigator.onLine) {
         try {
-          const res = await nativeFetch(req.clone());
+          const res = await quickFetch(req.clone(), undefined, 4000);
           if (res.ok) return res;
         } catch {
           // Queue below
@@ -738,7 +863,7 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
         body: null,
         storageBucket: bucket,
         storagePath: objectPath,
-        contentType: req.headers.get("content-type") ?? "application/octet-stream",
+        contentType: targetType ?? "application/octet-stream",
       });
 
       return new Response(JSON.stringify({ Key: `${bucket}/${objectPath}`, Id: crypto.randomUUID() }), {
@@ -754,7 +879,7 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
       const objectPath = decodeURIComponent(signedDownloadMatch[2]);
       if (navigator.onLine) {
         try {
-          const res = await nativeFetch(req.clone());
+          const res = await quickFetch(req.clone(), undefined, 3000);
           if (res.ok) {
             const clonedBlob = await res.clone().blob();
             void saveStorageBlob(bucket, objectPath, clonedBlob, res.headers.get("content-type") ?? undefined);
@@ -782,9 +907,21 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
       if (method === "GET" || method === "HEAD") {
         if (navigator.onLine) {
           try {
-            // Flush any queued offline mutations before reading remote state
-            await flushOfflineSyncQueue();
-            const res = await nativeFetch(req.clone());
+            const queue = await idbGetAll<SyncQueueItem>("sync_queue");
+            const hasPendingForTable = queue.some((q) => q.table === table);
+            if (hasPendingForTable) {
+              await flushOfflineSyncQueue();
+              const remaining = await idbGetAll<SyncQueueItem>("sync_queue");
+              if (remaining.some((q) => q.table === table)) {
+                const allLocal = await idbGetAll<Record<string, unknown>>(table);
+                const filtered = filterAndSortRows(allLocal, url.searchParams);
+                return buildPostgrestResponse(filtered, method, req.headers, 200);
+              }
+            } else {
+              void flushOfflineSyncQueue();
+            }
+
+            const res = await quickFetch(req.clone(), undefined, 2500);
             if (res.ok && method === "GET") {
               const data = await res.clone().json().catch(() => null);
               if (Array.isArray(data)) {
@@ -816,11 +953,15 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
         const forwardBody = JSON.stringify(Array.isArray(parsed) ? normalizedRows : normalizedRows[0]);
         if (navigator.onLine) {
           try {
-            const res = await nativeFetch(req.url, {
-              method,
-              headers: req.headers,
-              body: forwardBody,
-            });
+            const res = await quickFetch(
+              req.url,
+              {
+                method,
+                headers: req.headers,
+                body: forwardBody,
+              },
+              2500,
+            );
             if (res.ok) {
               const serverData = await res.clone().json().catch(() => null);
               if (Array.isArray(serverData)) {
@@ -863,7 +1004,7 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
 
         if (navigator.onLine) {
           try {
-            const res = await nativeFetch(req.clone());
+            const res = await quickFetch(req.clone(), undefined, 2500);
             if (res.ok) return res;
           } catch {
             // Enqueue below
@@ -893,7 +1034,7 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
 
         if (navigator.onLine) {
           try {
-            const res = await nativeFetch(req.clone());
+            const res = await quickFetch(req.clone(), undefined, 2500);
             if (res.ok) return res;
           } catch {
             // Enqueue below
