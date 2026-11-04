@@ -1,6 +1,11 @@
-import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import { createClient, type Session, type SupabaseClient } from '@supabase/supabase-js';
 import type { Database } from './types';
 import { brokeredPreviewStorage } from './previewAuthStorage';
+import {
+  cacheAuthSession,
+  getCachedAuthSession,
+  offlineAwareSupabaseFetch,
+} from '@/lib/offline-supabase';
 
 const MISSING_ENV_MESSAGE =
   'Supabase is not configured yet. Please add VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY (or VITE_SUPABASE_ANON_KEY) in your environment secrets.';
@@ -120,13 +125,48 @@ function createSupabaseClient(): SupabaseClient<Database> {
     return createUnconfiguredSupabaseClient();
   }
 
-  return createClient<Database>(SUPABASE_URL, SUPABASE_KEY, {
+  const client = createClient<Database>(SUPABASE_URL, SUPABASE_KEY, {
     auth: {
       storage: brokeredPreviewStorage(),
       persistSession: true,
       autoRefreshToken: true,
     },
+    global: {
+      fetch: offlineAwareSupabaseFetch,
+    },
   });
+
+  if (typeof window !== 'undefined') {
+    const origGetSession = client.auth.getSession.bind(client.auth);
+    client.auth.getSession = async () => {
+      try {
+        const res = await origGetSession();
+        if (res.data?.session) {
+          cacheAuthSession(res.data.session);
+          return res;
+        }
+      } catch {
+        // Fall through to cached offline session
+      }
+      const cached = getCachedAuthSession() as Session | null;
+      if (cached?.user) {
+        return { data: { session: cached }, error: null };
+      }
+      return { data: { session: null }, error: null };
+    };
+
+    const origSignOut = client.auth.signOut.bind(client.auth);
+    client.auth.signOut = async (options) => {
+      cacheAuthSession(null);
+      try {
+        return await origSignOut(options);
+      } catch {
+        return { error: null };
+      }
+    };
+  }
+
+  return client;
 }
 
 let _supabase: ReturnType<typeof createSupabaseClient> | undefined;
@@ -137,3 +177,4 @@ export const supabase = new Proxy({} as ReturnType<typeof createSupabaseClient>,
     return Reflect.get(_supabase, prop, receiver);
   },
 });
+

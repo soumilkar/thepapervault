@@ -10,6 +10,10 @@ export const getRouter = () => {
         gcTime: 1000 * 60 * 15,
         refetchOnWindowFocus: false,
         retry: 1,
+        networkMode: "always",
+      },
+      mutations: {
+        networkMode: "always",
       },
     },
   });

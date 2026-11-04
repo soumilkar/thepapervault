@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f6ede0" />
+      <stop offset="100%" stop-color="#e8d5bd" />
+    </linearGradient>
+    <linearGradient id="cover" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#6f371e" />
+      <stop offset="100%" stop-color="#4e2412" />
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)" />
+  <!-- Journal book -->
+  <rect x="124" y="88" width="264" height="336" rx="28" fill="url(#cover)" />
+  <!-- Spine detail -->
+  <rect x="124" y="88" width="38" height="336" rx="16" fill="#3b1a0c" />
+  <!-- Pages edge -->
+  <rect x="164" y="104" width="208" height="304" rx="14" fill="#fbf6ee" />
+  <!-- Bookmark ribbon -->
+  <path d="M308 104h28v116l-14-12-14 12V104z" fill="#b45a2a" />
+  <!-- Ruled lines -->
+  <line x1="194" y1="176" x2="340" y2="176" stroke="#d5c1a8" stroke-width="8" stroke-linecap="round" />
+  <line x1="194" y1="216" x2="340" y2="216" stroke="#d5c1a8" stroke-width="8" stroke-linecap="round" />
+  <line x1="194" y1="256" x2="296" y2="256" stroke="#d5c1a8" stroke-width="8" stroke-linecap="round" />
+  <!-- Keyhole emblem -->
+  <circle cx="268" cy="328" r="20" fill="#6f371e" />
+  <path d="M260 338h16l4 28h-24l4-28z" fill="#6f371e" />
+</svg>
