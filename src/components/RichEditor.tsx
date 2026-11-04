@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type KeyboardEvent, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ClipboardEvent,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 import { Bold, Italic, Quote, List, Link2, ImagePlus, X } from "lucide-react";
 import { isImageUrl } from "@/lib/rich-text";
 
@@ -180,7 +188,9 @@ export function htmlToMarkdown(root: HTMLElement): string {
     if (tag === "BLOCKQUOTE") {
       const childBlocks = Array.from(el.childNodes);
       const hasNestedBlocks = childBlocks.some(
-        (c) => c.nodeType === Node.ELEMENT_NODE && ["P", "DIV"].includes((c as HTMLElement).tagName.toUpperCase()),
+        (c) =>
+          c.nodeType === Node.ELEMENT_NODE &&
+          ["P", "DIV"].includes((c as HTMLElement).tagName.toUpperCase()),
       );
       if (hasNestedBlocks) {
         for (const c of childBlocks) {
@@ -213,9 +223,11 @@ export function htmlToMarkdown(root: HTMLElement): string {
     }
     if (tag === "P" || tag === "DIV") {
       // Check if div/p wraps block elements
-      const hasBlockChild = Array.from(el.children).some((c) =>
-        ["H1", "H2", "H3", "BLOCKQUOTE", "UL", "OL", "P", "DIV"].includes(c.tagName.toUpperCase()) ||
-        c.hasAttribute("data-md-image"),
+      const hasBlockChild = Array.from(el.children).some(
+        (c) =>
+          ["H1", "H2", "H3", "BLOCKQUOTE", "UL", "OL", "P", "DIV"].includes(
+            c.tagName.toUpperCase(),
+          ) || c.hasAttribute("data-md-image"),
       );
       if (hasBlockChild) {
         Array.from(el.childNodes).forEach(processBlock);
@@ -399,7 +411,10 @@ export function RichEditor({
         const sel = window.getSelection();
         let node: Node | null = sel?.anchorNode ?? null;
         while (node && node !== el) {
-          if (node.nodeType === Node.ELEMENT_NODE && (node as HTMLElement).tagName.toUpperCase() === "BLOCKQUOTE") {
+          if (
+            node.nodeType === Node.ELEMENT_NODE &&
+            (node as HTMLElement).tagName.toUpperCase() === "BLOCKQUOTE"
+          ) {
             inQuote = true;
             break;
           }
@@ -449,7 +464,12 @@ export function RichEditor({
     // Exit H2 or BLOCKQUOTE cleanly on Enter into a fresh paragraph
     if (e.key === "Enter" && !e.shiftKey) {
       const blockTag = getClosestBlockTag(el);
-      if (blockTag === "H2" || blockTag === "H1" || blockTag === "H3" || blockTag === "BLOCKQUOTE") {
+      if (
+        blockTag === "H2" ||
+        blockTag === "H1" ||
+        blockTag === "H3" ||
+        blockTag === "BLOCKQUOTE"
+      ) {
         e.preventDefault();
         document.execCommand("insertParagraph", false);
         document.execCommand("formatBlock", false, "p");
@@ -653,7 +673,9 @@ export function RichEditor({
           {isEmpty && !activeFormats.list && !activeFormats.quote && (
             <div
               className={`pointer-events-none absolute left-0 top-0 select-none text-muted-foreground/50 ${
-                activeFormats.h2 ? "mt-4 font-serif text-2xl leading-tight" : "text-base leading-relaxed"
+                activeFormats.h2
+                  ? "mt-4 font-serif text-2xl leading-tight"
+                  : "text-base leading-relaxed"
               }`}
             >
               {placeholder}

@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Music, Search, X, Play, Pause } from "lucide-react";
 
-
 export type SelectedTrack = {
   music_track_id: string;
   music_track_name: string;
@@ -19,8 +18,12 @@ type Result = {
 };
 
 export function MusicSearch({
-  selected, onChange,
-}: { selected: SelectedTrack | null; onChange: (t: SelectedTrack | null) => void }) {
+  selected,
+  onChange,
+}: {
+  selected: SelectedTrack | null;
+  onChange: (t: SelectedTrack | null) => void;
+}) {
   const [q, setQ] = useState("");
   const [results, setResults] = useState<Result[]>([]);
   const [loading, setLoading] = useState(false);
@@ -29,15 +32,23 @@ export function MusicSearch({
 
   useEffect(() => {
     if (debounce.current) window.clearTimeout(debounce.current);
-    if (!q.trim()) { setResults([]); return; }
+    if (!q.trim()) {
+      setResults([]);
+      return;
+    }
     debounce.current = window.setTimeout(async () => {
       setLoading(true);
       try {
-        const res = await fetch(`https://itunes.apple.com/search?media=music&entity=song&limit=8&term=${encodeURIComponent(q)}`);
+        const res = await fetch(
+          `https://itunes.apple.com/search?media=music&entity=song&limit=8&term=${encodeURIComponent(q)}`,
+        );
         const json = await res.json();
         setResults(json.results ?? []);
-      } catch { setResults([]); }
-      finally { setLoading(false); }
+      } catch {
+        setResults([]);
+      } finally {
+        setLoading(false);
+      }
     }, 350);
   }, [q]);
 
@@ -51,7 +62,12 @@ export function MusicSearch({
           <p className="truncate text-sm font-medium">{selected.music_track_name}</p>
           <p className="truncate text-xs text-muted-foreground">{selected.music_artist}</p>
         </div>
-        <button type="button" onClick={() => onChange(null)} aria-label="Remove music" className="text-muted-foreground hover:text-destructive">
+        <button
+          type="button"
+          onClick={() => onChange(null)}
+          aria-label="Remove music"
+          className="text-muted-foreground hover:text-destructive"
+        >
           <X className="size-4" />
         </button>
       </div>
@@ -60,7 +76,11 @@ export function MusicSearch({
 
   return (
     <div className="rounded-md border border-dashed border-border p-3">
-      <button type="button" onClick={() => setOpen(!open)} className="flex items-center gap-2 text-sm text-accent hover:text-primary">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="flex items-center gap-2 text-sm text-accent hover:text-primary"
+      >
         <Music className="size-4" /> {open ? "Hide music search" : "Add a song (optional)"}
       </button>
       {open && (
@@ -68,7 +88,8 @@ export function MusicSearch({
           <div className="flex items-center gap-2 rounded-md border border-input bg-card px-2">
             <Search className="size-4 text-muted-foreground" />
             <input
-              value={q} onChange={(e) => setQ(e.target.value)}
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
               placeholder="Search songs (e.g. Bon Iver, Skinny Love)"
               className="w-full bg-transparent py-2 text-sm outline-none"
             />
@@ -87,7 +108,9 @@ export function MusicSearch({
                       music_preview_url: r.previewUrl,
                       music_artwork_url: r.artworkUrl100,
                     });
-                    setOpen(false); setQ(""); setResults([]);
+                    setOpen(false);
+                    setQ("");
+                    setResults([]);
                   }}
                   className="flex w-full items-center gap-3 rounded-md p-2 text-left hover:bg-secondary"
                 >
@@ -100,15 +123,25 @@ export function MusicSearch({
               </li>
             ))}
           </ul>
-          <p className="text-xs text-muted-foreground">Powered by iTunes Search — 30-second previews.</p>
+          <p className="text-xs text-muted-foreground">
+            Powered by iTunes Search — 30-second previews.
+          </p>
         </div>
       )}
     </div>
   );
 }
 
-export function MusicPlayer({ track }: {
-  track: { music_track_name: string | null; music_artist: string | null; music_preview_url: string | null; music_artwork_url: string | null } }) {
+export function MusicPlayer({
+  track,
+}: {
+  track: {
+    music_track_name: string | null;
+    music_artist: string | null;
+    music_preview_url: string | null;
+    music_artwork_url: string | null;
+  };
+}) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [playing, setPlaying] = useState(false);
 
@@ -125,8 +158,14 @@ export function MusicPlayer({ track }: {
   const toggle = () => {
     const a = audioRef.current;
     if (!a) return;
-    if (playing) { a.pause(); setPlaying(false); }
-    else { a.play().then(() => setPlaying(true)).catch(() => setPlaying(false)); }
+    if (playing) {
+      a.pause();
+      setPlaying(false);
+    } else {
+      a.play()
+        .then(() => setPlaying(true))
+        .catch(() => setPlaying(false));
+    }
   };
 
   return (
@@ -151,4 +190,3 @@ export function MusicPlayer({ track }: {
     </div>
   );
 }
-

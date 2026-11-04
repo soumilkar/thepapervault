@@ -27,7 +27,10 @@ export function folderWithDescendants(folders: FolderRow[], id: string) {
   while (grew) {
     grew = false;
     for (const f of folders) {
-      if (f.parent_id && ids.has(f.parent_id) && !ids.has(f.id)) { ids.add(f.id); grew = true; }
+      if (f.parent_id && ids.has(f.parent_id) && !ids.has(f.id)) {
+        ids.add(f.id);
+        grew = true;
+      }
     }
   }
   return ids;

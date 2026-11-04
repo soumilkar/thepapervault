@@ -32,13 +32,10 @@ export function randomBytes(n: number): Uint8Array {
 }
 
 async function importPassphrase(passphrase: string): Promise<CryptoKey> {
-  return crypto.subtle.importKey(
-    "raw",
-    buf(enc.encode(passphrase)),
-    "PBKDF2",
-    false,
-    ["deriveBits", "deriveKey"],
-  );
+  return crypto.subtle.importKey("raw", buf(enc.encode(passphrase)), "PBKDF2", false, [
+    "deriveBits",
+    "deriveKey",
+  ]);
 }
 
 export async function deriveDataKey(passphrase: string, saltB64: string): Promise<CryptoKey> {
@@ -73,7 +70,10 @@ export function timingSafeEqualStr(a: string, b: string): boolean {
   return diff === 0;
 }
 
-export async function encryptText(key: CryptoKey, plaintext: string): Promise<{ ct: string; iv: string }> {
+export async function encryptText(
+  key: CryptoKey,
+  plaintext: string,
+): Promise<{ ct: string; iv: string }> {
   const iv = randomBytes(12);
   const ct = await crypto.subtle.encrypt(
     { name: "AES-GCM", iv: buf(iv), tagLength: 128 },
@@ -124,10 +124,22 @@ export async function decryptField(
 export async function encryptBlob(key: CryptoKey, blob: Blob): Promise<{ blob: Blob; iv: string }> {
   const iv = randomBytes(12);
   const buffer = await blob.arrayBuffer();
-  const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv: buf(iv), tagLength: 128 }, key, buffer);
+  const ct = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv: buf(iv), tagLength: 128 },
+    key,
+    buffer,
+  );
   return { blob: new Blob([ct], { type: "application/octet-stream" }), iv: toB64(iv) };
 }
 
-export async function decryptBytes(key: CryptoKey, bytes: ArrayBuffer, ivB64: string): Promise<ArrayBuffer> {
-  return crypto.subtle.decrypt({ name: "AES-GCM", iv: buf(fromB64(ivB64)), tagLength: 128 }, key, bytes);
+export async function decryptBytes(
+  key: CryptoKey,
+  bytes: ArrayBuffer,
+  ivB64: string,
+): Promise<ArrayBuffer> {
+  return crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: buf(fromB64(ivB64)), tagLength: 128 },
+    key,
+    bytes,
+  );
 }

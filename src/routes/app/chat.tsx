@@ -5,11 +5,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { useVault } from "@/lib/vault";
 import { decryptText, encryptText } from "@/lib/crypto";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
 export const Route = createFileRoute("/app/chat")({
   component: ChatLayout,
@@ -76,7 +72,9 @@ function ChatLayout() {
 
   useEffect(() => {
     void refresh();
-    const h = () => { void refresh(); };
+    const h = () => {
+      void refresh();
+    };
     window.addEventListener(CHAT_SESSIONS_UPDATED, h);
     return () => window.removeEventListener(CHAT_SESSIONS_UPDATED, h);
   }, [refresh]);
@@ -102,7 +100,10 @@ function ChatLayout() {
       toast.error("Could not start a new chat");
       return;
     }
-    const next = [{ id: data.id, title: defaultTitle, last_message_at: data.last_message_at }, ...sessions];
+    const next = [
+      { id: data.id, title: defaultTitle, last_message_at: data.last_message_at },
+      ...sessions,
+    ];
     const excess = next.slice(MAX_SESSIONS).map((s) => s.id);
     if (excess.length > 0) {
       void supabase.from("chat_sessions").delete().in("id", excess);
@@ -205,7 +206,9 @@ function ChatLayout() {
             <Sparkles className="size-6 shrink-0 text-accent sm:size-7" />
             <span className="truncate">Your companion</span>
           </h1>
-          <p className="mt-1 text-xs uppercase tracking-wide text-muted-foreground">end-to-end encrypted</p>
+          <p className="mt-1 text-xs uppercase tracking-wide text-muted-foreground">
+            end-to-end encrypted
+          </p>
         </div>
       </div>
 

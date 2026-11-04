@@ -1,5 +1,6 @@
 // Turns plain writing into markdown that keeps line breaks and shows pasted image links inline.
-const IMAGE_URL = /^(https?:\/\/[^\s<>()]+?\.(?:png|jpe?g|gif|webp|avif|svg|bmp)(?:\?[^\s<>()]*)?)$/i;
+const IMAGE_URL =
+  /^(https?:\/\/[^\s<>()]+?\.(?:png|jpe?g|gif|webp|avif|svg|bmp)(?:\?[^\s<>()]*)?)$/i;
 
 export function isImageUrl(s: string) {
   return IMAGE_URL.test(s.trim());

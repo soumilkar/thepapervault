@@ -60,7 +60,9 @@ function getGroqApiKey(request?: Request): string {
   return (
     readRuntimeEnv("GROQ_API_KEY", request) ||
     readRuntimeEnv("VITE_GROQ_API_KEY", request) ||
-    (typeof process !== "undefined" && process.env.GROQ_API_KEY ? process.env.GROQ_API_KEY.trim() : "") ||
+    (typeof process !== "undefined" && process.env.GROQ_API_KEY
+      ? process.env.GROQ_API_KEY.trim()
+      : "") ||
     ""
   );
 }
@@ -236,7 +238,9 @@ export const Route = createFileRoute("/api/companion-stream")({
           if (!upstream.ok) {
             const errBody = (await upstream.text()).slice(0, 300);
             console.error("Companion upstream error", upstream.status, errBody);
-            return new Response("The Companion is temporarily unavailable. Please try again.", { status: 503 });
+            return new Response("The Companion is temporarily unavailable. Please try again.", {
+              status: 503,
+            });
           }
 
           return new Response(streamGroqResponse(upstream, request.signal), {
@@ -250,7 +254,9 @@ export const Route = createFileRoute("/api/companion-stream")({
         } catch (error) {
           console.error("Companion stream failed", error);
           return new Response(
-            error instanceof SyntaxError ? "The Companion request is invalid" : "Could not start the Companion",
+            error instanceof SyntaxError
+              ? "The Companion request is invalid"
+              : "Could not start the Companion",
             { status: error instanceof SyntaxError ? 400 : 500 },
           );
         }

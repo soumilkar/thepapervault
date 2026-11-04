@@ -126,7 +126,10 @@ export const GoalsTracker = memo(function GoalsTracker({ userId }: { userId: str
           </div>
         </div>
 
-        <form onSubmit={addGoal} className="flex flex-wrap items-center gap-2 rounded-lg bg-secondary/35 p-3">
+        <form
+          onSubmit={addGoal}
+          className="flex flex-wrap items-center gap-2 rounded-lg bg-secondary/35 p-3"
+        >
           <input
             value={title}
             onChange={(e) => setTitle(e.target.value)}

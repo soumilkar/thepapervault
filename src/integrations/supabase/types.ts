@@ -1,649 +1,637 @@
-export type Json =
-  | string
-  | number
-  | boolean
-  | null
-  | { [key: string]: Json | undefined }
-  | Json[]
+export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[];
 
 export type Database = {
   __InternalSupabase: {
-    PostgrestVersion: "14.5"
-  }
+    PostgrestVersion: "14.5";
+  };
   public: {
     Tables: {
       blog_comments: {
         Row: {
-          content: string
-          created_at: string
-          id: string
-          parent_id: string | null
-          post_id: string
-          updated_at: string
-          user_id: string
-        }
+          content: string;
+          created_at: string;
+          id: string;
+          parent_id: string | null;
+          post_id: string;
+          updated_at: string;
+          user_id: string;
+        };
         Insert: {
-          content: string
-          created_at?: string
-          id?: string
-          parent_id?: string | null
-          post_id: string
-          updated_at?: string
-          user_id: string
-        }
+          content: string;
+          created_at?: string;
+          id?: string;
+          parent_id?: string | null;
+          post_id: string;
+          updated_at?: string;
+          user_id: string;
+        };
         Update: {
-          content?: string
-          created_at?: string
-          id?: string
-          parent_id?: string | null
-          post_id?: string
-          updated_at?: string
-          user_id?: string
-        }
+          content?: string;
+          created_at?: string;
+          id?: string;
+          parent_id?: string | null;
+          post_id?: string;
+          updated_at?: string;
+          user_id?: string;
+        };
         Relationships: [
           {
-            foreignKeyName: "blog_comments_parent_id_fkey"
-            columns: ["parent_id"]
-            isOneToOne: false
-            referencedRelation: "blog_comments"
-            referencedColumns: ["id"]
+            foreignKeyName: "blog_comments_parent_id_fkey";
+            columns: ["parent_id"];
+            isOneToOne: false;
+            referencedRelation: "blog_comments";
+            referencedColumns: ["id"];
           },
           {
-            foreignKeyName: "blog_comments_post_id_fkey"
-            columns: ["post_id"]
-            isOneToOne: false
-            referencedRelation: "blog_posts"
-            referencedColumns: ["id"]
+            foreignKeyName: "blog_comments_post_id_fkey";
+            columns: ["post_id"];
+            isOneToOne: false;
+            referencedRelation: "blog_posts";
+            referencedColumns: ["id"];
           },
-        ]
-      }
+        ];
+      };
       blog_likes: {
         Row: {
-          created_at: string
-          id: string
-          post_id: string
-          user_id: string
-        }
+          created_at: string;
+          id: string;
+          post_id: string;
+          user_id: string;
+        };
         Insert: {
-          created_at?: string
-          id?: string
-          post_id: string
-          user_id: string
-        }
+          created_at?: string;
+          id?: string;
+          post_id: string;
+          user_id: string;
+        };
         Update: {
-          created_at?: string
-          id?: string
-          post_id?: string
-          user_id?: string
-        }
+          created_at?: string;
+          id?: string;
+          post_id?: string;
+          user_id?: string;
+        };
         Relationships: [
           {
-            foreignKeyName: "blog_likes_post_id_fkey"
-            columns: ["post_id"]
-            isOneToOne: false
-            referencedRelation: "blog_posts"
-            referencedColumns: ["id"]
+            foreignKeyName: "blog_likes_post_id_fkey";
+            columns: ["post_id"];
+            isOneToOne: false;
+            referencedRelation: "blog_posts";
+            referencedColumns: ["id"];
           },
-        ]
-      }
+        ];
+      };
       blog_posts: {
         Row: {
-          content: string
-          created_at: string
-          id: string
-          image_url: string | null
-          music_artist: string | null
-          music_artwork_url: string | null
-          music_preview_url: string | null
-          music_track_id: string | null
-          music_track_name: string | null
-          notify_on_comment: boolean
-          tags: string[] | null
-          title: string
-          updated_at: string
-          user_id: string
-        }
+          content: string;
+          created_at: string;
+          id: string;
+          image_url: string | null;
+          music_artist: string | null;
+          music_artwork_url: string | null;
+          music_preview_url: string | null;
+          music_track_id: string | null;
+          music_track_name: string | null;
+          notify_on_comment: boolean;
+          tags: string[] | null;
+          title: string;
+          updated_at: string;
+          user_id: string;
+        };
         Insert: {
-          content: string
-          created_at?: string
-          id?: string
-          image_url?: string | null
-          music_artist?: string | null
-          music_artwork_url?: string | null
-          music_preview_url?: string | null
-          music_track_id?: string | null
-          music_track_name?: string | null
-          notify_on_comment?: boolean
-          tags?: string[] | null
-          title: string
-          updated_at?: string
-          user_id: string
-        }
+          content: string;
+          created_at?: string;
+          id?: string;
+          image_url?: string | null;
+          music_artist?: string | null;
+          music_artwork_url?: string | null;
+          music_preview_url?: string | null;
+          music_track_id?: string | null;
+          music_track_name?: string | null;
+          notify_on_comment?: boolean;
+          tags?: string[] | null;
+          title: string;
+          updated_at?: string;
+          user_id: string;
+        };
         Update: {
-          content?: string
-          created_at?: string
-          id?: string
-          image_url?: string | null
-          music_artist?: string | null
-          music_artwork_url?: string | null
-          music_preview_url?: string | null
-          music_track_id?: string | null
-          music_track_name?: string | null
-          notify_on_comment?: boolean
-          tags?: string[] | null
-          title?: string
-          updated_at?: string
-          user_id?: string
-        }
-        Relationships: []
-      }
+          content?: string;
+          created_at?: string;
+          id?: string;
+          image_url?: string | null;
+          music_artist?: string | null;
+          music_artwork_url?: string | null;
+          music_preview_url?: string | null;
+          music_track_id?: string | null;
+          music_track_name?: string | null;
+          notify_on_comment?: boolean;
+          tags?: string[] | null;
+          title?: string;
+          updated_at?: string;
+          user_id?: string;
+        };
+        Relationships: [];
+      };
       chat_messages: {
         Row: {
-          content: string
-          created_at: string
-          id: string
-          iv: string | null
-          role: string
-          session_id: string
-          user_id: string
-        }
+          content: string;
+          created_at: string;
+          id: string;
+          iv: string | null;
+          role: string;
+          session_id: string;
+          user_id: string;
+        };
         Insert: {
-          content: string
-          created_at?: string
-          id?: string
-          iv?: string | null
-          role: string
-          session_id: string
-          user_id: string
-        }
+          content: string;
+          created_at?: string;
+          id?: string;
+          iv?: string | null;
+          role: string;
+          session_id: string;
+          user_id: string;
+        };
         Update: {
-          content?: string
-          created_at?: string
-          id?: string
-          iv?: string | null
-          role?: string
-          session_id?: string
-          user_id?: string
-        }
+          content?: string;
+          created_at?: string;
+          id?: string;
+          iv?: string | null;
+          role?: string;
+          session_id?: string;
+          user_id?: string;
+        };
         Relationships: [
           {
-            foreignKeyName: "chat_messages_session_id_fkey"
-            columns: ["session_id"]
-            isOneToOne: false
-            referencedRelation: "chat_sessions"
-            referencedColumns: ["id"]
+            foreignKeyName: "chat_messages_session_id_fkey";
+            columns: ["session_id"];
+            isOneToOne: false;
+            referencedRelation: "chat_sessions";
+            referencedColumns: ["id"];
           },
-        ]
-      }
+        ];
+      };
       chat_sessions: {
         Row: {
-          created_at: string
-          id: string
-          last_message_at: string
-          title: string
-          title_iv: string | null
-          user_id: string
-        }
+          created_at: string;
+          id: string;
+          last_message_at: string;
+          title: string;
+          title_iv: string | null;
+          user_id: string;
+        };
         Insert: {
-          created_at?: string
-          id?: string
-          last_message_at?: string
-          title?: string
-          title_iv?: string | null
-          user_id: string
-        }
+          created_at?: string;
+          id?: string;
+          last_message_at?: string;
+          title?: string;
+          title_iv?: string | null;
+          user_id: string;
+        };
         Update: {
-          created_at?: string
-          id?: string
-          last_message_at?: string
-          title?: string
-          title_iv?: string | null
-          user_id?: string
-        }
-        Relationships: []
-      }
+          created_at?: string;
+          id?: string;
+          last_message_at?: string;
+          title?: string;
+          title_iv?: string | null;
+          user_id?: string;
+        };
+        Relationships: [];
+      };
       comment_votes: {
         Row: {
-          comment_id: string
-          created_at: string
-          id: string
-          user_id: string
-          value: number
-        }
+          comment_id: string;
+          created_at: string;
+          id: string;
+          user_id: string;
+          value: number;
+        };
         Insert: {
-          comment_id: string
-          created_at?: string
-          id?: string
-          user_id: string
-          value: number
-        }
+          comment_id: string;
+          created_at?: string;
+          id?: string;
+          user_id: string;
+          value: number;
+        };
         Update: {
-          comment_id?: string
-          created_at?: string
-          id?: string
-          user_id?: string
-          value?: number
-        }
+          comment_id?: string;
+          created_at?: string;
+          id?: string;
+          user_id?: string;
+          value?: number;
+        };
         Relationships: [
           {
-            foreignKeyName: "comment_votes_comment_id_fkey"
-            columns: ["comment_id"]
-            isOneToOne: false
-            referencedRelation: "blog_comments"
-            referencedColumns: ["id"]
+            foreignKeyName: "comment_votes_comment_id_fkey";
+            columns: ["comment_id"];
+            isOneToOne: false;
+            referencedRelation: "blog_comments";
+            referencedColumns: ["id"];
           },
-        ]
-      }
+        ];
+      };
       diary_entries: {
         Row: {
-          content: string
-          created_at: string
-          entry_date: string
-          folder_id: string | null
-          id: string
-          image_path: string | null
-          is_public: boolean
-          iv: string | null
-          mood: string | null
-          music_artist: string | null
-          music_artwork_url: string | null
-          music_preview_url: string | null
-          music_track_id: string | null
-          music_track_name: string | null
-          title: string | null
-          updated_at: string
-          user_id: string
-          visibility: string
-          word_count: number
-        }
+          content: string;
+          created_at: string;
+          entry_date: string;
+          folder_id: string | null;
+          id: string;
+          image_path: string | null;
+          is_public: boolean;
+          iv: string | null;
+          mood: string | null;
+          music_artist: string | null;
+          music_artwork_url: string | null;
+          music_preview_url: string | null;
+          music_track_id: string | null;
+          music_track_name: string | null;
+          title: string | null;
+          updated_at: string;
+          user_id: string;
+          visibility: string;
+          word_count: number;
+        };
         Insert: {
-          content: string
-          created_at?: string
-          entry_date?: string
-          folder_id?: string | null
-          id?: string
-          image_path?: string | null
-          is_public?: boolean
-          iv?: string | null
-          mood?: string | null
-          music_artist?: string | null
-          music_artwork_url?: string | null
-          music_preview_url?: string | null
-          music_track_id?: string | null
-          music_track_name?: string | null
-          title?: string | null
-          updated_at?: string
-          user_id: string
-          visibility?: string
-          word_count?: number
-        }
+          content: string;
+          created_at?: string;
+          entry_date?: string;
+          folder_id?: string | null;
+          id?: string;
+          image_path?: string | null;
+          is_public?: boolean;
+          iv?: string | null;
+          mood?: string | null;
+          music_artist?: string | null;
+          music_artwork_url?: string | null;
+          music_preview_url?: string | null;
+          music_track_id?: string | null;
+          music_track_name?: string | null;
+          title?: string | null;
+          updated_at?: string;
+          user_id: string;
+          visibility?: string;
+          word_count?: number;
+        };
         Update: {
-          content?: string
-          created_at?: string
-          entry_date?: string
-          folder_id?: string | null
-          id?: string
-          image_path?: string | null
-          is_public?: boolean
-          iv?: string | null
-          mood?: string | null
-          music_artist?: string | null
-          music_artwork_url?: string | null
-          music_preview_url?: string | null
-          music_track_id?: string | null
-          music_track_name?: string | null
-          title?: string | null
-          updated_at?: string
-          user_id?: string
-          visibility?: string
-          word_count?: number
-        }
+          content?: string;
+          created_at?: string;
+          entry_date?: string;
+          folder_id?: string | null;
+          id?: string;
+          image_path?: string | null;
+          is_public?: boolean;
+          iv?: string | null;
+          mood?: string | null;
+          music_artist?: string | null;
+          music_artwork_url?: string | null;
+          music_preview_url?: string | null;
+          music_track_id?: string | null;
+          music_track_name?: string | null;
+          title?: string | null;
+          updated_at?: string;
+          user_id?: string;
+          visibility?: string;
+          word_count?: number;
+        };
         Relationships: [
           {
-            foreignKeyName: "diary_entries_folder_id_fkey"
-            columns: ["folder_id"]
-            isOneToOne: false
-            referencedRelation: "diary_folders"
-            referencedColumns: ["id"]
+            foreignKeyName: "diary_entries_folder_id_fkey";
+            columns: ["folder_id"];
+            isOneToOne: false;
+            referencedRelation: "diary_folders";
+            referencedColumns: ["id"];
           },
-        ]
-      }
+        ];
+      };
       diary_folders: {
         Row: {
-          created_at: string
-          id: string
-          name: string
-          parent_id: string | null
-          updated_at: string
-          user_id: string
-        }
+          created_at: string;
+          id: string;
+          name: string;
+          parent_id: string | null;
+          updated_at: string;
+          user_id: string;
+        };
         Insert: {
-          created_at?: string
-          id?: string
-          name: string
-          parent_id?: string | null
-          updated_at?: string
-          user_id: string
-        }
+          created_at?: string;
+          id?: string;
+          name: string;
+          parent_id?: string | null;
+          updated_at?: string;
+          user_id: string;
+        };
         Update: {
-          created_at?: string
-          id?: string
-          name?: string
-          parent_id?: string | null
-          updated_at?: string
-          user_id?: string
-        }
+          created_at?: string;
+          id?: string;
+          name?: string;
+          parent_id?: string | null;
+          updated_at?: string;
+          user_id?: string;
+        };
         Relationships: [
           {
-            foreignKeyName: "diary_folders_parent_id_fkey"
-            columns: ["parent_id"]
-            isOneToOne: false
-            referencedRelation: "diary_folders"
-            referencedColumns: ["id"]
+            foreignKeyName: "diary_folders_parent_id_fkey";
+            columns: ["parent_id"];
+            isOneToOne: false;
+            referencedRelation: "diary_folders";
+            referencedColumns: ["id"];
           },
-        ]
-      }
+        ];
+      };
       gallery_images: {
         Row: {
-          caption: string | null
-          caption_iv: string | null
-          created_at: string
-          id: string
-          iv: string | null
-          mime: string | null
-          storage_path: string
-          user_id: string
-        }
+          caption: string | null;
+          caption_iv: string | null;
+          created_at: string;
+          id: string;
+          iv: string | null;
+          mime: string | null;
+          storage_path: string;
+          user_id: string;
+        };
         Insert: {
-          caption?: string | null
-          caption_iv?: string | null
-          created_at?: string
-          id?: string
-          iv?: string | null
-          mime?: string | null
-          storage_path: string
-          user_id: string
-        }
+          caption?: string | null;
+          caption_iv?: string | null;
+          created_at?: string;
+          id?: string;
+          iv?: string | null;
+          mime?: string | null;
+          storage_path: string;
+          user_id: string;
+        };
         Update: {
-          caption?: string | null
-          caption_iv?: string | null
-          created_at?: string
-          id?: string
-          iv?: string | null
-          mime?: string | null
-          storage_path?: string
-          user_id?: string
-        }
-        Relationships: []
-      }
+          caption?: string | null;
+          caption_iv?: string | null;
+          created_at?: string;
+          id?: string;
+          iv?: string | null;
+          mime?: string | null;
+          storage_path?: string;
+          user_id?: string;
+        };
+        Relationships: [];
+      };
       note_folders: {
         Row: {
-          created_at: string
-          id: string
-          name: string
-          parent_id: string | null
-          updated_at: string
-          user_id: string
-        }
+          created_at: string;
+          id: string;
+          name: string;
+          parent_id: string | null;
+          updated_at: string;
+          user_id: string;
+        };
         Insert: {
-          created_at?: string
-          id?: string
-          name: string
-          parent_id?: string | null
-          updated_at?: string
-          user_id: string
-        }
+          created_at?: string;
+          id?: string;
+          name: string;
+          parent_id?: string | null;
+          updated_at?: string;
+          user_id: string;
+        };
         Update: {
-          created_at?: string
-          id?: string
-          name?: string
-          parent_id?: string | null
-          updated_at?: string
-          user_id?: string
-        }
+          created_at?: string;
+          id?: string;
+          name?: string;
+          parent_id?: string | null;
+          updated_at?: string;
+          user_id?: string;
+        };
         Relationships: [
           {
-            foreignKeyName: "note_folders_parent_id_fkey"
-            columns: ["parent_id"]
-            isOneToOne: false
-            referencedRelation: "note_folders"
-            referencedColumns: ["id"]
+            foreignKeyName: "note_folders_parent_id_fkey";
+            columns: ["parent_id"];
+            isOneToOne: false;
+            referencedRelation: "note_folders";
+            referencedColumns: ["id"];
           },
-        ]
-      }
+        ];
+      };
       notes: {
         Row: {
-          content: string
-          created_at: string
-          folder_id: string | null
-          id: string
-          image_url: string | null
-          iv: string | null
-          tags: string[] | null
-          title: string | null
-          updated_at: string
-          user_id: string
-        }
+          content: string;
+          created_at: string;
+          folder_id: string | null;
+          id: string;
+          image_url: string | null;
+          iv: string | null;
+          tags: string[] | null;
+          title: string | null;
+          updated_at: string;
+          user_id: string;
+        };
         Insert: {
-          content?: string
-          created_at?: string
-          folder_id?: string | null
-          id?: string
-          image_url?: string | null
-          iv?: string | null
-          tags?: string[] | null
-          title?: string | null
-          updated_at?: string
-          user_id: string
-        }
+          content?: string;
+          created_at?: string;
+          folder_id?: string | null;
+          id?: string;
+          image_url?: string | null;
+          iv?: string | null;
+          tags?: string[] | null;
+          title?: string | null;
+          updated_at?: string;
+          user_id: string;
+        };
         Update: {
-          content?: string
-          created_at?: string
-          folder_id?: string | null
-          id?: string
-          image_url?: string | null
-          iv?: string | null
-          tags?: string[] | null
-          title?: string | null
-          updated_at?: string
-          user_id?: string
-        }
+          content?: string;
+          created_at?: string;
+          folder_id?: string | null;
+          id?: string;
+          image_url?: string | null;
+          iv?: string | null;
+          tags?: string[] | null;
+          title?: string | null;
+          updated_at?: string;
+          user_id?: string;
+        };
         Relationships: [
           {
-            foreignKeyName: "notes_folder_id_fkey"
-            columns: ["folder_id"]
-            isOneToOne: false
-            referencedRelation: "note_folders"
-            referencedColumns: ["id"]
+            foreignKeyName: "notes_folder_id_fkey";
+            columns: ["folder_id"];
+            isOneToOne: false;
+            referencedRelation: "note_folders";
+            referencedColumns: ["id"];
           },
-        ]
-      }
+        ];
+      };
       profiles: {
         Row: {
-          created_at: string
-          display_name: string | null
-          id: string
-          tour_completed: boolean
-          updated_at: string
-        }
+          created_at: string;
+          display_name: string | null;
+          id: string;
+          tour_completed: boolean;
+          updated_at: string;
+        };
         Insert: {
-          created_at?: string
-          display_name?: string | null
-          id: string
-          tour_completed?: boolean
-          updated_at?: string
-        }
+          created_at?: string;
+          display_name?: string | null;
+          id: string;
+          tour_completed?: boolean;
+          updated_at?: string;
+        };
         Update: {
-          created_at?: string
-          display_name?: string | null
-          id?: string
-          tour_completed?: boolean
-          updated_at?: string
-        }
-        Relationships: []
-      }
+          created_at?: string;
+          display_name?: string | null;
+          id?: string;
+          tour_completed?: boolean;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
       vault_keys: {
         Row: {
-          created_at: string
-          kdf_salt: string
-          updated_at: string
-          user_id: string
-          verifier: string
-          verifier_salt: string
-        }
+          created_at: string;
+          kdf_salt: string;
+          updated_at: string;
+          user_id: string;
+          verifier: string;
+          verifier_salt: string;
+        };
         Insert: {
-          created_at?: string
-          kdf_salt: string
-          updated_at?: string
-          user_id: string
-          verifier: string
-          verifier_salt: string
-        }
+          created_at?: string;
+          kdf_salt: string;
+          updated_at?: string;
+          user_id: string;
+          verifier: string;
+          verifier_salt: string;
+        };
         Update: {
-          created_at?: string
-          kdf_salt?: string
-          updated_at?: string
-          user_id?: string
-          verifier?: string
-          verifier_salt?: string
-        }
-        Relationships: []
-      }
-    }
+          created_at?: string;
+          kdf_salt?: string;
+          updated_at?: string;
+          user_id?: string;
+          verifier?: string;
+          verifier_salt?: string;
+        };
+        Relationships: [];
+      };
+    };
     Views: {
-      [_ in never]: never
-    }
+      [_ in never]: never;
+    };
     Functions: {
-      [_ in never]: never
-    }
+      [_ in never]: never;
+    };
     Enums: {
-      [_ in never]: never
-    }
+      [_ in never]: never;
+    };
     CompositeTypes: {
-      [_ in never]: never
-    }
-  }
-}
+      [_ in never]: never;
+    };
+  };
+};
 
-type DatabaseWithoutInternals = Omit<Database, "__InternalSupabase">
+type DatabaseWithoutInternals = Omit<Database, "__InternalSupabase">;
 
-type DefaultSchema = DatabaseWithoutInternals[Extract<keyof Database, "public">]
+type DefaultSchema = DatabaseWithoutInternals[Extract<keyof Database, "public">];
 
 export type Tables<
   DefaultSchemaTableNameOrOptions extends
     | keyof (DefaultSchema["Tables"] & DefaultSchema["Views"])
     | { schema: keyof DatabaseWithoutInternals },
   TableName extends (DefaultSchemaTableNameOrOptions extends {
-    schema: keyof DatabaseWithoutInternals
+    schema: keyof DatabaseWithoutInternals;
   }
     ? keyof (DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"] &
         DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Views"])
     : never) = never,
 > = DefaultSchemaTableNameOrOptions extends {
-  schema: keyof DatabaseWithoutInternals
+  schema: keyof DatabaseWithoutInternals;
 }
   ? (DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"] &
       DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Views"])[TableName] extends {
-      Row: infer R
+      Row: infer R;
     }
     ? R
     : never
-  : DefaultSchemaTableNameOrOptions extends keyof (DefaultSchema["Tables"] &
-        DefaultSchema["Views"])
-    ? (DefaultSchema["Tables"] &
-        DefaultSchema["Views"])[DefaultSchemaTableNameOrOptions] extends {
-        Row: infer R
+  : DefaultSchemaTableNameOrOptions extends keyof (DefaultSchema["Tables"] & DefaultSchema["Views"])
+    ? (DefaultSchema["Tables"] & DefaultSchema["Views"])[DefaultSchemaTableNameOrOptions] extends {
+        Row: infer R;
       }
       ? R
       : never
-    : never
+    : never;
 
 export type TablesInsert<
   DefaultSchemaTableNameOrOptions extends
-    | keyof DefaultSchema["Tables"]
-    | { schema: keyof DatabaseWithoutInternals },
+    keyof DefaultSchema["Tables"] | { schema: keyof DatabaseWithoutInternals },
   TableName extends (DefaultSchemaTableNameOrOptions extends {
-    schema: keyof DatabaseWithoutInternals
+    schema: keyof DatabaseWithoutInternals;
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
     : never) = never,
 > = DefaultSchemaTableNameOrOptions extends {
-  schema: keyof DatabaseWithoutInternals
+  schema: keyof DatabaseWithoutInternals;
 }
   ? DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"][TableName] extends {
-      Insert: infer I
+      Insert: infer I;
     }
     ? I
     : never
   : DefaultSchemaTableNameOrOptions extends keyof DefaultSchema["Tables"]
     ? DefaultSchema["Tables"][DefaultSchemaTableNameOrOptions] extends {
-        Insert: infer I
+        Insert: infer I;
       }
       ? I
       : never
-    : never
+    : never;
 
 export type TablesUpdate<
   DefaultSchemaTableNameOrOptions extends
-    | keyof DefaultSchema["Tables"]
-    | { schema: keyof DatabaseWithoutInternals },
+    keyof DefaultSchema["Tables"] | { schema: keyof DatabaseWithoutInternals },
   TableName extends (DefaultSchemaTableNameOrOptions extends {
-    schema: keyof DatabaseWithoutInternals
+    schema: keyof DatabaseWithoutInternals;
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
     : never) = never,
 > = DefaultSchemaTableNameOrOptions extends {
-  schema: keyof DatabaseWithoutInternals
+  schema: keyof DatabaseWithoutInternals;
 }
   ? DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"][TableName] extends {
-      Update: infer U
+      Update: infer U;
     }
     ? U
     : never
   : DefaultSchemaTableNameOrOptions extends keyof DefaultSchema["Tables"]
     ? DefaultSchema["Tables"][DefaultSchemaTableNameOrOptions] extends {
-        Update: infer U
+        Update: infer U;
       }
       ? U
       : never
-    : never
+    : never;
 
 export type Enums<
   DefaultSchemaEnumNameOrOptions extends
-    | keyof DefaultSchema["Enums"]
-    | { schema: keyof DatabaseWithoutInternals },
+    keyof DefaultSchema["Enums"] | { schema: keyof DatabaseWithoutInternals },
   EnumName extends (DefaultSchemaEnumNameOrOptions extends {
-    schema: keyof DatabaseWithoutInternals
+    schema: keyof DatabaseWithoutInternals;
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaEnumNameOrOptions["schema"]]["Enums"]
     : never) = never,
 > = DefaultSchemaEnumNameOrOptions extends {
-  schema: keyof DatabaseWithoutInternals
+  schema: keyof DatabaseWithoutInternals;
 }
   ? DatabaseWithoutInternals[DefaultSchemaEnumNameOrOptions["schema"]]["Enums"][EnumName]
   : DefaultSchemaEnumNameOrOptions extends keyof DefaultSchema["Enums"]
     ? DefaultSchema["Enums"][DefaultSchemaEnumNameOrOptions]
-    : never
+    : never;
 
 export type CompositeTypes<
   PublicCompositeTypeNameOrOptions extends
-    | keyof DefaultSchema["CompositeTypes"]
-    | { schema: keyof DatabaseWithoutInternals },
+    keyof DefaultSchema["CompositeTypes"] | { schema: keyof DatabaseWithoutInternals },
   CompositeTypeName extends (PublicCompositeTypeNameOrOptions extends {
-    schema: keyof DatabaseWithoutInternals
+    schema: keyof DatabaseWithoutInternals;
   }
     ? keyof DatabaseWithoutInternals[PublicCompositeTypeNameOrOptions["schema"]]["CompositeTypes"]
     : never) = never,
 > = PublicCompositeTypeNameOrOptions extends {
-  schema: keyof DatabaseWithoutInternals
+  schema: keyof DatabaseWithoutInternals;
 }
   ? DatabaseWithoutInternals[PublicCompositeTypeNameOrOptions["schema"]]["CompositeTypes"][CompositeTypeName]
   : PublicCompositeTypeNameOrOptions extends keyof DefaultSchema["CompositeTypes"]
     ? DefaultSchema["CompositeTypes"][PublicCompositeTypeNameOrOptions]
-    : never
+    : never;
 
 export const Constants = {
   public: {
     Enums: {},
   },
-} as const
+} as const;

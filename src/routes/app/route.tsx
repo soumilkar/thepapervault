@@ -22,6 +22,8 @@ import {
 } from "lucide-react";
 import { VaultProvider, useVault } from "@/lib/vault";
 import { VaultGate } from "@/components/VaultGate";
+import { toast } from "sonner";
+import { OFFLINE_SYNC_SUCCESS_EVENT, triggerAutoSync } from "@/lib/offline-supabase";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -82,6 +84,50 @@ function AuthedLayout() {
       return data;
     },
   });
+
+  useEffect(() => {
+    const handleSyncSuccess = (e: Event) => {
+      const detail = (e as CustomEvent).detail as
+        | {
+            syncedCount: number;
+            tables: string[];
+            remainingCount: number;
+          }
+        | undefined;
+
+      qc.invalidateQueries({ queryKey: ["notes"] });
+      qc.invalidateQueries({ queryKey: ["diary"] });
+      qc.invalidateQueries({ queryKey: ["diary-metrics"] });
+      qc.invalidateQueries({ queryKey: ["public-diary-feed"] });
+      qc.invalidateQueries({ queryKey: ["blog"] });
+      qc.invalidateQueries({ queryKey: ["gallery"] });
+      qc.invalidateQueries({ queryKey: ["dashboard-counts"] });
+      qc.invalidateQueries({ queryKey: ["heatmap-activity"] });
+      qc.invalidateQueries({ queryKey: ["user-profile"] });
+
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new Event("chat-sessions-updated"));
+      }
+
+      if (detail && detail.syncedCount > 0) {
+        toast.success(
+          detail.syncedCount === 1
+            ? "Offline change synced"
+            : `Synced ${detail.syncedCount} offline changes`,
+          { id: "offline-sync-toast", duration: 3000 },
+        );
+      }
+    };
+
+    if (typeof window !== "undefined") {
+      window.addEventListener(OFFLINE_SYNC_SUCCESS_EVENT, handleSyncSuccess);
+    }
+    return () => {
+      if (typeof window !== "undefined") {
+        window.removeEventListener(OFFLINE_SYNC_SUCCESS_EVENT, handleSyncSuccess);
+      }
+    };
+  }, [qc]);
 
   const handleSignOut = async () => {
     qc.clear();
@@ -161,6 +207,7 @@ function VaultOfflineWarmer({ userId }: { userId: string }) {
 
   useEffect(() => {
     if (status !== "unlocked" || !key || typeof window === "undefined" || !navigator.onLine) return;
+    triggerAutoSync(300);
     if (hasWarmed.current) return;
     hasWarmed.current = true;
 

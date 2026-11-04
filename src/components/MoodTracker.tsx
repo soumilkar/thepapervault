@@ -1,5 +1,13 @@
 import { memo, useMemo, useState } from "react";
-import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
+import {
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+  CartesianGrid,
+} from "recharts";
 import { CloudRain, Cloud, Minus, Sun, Sparkles, Plus, Trash2 } from "lucide-react";
 import { useVaultTrackers, type MoodLevel } from "@/lib/vault-trackers";
 

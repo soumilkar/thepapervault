@@ -1,7 +1,13 @@
 // One-time background maintenance: encrypt any pre-existing plaintext rows/metadata across all private tables
 // and prune unallocated / excess chat sessions belonging to the current user.
 import { supabase } from "@/integrations/supabase/client";
-import { decryptText, encryptBlob, encryptField, encryptText, isEncryptedField } from "@/lib/crypto";
+import {
+  decryptText,
+  encryptBlob,
+  encryptField,
+  encryptText,
+  isEncryptedField,
+} from "@/lib/crypto";
 
 let migrationRunning = false;
 
@@ -140,7 +146,11 @@ async function migrateDiary(userId: string, key: CryptoKey) {
   );
 }
 
-async function migrateFolders(table: "diary_folders" | "note_folders", userId: string, key: CryptoKey) {
+async function migrateFolders(
+  table: "diary_folders" | "note_folders",
+  userId: string,
+  key: CryptoKey,
+) {
   const { data } = await supabase.from(table).select("id,name").eq("user_id", userId);
   const rows = data ?? [];
   await Promise.all(
@@ -184,7 +194,9 @@ async function migrateGallery(userId: string, key: CryptoKey) {
   for (const row of rows) {
     const updates: Record<string, unknown> = {};
     if (!row.iv) {
-      const { data: signed } = await supabase.storage.from("gallery").createSignedUrl(row.storage_path, 60 * 10);
+      const { data: signed } = await supabase.storage
+        .from("gallery")
+        .createSignedUrl(row.storage_path, 60 * 10);
       if (signed?.signedUrl) {
         const res = await fetch(signed.signedUrl);
         const blob = await res.blob();
@@ -192,7 +204,10 @@ async function migrateGallery(userId: string, key: CryptoKey) {
         const { blob: encBlob, iv } = await encryptBlob(key, blob);
         const { error: upErr } = await supabase.storage
           .from("gallery")
-          .upload(row.storage_path, encBlob, { contentType: "application/octet-stream", upsert: true });
+          .upload(row.storage_path, encBlob, {
+            contentType: "application/octet-stream",
+            upsert: true,
+          });
         if (!upErr) {
           updates.iv = iv;
           updates.mime = mime;
@@ -249,10 +264,7 @@ async function migrateChatMessages(userId: string, key: CryptoKey) {
     rows.map(async (m) => {
       if (m.iv) return;
       const enc = await encryptText(key, m.content);
-      await supabase
-        .from("chat_messages")
-        .update({ content: enc.ct, iv: enc.iv })
-        .eq("id", m.id);
+      await supabase.from("chat_messages").update({ content: enc.ct, iv: enc.iv }).eq("id", m.id);
     }),
   );
 }

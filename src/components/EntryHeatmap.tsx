@@ -126,7 +126,10 @@ export const EntryHeatmap = memo(function EntryHeatmap({ userId }: { userId: str
             <div className="flex flex-col gap-1 mr-2">
               <div className="h-3" />
               {Array.from({ length: 7 }).map((_, i) => (
-                <div key={i} className="h-3 w-8 text-[9px] text-muted-foreground text-right leading-3">
+                <div
+                  key={i}
+                  className="h-3 w-8 text-[9px] text-muted-foreground text-right leading-3"
+                >
                   {i === 1 ? "Mon" : i === 3 ? "Wed" : i === 5 ? "Fri" : ""}
                 </div>
               ))}
@@ -139,7 +142,7 @@ export const EntryHeatmap = memo(function EntryHeatmap({ userId }: { userId: str
                 {week.map((day, di) => {
                   const inYear = day.getFullYear() === year;
                   const key = isoDay(day);
-                  const c = inYear ? counts.get(key) ?? 0 : 0;
+                  const c = inYear ? (counts.get(key) ?? 0) : 0;
                   return (
                     <div
                       key={di}

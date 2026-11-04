@@ -47,7 +47,11 @@ export function VaultGate({ userId, children }: { userId: string; children: Reac
     <div className="flex min-h-[60vh] items-center justify-center px-4">
       <form onSubmit={onSubmit} className="paper-card w-full max-w-md space-y-4 p-8">
         <div className="flex items-center gap-2 text-accent">
-          {status === "needs_setup" ? <ShieldCheck className="size-5" /> : <Lock className="size-5" />}
+          {status === "needs_setup" ? (
+            <ShieldCheck className="size-5" />
+          ) : (
+            <Lock className="size-5" />
+          )}
           <p className="font-hand text-2xl text-sepia">
             {status === "needs_setup" ? "create your passphrase" : "enter your passphrase"}
           </p>
@@ -64,8 +68,12 @@ export function VaultGate({ userId, children }: { userId: string; children: Reac
         <label className="block">
           <span className="mb-1 block text-sm font-medium text-foreground/80">Passphrase</span>
           <input
-            type="password" required minLength={8} autoFocus
-            value={passphrase} onChange={(e) => setPassphrase(e.target.value)}
+            type="password"
+            required
+            minLength={8}
+            autoFocus
+            value={passphrase}
+            onChange={(e) => setPassphrase(e.target.value)}
             className="w-full rounded-md border border-input bg-card px-3 py-2 outline-none focus:border-ring focus:ring-1 focus:ring-ring"
             placeholder="At least 8 characters"
           />
@@ -73,17 +81,25 @@ export function VaultGate({ userId, children }: { userId: string; children: Reac
 
         {status === "needs_setup" && (
           <label className="block">
-            <span className="mb-1 block text-sm font-medium text-foreground/80">Confirm passphrase</span>
+            <span className="mb-1 block text-sm font-medium text-foreground/80">
+              Confirm passphrase
+            </span>
             <input
-              type="password" required minLength={8}
-              value={confirm} onChange={(e) => setConfirm(e.target.value)}
+              type="password"
+              required
+              minLength={8}
+              value={confirm}
+              onChange={(e) => setConfirm(e.target.value)}
               className="w-full rounded-md border border-input bg-card px-3 py-2 outline-none focus:border-ring focus:ring-1 focus:ring-ring"
             />
           </label>
         )}
 
-        <button type="submit" disabled={busy}
-          className="w-full rounded-md bg-primary px-4 py-2.5 text-primary-foreground hover:opacity-90 disabled:opacity-60">
+        <button
+          type="submit"
+          disabled={busy}
+          className="w-full rounded-md bg-primary px-4 py-2.5 text-primary-foreground hover:opacity-90 disabled:opacity-60"
+        >
           {busy ? "Working..." : status === "needs_setup" ? "Continue" : "Unlock"}
         </button>
       </form>

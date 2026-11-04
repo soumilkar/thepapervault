@@ -36,7 +36,10 @@ function GalleryPage() {
   const { user } = Route.useRouteContext();
   const { key } = useVault();
   const qc = useQueryClient();
-  const [caption, setCaption, clearCaptionDraft] = useBrowserDraft(`papervault:gallery-caption:${user.id}`, "");
+  const [caption, setCaption, clearCaptionDraft] = useBrowserDraft(
+    `papervault:gallery-caption:${user.id}`,
+    "",
+  );
   const [uploading, setUploading] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftCaption, setDraftCaption] = useState("");
@@ -56,7 +59,9 @@ function GalleryPage() {
 
       // Batch signed URL generation in a single request instead of N sequential requests
       const paths = rows.map((r) => r.storage_path);
-      const { data: signedList } = await supabase.storage.from("gallery").createSignedUrls(paths, 60 * 60);
+      const { data: signedList } = await supabase.storage
+        .from("gallery")
+        .createSignedUrls(paths, 60 * 60);
       const urlMap = new Map<string, string>();
       for (const item of signedList ?? []) {
         if (item.path && item.signedUrl) urlMap.set(item.path, item.signedUrl);
@@ -208,7 +213,9 @@ function GalleryPage() {
         />
         <label className="flex cursor-pointer items-center justify-center gap-2 rounded-md border-2 border-dashed border-border bg-secondary/40 px-6 py-10 transition hover:border-ring hover:bg-secondary">
           <Upload className="size-5 text-accent" />
-          <span className="text-sm">{uploading ? "Encrypting & uploading..." : "Click to upload a photo"}</span>
+          <span className="text-sm">
+            {uploading ? "Encrypting & uploading..." : "Click to upload a photo"}
+          </span>
           <input
             type="file"
             accept="image/jpeg,image/png,image/webp,image/gif"
@@ -247,7 +254,8 @@ function GalleryPage() {
                       value={draftCaption}
                       onChange={(e) => setDraftCaption(e.target.value)}
                       onKeyDown={(e) => {
-                        if (e.key === "Enter") updateCaption.mutate({ id: img.id, caption: draftCaption });
+                        if (e.key === "Enter")
+                          updateCaption.mutate({ id: img.id, caption: draftCaption });
                         if (e.key === "Escape") setEditingId(null);
                       }}
                       className="w-full bg-transparent font-hand text-lg text-sepia outline-none"
@@ -260,7 +268,10 @@ function GalleryPage() {
                       >
                         <Check className="size-4" />
                       </button>
-                      <button onClick={() => setEditingId(null)} className="text-muted-foreground hover:text-foreground">
+                      <button
+                        onClick={() => setEditingId(null)}
+                        className="text-muted-foreground hover:text-foreground"
+                      >
                         <X className="size-4" />
                       </button>
                     </div>
@@ -278,7 +289,10 @@ function GalleryPage() {
                       >
                         <Pencil className="size-4" />
                       </button>
-                      <button onClick={() => remove.mutate(img)} className="text-muted-foreground hover:text-destructive">
+                      <button
+                        onClick={() => remove.mutate(img)}
+                        className="text-muted-foreground hover:text-destructive"
+                      >
                         <Trash2 className="size-4" />
                       </button>
                     </div>

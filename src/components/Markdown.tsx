@@ -5,15 +5,26 @@ import remarkGfm from "remark-gfm";
 const REMARK_PLUGINS = [remarkGfm];
 
 const MARKDOWN_COMPONENTS: Components = {
-  h1: ({ node: _node, ...p }) => <h1 className="font-serif text-3xl text-primary mt-5 mb-2.5" {...p} />,
-  h2: ({ node: _node, ...p }) => <h2 className="font-serif text-2xl text-primary mt-5 mb-2" {...p} />,
-  h3: ({ node: _node, ...p }) => <h3 className="font-serif text-xl text-primary mt-4 mb-1.5" {...p} />,
+  h1: ({ node: _node, ...p }) => (
+    <h1 className="font-serif text-3xl text-primary mt-5 mb-2.5" {...p} />
+  ),
+  h2: ({ node: _node, ...p }) => (
+    <h2 className="font-serif text-2xl text-primary mt-5 mb-2" {...p} />
+  ),
+  h3: ({ node: _node, ...p }) => (
+    <h3 className="font-serif text-xl text-primary mt-4 mb-1.5" {...p} />
+  ),
   p: ({ node: _node, ...p }) => <p className="leading-relaxed my-2.5" {...p} />,
   ul: ({ node: _node, ...p }) => <ul className="my-3 list-disc pl-5 space-y-1.5" {...p} />,
   ol: ({ node: _node, ...p }) => <ol className="my-3 list-decimal pl-5 space-y-1.5" {...p} />,
   li: ({ node: _node, ...p }) => <li className="leading-relaxed" {...p} />,
   a: ({ node: _node, ...p }) => (
-    <a className="text-accent underline underline-offset-2 hover:text-primary" target="_blank" rel="noreferrer" {...p} />
+    <a
+      className="text-accent underline underline-offset-2 hover:text-primary"
+      target="_blank"
+      rel="noreferrer"
+      {...p}
+    />
   ),
   blockquote: ({ node: _node, ...p }) => (
     <blockquote className="my-3 border-l-2 border-accent/60 pl-3.5 italic text-sepia" {...p} />
@@ -54,7 +65,9 @@ const MARKDOWN_COMPONENTS: Components = {
       <table className="min-w-full text-sm" {...p} />
     </div>
   ),
-  th: ({ node: _node, ...p }) => <th className="border-b border-border px-2 py-1 text-left font-semibold" {...p} />,
+  th: ({ node: _node, ...p }) => (
+    <th className="border-b border-border px-2 py-1 text-left font-semibold" {...p} />
+  ),
   td: ({ node: _node, ...p }) => <td className="border-b border-border/60 px-2 py-1" {...p} />,
 };
 

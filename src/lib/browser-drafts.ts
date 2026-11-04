@@ -63,7 +63,10 @@ export function useBrowserDraft<T>(storageKey: string, initialValue: T) {
         // Ignore storage quota and privacy-mode errors.
       }
     }, 300);
-    return () => { cancelled = true; window.clearTimeout(t); };
+    return () => {
+      cancelled = true;
+      window.clearTimeout(t);
+    };
   }, [storageKey, ready, value, key]);
 
   const clear = () => {

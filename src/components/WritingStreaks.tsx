@@ -75,10 +75,26 @@ export const WritingStreaks = memo(function WritingStreaks({ userId }: { userId:
   }, [diary.data]);
 
   const items = [
-    { icon: <Flame className="size-5 text-orange-400" />, value: streaks.current, label: "current streak" },
-    { icon: <Trophy className="size-5 text-amber-500" />, value: streaks.longest, label: "best streak" },
-    { icon: <PenLine className="size-5 text-sepia" />, value: totalEntries, label: "total entries" },
-    { icon: <TrendingUp className="size-5 text-green-500" />, value: totalWords.toLocaleString(), label: "words written" },
+    {
+      icon: <Flame className="size-5 text-orange-400" />,
+      value: streaks.current,
+      label: "current streak",
+    },
+    {
+      icon: <Trophy className="size-5 text-amber-500" />,
+      value: streaks.longest,
+      label: "best streak",
+    },
+    {
+      icon: <PenLine className="size-5 text-sepia" />,
+      value: totalEntries,
+      label: "total entries",
+    },
+    {
+      icon: <TrendingUp className="size-5 text-green-500" />,
+      value: totalWords.toLocaleString(),
+      label: "words written",
+    },
   ];
 
   return (
@@ -97,7 +113,9 @@ export const WritingStreaks = memo(function WritingStreaks({ userId }: { userId:
             <div key={it.label} className="min-w-0 rounded-lg bg-secondary/40 p-3 text-center">
               <div className="flex justify-center mb-1">{it.icon}</div>
               <div className="font-serif text-2xl text-primary truncate">{it.value}</div>
-              <div className="text-[11px] uppercase tracking-wide text-muted-foreground truncate">{it.label}</div>
+              <div className="text-[11px] uppercase tracking-wide text-muted-foreground truncate">
+                {it.label}
+              </div>
             </div>
           ))}
         </div>

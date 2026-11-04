@@ -47,7 +47,44 @@ export interface OfflineSyncState {
 }
 
 export const OFFLINE_SYNC_EVENT = "papervault:offline-sync-state";
+export const OFFLINE_SYNC_SUCCESS_EVENT = "papervault:sync-success";
 const OFFLINE_AUTH_SESSION_KEY = "papervault:offline-cached-session:v1";
+
+type TokenGetter = (forceRefresh?: boolean) => Promise<string | null>;
+let externalTokenGetter: TokenGetter | null = null;
+
+export function registerAuthTokenGetter(getter: TokenGetter) {
+  externalTokenGetter = getter;
+}
+
+export async function getFreshAccessToken(forceRefresh = false): Promise<string | null> {
+  if (externalTokenGetter) {
+    try {
+      const token = await externalTokenGetter(forceRefresh);
+      if (token) return token;
+    } catch {
+      // fallback
+    }
+  }
+  const session = getCachedAuthSession();
+  return (session as { access_token?: string })?.access_token ?? null;
+}
+
+let autoSyncTimer: number | null = null;
+let watchdogInterval: number | null = null;
+
+export function triggerAutoSync(delayMs = 0): void {
+  if (typeof window === "undefined") return;
+  if (autoSyncTimer !== null) {
+    window.clearTimeout(autoSyncTimer);
+  }
+  autoSyncTimer = window.setTimeout(() => {
+    autoSyncTimer = null;
+    if (navigator.onLine && !syncInProgress) {
+      void flushOfflineSyncQueue();
+    }
+  }, delayMs);
+}
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 let syncInProgress = false;
@@ -240,6 +277,9 @@ async function enqueueSyncItem(item: Omit<SyncQueueItem, "queueId" | "createdAt"
     });
     const all = await idbGetAll<SyncQueueItem>("sync_queue");
     notifySyncState({ pendingCount: all.length });
+    if (typeof navigator !== "undefined" && navigator.onLine) {
+      triggerAutoSync(300);
+    }
   } catch {
     // ignore
   }
@@ -638,17 +678,49 @@ export async function flushOfflineSyncQueue(): Promise<void> {
   syncInProgress = true;
   notifySyncState({ isSyncing: true });
 
+  let successfullySyncedCount = 0;
+  const syncedTables = new Set<string>();
+
   try {
-    const session = getCachedAuthSession();
-    const token = (session as { access_token?: string })?.access_token;
+    let token = await getFreshAccessToken();
     const sorted = [...queue].sort((a, b) => a.createdAt - b.createdAt);
+
     for (const item of sorted) {
       if (!navigator.onLine) break;
-      try {
-        const headers = { ...item.headers };
-        if (token) {
-          headers["authorization"] = `Bearer ${token}`;
+
+      const buildSanitizedHeaders = (
+        tokenStr: string | null,
+        isStorageUpload = false,
+        contentType?: string,
+      ) => {
+        const h: Record<string, string> = {};
+        for (const [k, v] of Object.entries(item.headers || {})) {
+          const lower = k.toLowerCase();
+          if (
+            lower === "host" ||
+            lower === "content-length" ||
+            lower === "connection" ||
+            lower === "cookie" ||
+            lower === "origin" ||
+            lower === "referer"
+          ) {
+            continue;
+          }
+          h[k] = v;
         }
+        if (tokenStr) {
+          h["authorization"] = `Bearer ${tokenStr}`;
+        }
+        if (isStorageUpload) {
+          h["content-type"] = contentType || item.contentType || "application/octet-stream";
+          h["x-upsert"] = "true";
+        } else if (!item.body) {
+          delete h["content-type"];
+        }
+        return h;
+      };
+
+      try {
         if (item.kind === "storage" && item.storageBucket && item.storagePath) {
           const db = await openOfflineDB();
           const blobRec = await new Promise<
@@ -661,42 +733,117 @@ export async function flushOfflineSyncQueue(): Promise<void> {
             req.onsuccess = () => res(req.result);
             req.onerror = () => rej(req.error);
           });
+
           if (blobRec?.buffer) {
-            const res = await quickFetch(
+            let activeHeaders = buildSanitizedHeaders(
+              token,
+              true,
+              blobRec.contentType || item.contentType,
+            );
+            let res = await quickFetch(
               item.url,
               {
                 method: item.method,
-                headers,
-                body: new Blob([blobRec.buffer], { type: blobRec.contentType }),
+                headers: activeHeaders,
+                body: new Blob([blobRec.buffer], {
+                  type: blobRec.contentType || item.contentType || "application/octet-stream",
+                }),
               },
-              5000,
+              25000,
             );
+
+            // Attempt session refresh if 401 unauthorized
+            if (res.status === 401) {
+              try {
+                token = await getFreshAccessToken(true);
+              } catch {
+                token = null;
+              }
+              if (token) {
+                activeHeaders = buildSanitizedHeaders(
+                  token,
+                  true,
+                  blobRec.contentType || item.contentType,
+                );
+                res = await quickFetch(
+                  item.url,
+                  {
+                    method: item.method,
+                    headers: activeHeaders,
+                    body: new Blob([blobRec.buffer], {
+                      type: blobRec.contentType || item.contentType || "application/octet-stream",
+                    }),
+                  },
+                  25000,
+                );
+              }
+            }
+
             if (res.ok || res.status === 409) {
               await removeSyncItem(item.queueId);
+              successfullySyncedCount++;
+              syncedTables.add("storage");
             } else if (res.status === 401 || res.status === 403) {
               break;
             }
           } else {
+            // Blob missing locally; remove stale queue reference
             await removeSyncItem(item.queueId);
           }
         } else {
-          const res = await quickFetch(
+          let activeHeaders = buildSanitizedHeaders(token, false);
+          let res = await quickFetch(
             item.url,
             {
               method: item.method,
-              headers,
+              headers: activeHeaders,
               body: item.body ?? undefined,
             },
-            5000,
+            12000,
           );
+
+          if (res.status === 401) {
+            try {
+              token = await getFreshAccessToken(true);
+            } catch {
+              token = null;
+            }
+            if (token) {
+              activeHeaders = buildSanitizedHeaders(token, false);
+              res = await quickFetch(
+                item.url,
+                {
+                  method: item.method,
+                  headers: activeHeaders,
+                  body: item.body ?? undefined,
+                },
+                12000,
+              );
+            }
+          }
+
           if (res.ok || res.status === 409 || (item.method === "DELETE" && res.status === 404)) {
+            if (res.ok && item.table) {
+              try {
+                const serverData = await res.clone().json();
+                if (Array.isArray(serverData)) {
+                  await idbPutMany(item.table, serverData as Record<string, unknown>[]);
+                } else if (serverData && typeof serverData === "object") {
+                  await idbPutMany(item.table, [serverData as Record<string, unknown>]);
+                }
+              } catch {
+                // minimal response or no json body
+              }
+            }
             await removeSyncItem(item.queueId);
+            successfullySyncedCount++;
+            if (item.table) syncedTables.add(item.table);
           } else if (res.status === 401 || res.status === 403) {
             break;
           }
         }
       } catch {
-        // Network error while flushing; stop and retry next time online
+        // Network error while flushing; stop this batch and retry via autoSync
         break;
       }
     }
@@ -706,8 +853,24 @@ export async function flushOfflineSyncQueue(): Promise<void> {
     notifySyncState({
       isSyncing: false,
       pendingCount: remaining.length,
-      lastSyncedAt: remaining.length === 0 ? Date.now() : currentSyncState.lastSyncedAt,
+      lastSyncedAt: successfullySyncedCount > 0 ? Date.now() : currentSyncState.lastSyncedAt,
     });
+
+    if (successfullySyncedCount > 0 && typeof window !== "undefined") {
+      window.dispatchEvent(
+        new CustomEvent(OFFLINE_SYNC_SUCCESS_EVENT, {
+          detail: {
+            syncedCount: successfullySyncedCount,
+            tables: Array.from(syncedTables),
+            remainingCount: remaining.length,
+          },
+        }),
+      );
+    }
+
+    if (remaining.length > 0 && navigator.onLine) {
+      triggerAutoSync(3000);
+    }
   }
 }
 
@@ -1151,21 +1314,53 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
   return nativeFetch(input, init);
 };
 
-// Register window online/offline listeners and service worker
+function startSyncWatchdog(): void {
+  if (typeof window === "undefined" || watchdogInterval !== null) return;
+  watchdogInterval = window.setInterval(async () => {
+    if (!navigator.onLine || syncInProgress) return;
+    try {
+      const items = await idbGetAll<SyncQueueItem>("sync_queue");
+      if (items.length > 0) {
+        void flushOfflineSyncQueue();
+      }
+    } catch {
+      // ignore
+    }
+  }, 4000);
+}
+
+// Register window online/offline listeners, visibility, focus, and background watchdog
 if (typeof window !== "undefined") {
   window.addEventListener("online", () => {
     notifySyncState({ isOnline: true });
-    void flushOfflineSyncQueue();
+    triggerAutoSync(0);
+    setTimeout(() => triggerAutoSync(1000), 1000);
+    setTimeout(() => triggerAutoSync(3000), 3000);
   });
+
   window.addEventListener("offline", () => {
     notifySyncState({ isOnline: false });
   });
 
-  // Initialize pending count on startup
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && navigator.onLine) {
+      triggerAutoSync(50);
+    }
+  });
+
+  window.addEventListener("focus", () => {
+    if (navigator.onLine) {
+      triggerAutoSync(50);
+    }
+  });
+
+  startSyncWatchdog();
+
+  // Initialize pending count on startup and sync immediately if online
   void idbGetAll<SyncQueueItem>("sync_queue").then((items) => {
     notifySyncState({ isOnline: navigator.onLine, pendingCount: items.length });
     if (navigator.onLine && items.length > 0) {
-      void flushOfflineSyncQueue();
+      triggerAutoSync(300);
     }
   });
 }

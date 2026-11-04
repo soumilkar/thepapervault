@@ -40,7 +40,10 @@ const BUCKET = "media";
 const storagePath = (userId: string) => `${userId}/vault-trackers.bin`;
 const localCacheKey = (userId: string) => `papervault:trackers:v1:${userId}`;
 
-async function readLocalEncrypted(userId: string, key: CryptoKey): Promise<VaultTrackersData | null> {
+async function readLocalEncrypted(
+  userId: string,
+  key: CryptoKey,
+): Promise<VaultTrackersData | null> {
   try {
     const raw = window.localStorage.getItem(localCacheKey(userId));
     if (!raw) return null;
@@ -53,7 +56,11 @@ async function readLocalEncrypted(userId: string, key: CryptoKey): Promise<Vault
   }
 }
 
-async function writeEncrypted(userId: string, key: CryptoKey, data: VaultTrackersData): Promise<void> {
+async function writeEncrypted(
+  userId: string,
+  key: CryptoKey,
+  data: VaultTrackersData,
+): Promise<void> {
   const payload: VaultTrackersData = {
     ...data,
     updated_at: new Date().toISOString(),
@@ -77,7 +84,9 @@ async function loadEncryptedTrackers(userId: string, key: CryptoKey): Promise<Va
   const local = await readLocalEncrypted(userId, key);
 
   try {
-    const { data: signed } = await supabase.storage.from(BUCKET).createSignedUrl(storagePath(userId), 60 * 10);
+    const { data: signed } = await supabase.storage
+      .from(BUCKET)
+      .createSignedUrl(storagePath(userId), 60 * 10);
     if (signed?.signedUrl) {
       const res = await fetch(signed.signedUrl);
       if (res.ok) {
@@ -86,7 +95,10 @@ async function loadEncryptedTrackers(userId: string, key: CryptoKey): Promise<Va
         if (parsed?.ct && parsed?.iv) {
           const plain = await decryptText(key, parsed.ct, parsed.iv);
           const remote = JSON.parse(plain) as VaultTrackersData;
-          if (!local || new Date(remote.updated_at).getTime() >= new Date(local.updated_at).getTime()) {
+          if (
+            !local ||
+            new Date(remote.updated_at).getTime() >= new Date(local.updated_at).getTime()
+          ) {
             try {
               window.localStorage.setItem(localCacheKey(userId), text);
             } catch {

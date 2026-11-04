@@ -2,14 +2,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { memo, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import {
-  BookOpen,
-  Image as ImageIcon,
-  PenLine,
-  Sparkles,
-  StickyNote,
-  Users,
-} from "lucide-react";
+import { BookOpen, Image as ImageIcon, PenLine, Sparkles, StickyNote, Users } from "lucide-react";
 import { WelcomeTour } from "@/components/WelcomeTour";
 import { Markdown } from "@/components/Markdown";
 import { MusicPlayer } from "@/components/MusicSearch";
@@ -106,8 +99,7 @@ function Dashboard() {
 
   const nonEmailCandidate = candidates.find((c) => c.toLowerCase() !== emailPrefix.toLowerCase());
   const name =
-    nonEmailCandidate ||
-    (profileQuery.isLoading ? "" : candidates[0] || emailPrefix || "friend");
+    nonEmailCandidate || (profileQuery.isLoading ? "" : candidates[0] || emailPrefix || "friend");
 
   return (
     <div className="space-y-10">

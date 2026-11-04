@@ -49,7 +49,9 @@ function suppressUseClientDirectiveWarnings(): Plugin {
       return {
         define: {
           "import.meta.env.VITE_SUPABASE_URL": JSON.stringify(resolvedSupabaseUrl),
-          "import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY": JSON.stringify(resolvedSupabasePublishableKey),
+          "import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY": JSON.stringify(
+            resolvedSupabasePublishableKey,
+          ),
           "import.meta.env.VITE_SUPABASE_ANON_KEY": JSON.stringify(resolvedSupabaseAnonKey),
         },
       };
@@ -65,7 +67,9 @@ function suppressUseClientDirectiveWarnings(): Plugin {
           serverDefines["process.env.SUPABASE_URL"] = JSON.stringify(resolvedSupabaseUrl);
         }
         if (resolvedSupabasePublishableKey) {
-          serverDefines["process.env.SUPABASE_PUBLISHABLE_KEY"] = JSON.stringify(resolvedSupabasePublishableKey);
+          serverDefines["process.env.SUPABASE_PUBLISHABLE_KEY"] = JSON.stringify(
+            resolvedSupabasePublishableKey,
+          );
         }
         if (resolvedSupabaseAnonKey) {
           serverDefines["process.env.SUPABASE_ANON_KEY"] = JSON.stringify(resolvedSupabaseAnonKey);

@@ -40,9 +40,7 @@ function AuthPage() {
         });
         if (error) throw error;
         if (data.user && data.session) {
-          await supabase
-            .from("profiles")
-            .upsert({ id: data.user.id, display_name: trimmedName });
+          await supabase.from("profiles").upsert({ id: data.user.id, display_name: trimmedName });
         }
         toast.success("Welcome! Check your email if confirmation is required.");
       } else {

@@ -1,10 +1,17 @@
-import { createClient, type Session, type SupabaseClient } from "@supabase/supabase-js";
+import {
+  createClient,
+  type AuthError,
+  type Session,
+  type SupabaseClient,
+} from "@supabase/supabase-js";
 import type { Database } from "./types";
 import { brokeredPreviewStorage } from "./previewAuthStorage";
 import {
   cacheAuthSession,
   getCachedAuthSession,
   offlineAwareSupabaseFetch,
+  registerAuthTokenGetter,
+  triggerAutoSync,
 } from "@/lib/offline-supabase";
 
 const MISSING_ENV_MESSAGE =
@@ -151,7 +158,7 @@ function createSupabaseClient(): SupabaseClient<Database> {
         }
       } catch (err) {
         if (typeof navigator !== "undefined" && navigator.onLine) {
-          return { data: { session: null }, error: err as any };
+          return { data: { session: null }, error: err as AuthError };
         }
       }
 
@@ -175,6 +182,37 @@ function createSupabaseClient(): SupabaseClient<Database> {
         return { error: null };
       }
     };
+
+    registerAuthTokenGetter(async (forceRefresh?: boolean) => {
+      try {
+        if (forceRefresh) {
+          const res = await client.auth.refreshSession();
+          if (res.data?.session?.access_token) {
+            cacheAuthSession(res.data.session);
+            return res.data.session.access_token;
+          }
+        }
+        const res = await client.auth.getSession();
+        if (res.data?.session?.access_token) {
+          cacheAuthSession(res.data.session);
+          return res.data.session.access_token;
+        }
+      } catch {
+        // fallback
+      }
+      return null;
+    });
+
+    client.auth.onAuthStateChange((event, session) => {
+      if (session) {
+        cacheAuthSession(session);
+        if (typeof navigator !== "undefined" && navigator.onLine) {
+          triggerAutoSync(200);
+        }
+      } else if (event === "SIGNED_OUT") {
+        cacheAuthSession(null);
+      }
+    });
   }
 
   return client;

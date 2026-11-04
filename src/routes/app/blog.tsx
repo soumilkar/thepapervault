@@ -4,8 +4,21 @@ import { memo, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import {
-  Trash2, Pencil, X, Check, BookOpen, Users, Heart, MessageCircle,
-  Bell, BellOff, ArrowUp, ArrowDown, CornerDownRight, Download, ImagePlus,
+  Trash2,
+  Pencil,
+  X,
+  Check,
+  BookOpen,
+  Users,
+  Heart,
+  MessageCircle,
+  Bell,
+  BellOff,
+  ArrowUp,
+  ArrowDown,
+  CornerDownRight,
+  Download,
+  ImagePlus,
 } from "lucide-react";
 import { MusicSearch, MusicPlayer, type SelectedTrack } from "@/components/MusicSearch";
 import { Markdown } from "@/components/Markdown";
@@ -32,7 +45,9 @@ async function uploadMedia(userId: string, file: File): Promise<string> {
   if (!ext) throw new Error("Only JPEG, PNG, WebP, or GIF images are allowed");
   if (file.size > 5 * 1024 * 1024) throw new Error("Image must be smaller than 5 MB");
   const path = `${userId}/${crypto.randomUUID()}.${ext}`;
-  const { error } = await supabase.storage.from(MEDIA_BUCKET).upload(path, file, { contentType: file.type });
+  const { error } = await supabase.storage
+    .from(MEDIA_BUCKET)
+    .upload(path, file, { contentType: file.type });
   if (error) throw error;
   return path;
 }
@@ -46,19 +61,29 @@ async function getMediaUrl(path: string | null): Promise<string | null> {
 function BlogPage() {
   const { user } = Route.useRouteContext();
   const qc = useQueryClient();
-  type BlogDraft = { title: string; content: string; tags: string; music: SelectedTrack | null; notify: boolean };
-  const [draft, setDraft, clearDraft, draftReady] = useBrowserDraft<BlogDraft>(`papervault:blog-draft:${user.id}`, {
-    title: "",
-    content: "",
-    tags: "",
-    music: null,
-    notify: true,
-  });
+  type BlogDraft = {
+    title: string;
+    content: string;
+    tags: string;
+    music: SelectedTrack | null;
+    notify: boolean;
+  };
+  const [draft, setDraft, clearDraft, draftReady] = useBrowserDraft<BlogDraft>(
+    `papervault:blog-draft:${user.id}`,
+    {
+      title: "",
+      content: "",
+      tags: "",
+      music: null,
+      notify: true,
+    },
+  );
   const { title, content, tags, music, notify } = draft;
   const setTitle = (value: string) => setDraft((current) => ({ ...current, title: value }));
   const setContent = (value: string) => setDraft((current) => ({ ...current, content: value }));
   const setTags = (value: string) => setDraft((current) => ({ ...current, tags: value }));
-  const setMusic = (value: SelectedTrack | null) => setDraft((current) => ({ ...current, music: value }));
+  const setMusic = (value: SelectedTrack | null) =>
+    setDraft((current) => ({ ...current, music: value }));
   const setNotify = (value: boolean) => setDraft((current) => ({ ...current, notify: value }));
   const [image, setImage] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
@@ -106,7 +131,10 @@ function BlogPage() {
       const ids = Array.from(new Set((posts ?? []).map((p) => p.user_id)));
       const nameMap = new Map<string, string>();
       if (ids.length) {
-        const { data: profs } = await supabase.from("profiles").select("id, display_name").in("id", ids);
+        const { data: profs } = await supabase
+          .from("profiles")
+          .select("id, display_name")
+          .in("id", ids);
         (profs ?? []).forEach((p) => nameMap.set(p.id, p.display_name || "someone"));
       }
       return (posts ?? []).map((p) => ({ ...p, author: nameMap.get(p.user_id) || "someone" }));
@@ -193,7 +221,10 @@ function BlogPage() {
         }
         patch.image_url = null;
       }
-      const { error } = await supabase.from("blog_posts").update(patch as never).eq("id", vars.id);
+      const { error } = await supabase
+        .from("blog_posts")
+        .update(patch as never)
+        .eq("id", vars.id);
       if (error) throw error;
     },
     onSuccess: () => {
@@ -272,7 +303,11 @@ function BlogPage() {
           />
           {imagePreview && (
             <div className="relative inline-block">
-              <img src={imagePreview} alt="preview" className="max-h-56 rounded-md border border-border" />
+              <img
+                src={imagePreview}
+                alt="preview"
+                className="max-h-56 rounded-md border border-border"
+              />
               <button
                 type="button"
                 onClick={() => setImage(null)}
@@ -310,7 +345,11 @@ function BlogPage() {
               className="size-4 accent-primary"
             />
             <span className="flex items-center gap-1">
-              {notify ? <Bell className="size-3.5 text-accent" /> : <BellOff className="size-3.5" />}
+              {notify ? (
+                <Bell className="size-3.5 text-accent" />
+              ) : (
+                <BellOff className="size-3.5" />
+              )}
               Email me when someone comments on this post
             </span>
           </label>
@@ -358,10 +397,20 @@ function BlogPage() {
         </div>
       ) : (
         <div className="space-y-4">
-          {community.isLoading && <p className="text-muted-foreground">Loading community stories...</p>}
-          {community.data?.length === 0 && <p className="text-muted-foreground">No posts from others yet.</p>}
+          {community.isLoading && (
+            <p className="text-muted-foreground">Loading community stories...</p>
+          )}
+          {community.data?.length === 0 && (
+            <p className="text-muted-foreground">No posts from others yet.</p>
+          )}
           {community.data?.map((p) => (
-            <BlogCard key={p.id} post={p} currentUserId={user.id} isOwner={false} author={p.author} />
+            <BlogCard
+              key={p.id}
+              post={p}
+              currentUserId={user.id}
+              isOwner={false}
+              author={p.author}
+            />
           ))}
         </div>
       )}
@@ -384,7 +433,9 @@ function TabBtn({
     <button
       onClick={onClick}
       className={`flex items-center gap-2 border-b-2 px-4 py-2 text-sm transition ${
-        active ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-primary"
+        active
+          ? "border-primary text-primary"
+          : "border-transparent text-muted-foreground hover:text-primary"
       }`}
     >
       {icon}
@@ -517,7 +568,13 @@ const BlogCard = memo(function BlogCard({
 
         <label className="flex cursor-pointer items-center gap-2 text-sm text-accent hover:text-primary">
           <ImagePlus className="size-4" />
-          <span>{eImage ? "Change image" : p.image_url && !eClearImage ? "Replace image" : "Attach image"}</span>
+          <span>
+            {eImage
+              ? "Change image"
+              : p.image_url && !eClearImage
+                ? "Replace image"
+                : "Attach image"}
+          </span>
           <input
             type="file"
             accept="image/*"
@@ -573,10 +630,16 @@ const BlogCard = memo(function BlogCard({
           <span className="break-words">{p.title}</span>
         </button>
         <div className="flex shrink-0 items-center gap-3">
-          <span className="font-hand text-sepia">{new Date(p.created_at).toLocaleDateString()}</span>
+          <span className="font-hand text-sepia">
+            {new Date(p.created_at).toLocaleDateString()}
+          </span>
           {isOwner && (
             <>
-              <button onClick={startEdit} className="text-muted-foreground hover:text-primary" aria-label="Edit">
+              <button
+                onClick={startEdit}
+                className="text-muted-foreground hover:text-primary"
+                aria-label="Edit"
+              >
                 <Pencil className="size-4" />
               </button>
               <button
@@ -594,18 +657,28 @@ const BlogCard = memo(function BlogCard({
       {p.tags && p.tags.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-2">
           {p.tags.map((t: string) => (
-            <span key={t} className="rounded-full bg-secondary px-2 py-0.5 text-xs text-secondary-foreground">
+            <span
+              key={t}
+              className="rounded-full bg-secondary px-2 py-0.5 text-xs text-secondary-foreground"
+            >
               #{t}
             </span>
           ))}
         </div>
       )}
       <div className="mt-3">
-        {open ? <Markdown>{p.content}</Markdown> : <p className="whitespace-pre-wrap leading-relaxed">{preview}</p>}
+        {open ? (
+          <Markdown>{p.content}</Markdown>
+        ) : (
+          <p className="whitespace-pre-wrap leading-relaxed">{preview}</p>
+        )}
       </div>
       {open && p.image_url && <BlogImage path={p.image_url} />}
       {p.content.length > 220 && (
-        <button onClick={() => setOpen((o) => !o)} className="mt-2 text-sm text-accent hover:text-primary">
+        <button
+          onClick={() => setOpen((o) => !o)}
+          className="mt-2 text-sm text-accent hover:text-primary"
+        >
           {open ? "Show less" : "Read more"}
         </button>
       )}
@@ -621,7 +694,9 @@ const BlogCard = memo(function BlogCard({
         </button>
       </div>
 
-      {showComments && <Comments postId={p.id} postAuthorId={p.user_id} currentUserId={currentUserId} />}
+      {showComments && (
+        <Comments postId={p.id} postAuthorId={p.user_id} currentUserId={currentUserId} />
+      )}
 
       <ConfirmDialog
         open={confirmDel}
@@ -643,7 +718,10 @@ function LikeButton({ postId, currentUserId }: { postId: string; currentUserId: 
   const likes = useQuery({
     queryKey: ["likes", postId],
     queryFn: async () => {
-      const { data, error } = await supabase.from("blog_likes").select("user_id").eq("post_id", postId);
+      const { data, error } = await supabase
+        .from("blog_likes")
+        .select("user_id")
+        .eq("post_id", postId);
       if (error) throw error;
       const rows = data ?? [];
       return {
@@ -663,7 +741,9 @@ function LikeButton({ postId, currentUserId }: { postId: string; currentUserId: 
           .eq("user_id", currentUserId);
         if (error) throw error;
       } else {
-        const { error } = await supabase.from("blog_likes").insert({ post_id: postId, user_id: currentUserId });
+        const { error } = await supabase
+          .from("blog_likes")
+          .insert({ post_id: postId, user_id: currentUserId });
         if (error) throw error;
       }
     },
@@ -720,7 +800,10 @@ function Comments({
       const ids = Array.from(new Set((data ?? []).map((c) => c.user_id)));
       const nameMap = new Map<string, string>();
       if (ids.length) {
-        const { data: profs } = await supabase.from("profiles").select("id, display_name").in("id", ids);
+        const { data: profs } = await supabase
+          .from("profiles")
+          .select("id, display_name")
+          .in("id", ids);
         (profs ?? []).forEach((p) => nameMap.set(p.id, p.display_name || "someone"));
       }
       return (data ?? []).map((c: any) => ({ ...c, author: nameMap.get(c.user_id) || "someone" }));
@@ -778,7 +861,9 @@ function Comments({
 
   return (
     <div className="mt-3 space-y-3 border-t border-border/60 pt-3">
-      {tree.length === 0 && <p className="text-sm text-muted-foreground">Be the first to comment.</p>}
+      {tree.length === 0 && (
+        <p className="text-sm text-muted-foreground">Be the first to comment.</p>
+      )}
       {tree.map((c) => (
         <CommentItem
           key={c.id}
@@ -901,7 +986,10 @@ function CommentItem({
             >
               Cancel
             </button>
-            <button type="submit" className="rounded-md bg-primary px-2.5 py-1 text-xs text-primary-foreground">
+            <button
+              type="submit"
+              className="rounded-md bg-primary px-2.5 py-1 text-xs text-primary-foreground"
+            >
               Save
             </button>
           </div>
@@ -938,7 +1026,10 @@ function CommentItem({
             placeholder={`Reply to ${c.author}...`}
             className="flex-1 rounded-md border border-input bg-card px-2 py-1 text-xs outline-none focus:border-ring"
           />
-          <button type="submit" className="rounded-md bg-primary px-2.5 py-1 text-xs text-primary-foreground">
+          <button
+            type="submit"
+            className="rounded-md bg-primary px-2.5 py-1 text-xs text-primary-foreground"
+          >
             Send
           </button>
         </form>

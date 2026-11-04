@@ -33,9 +33,7 @@ self.addEventListener("activate", (event) => {
       .keys()
       .then((keys) =>
         Promise.all(
-          keys
-            .filter((k) => k !== CACHE_NAME && k !== FONT_CACHE)
-            .map((k) => caches.delete(k)),
+          keys.filter((k) => k !== CACHE_NAME && k !== FONT_CACHE).map((k) => caches.delete(k)),
         ),
       )
       .then(() => self.clients.claim()),
@@ -52,10 +50,7 @@ self.addEventListener("fetch", (event) => {
   if (url.pathname.startsWith("/api/")) return;
 
   // Cache Google Fonts
-  if (
-    url.hostname === "fonts.googleapis.com" ||
-    url.hostname === "fonts.gstatic.com"
-  ) {
+  if (url.hostname === "fonts.googleapis.com" || url.hostname === "fonts.gstatic.com") {
     event.respondWith(
       caches.open(FONT_CACHE).then(async (cache) => {
         const cached = await cache.match(request);
