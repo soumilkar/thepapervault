@@ -2,7 +2,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { memo, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { BookOpen, Image as ImageIcon, PenLine, Sparkles, Users } from "lucide-react";
+import { BookOpen, Image as ImageIcon, PenLine, Sparkles, StickyNote, Users } from "lucide-react";
 import { WelcomeTour } from "@/components/WelcomeTour";
 import { Markdown } from "@/components/Markdown";
 import { MusicPlayer } from "@/components/MusicSearch";
@@ -35,12 +35,20 @@ function Dashboard() {
   const counts = useQuery({
     queryKey: ["dashboard-counts", user.id],
     queryFn: async () => {
-      const [b, g, u] = await Promise.all([
-        supabase.from("blog_posts").select("id", { count: "exact", head: true }).eq("user_id", user.id),
-        supabase.from("gallery_images").select("id", { count: "exact", head: true }).eq("user_id", user.id),
+      const [n, b, g, u] = await Promise.all([
+        supabase.from("notes").select("id", { count: "exact", head: true }).eq("user_id", user.id),
+        supabase
+          .from("blog_posts")
+          .select("id", { count: "exact", head: true })
+          .eq("user_id", user.id),
+        supabase
+          .from("gallery_images")
+          .select("id", { count: "exact", head: true })
+          .eq("user_id", user.id),
         supabase.from("profiles").select("id", { count: "exact", head: true }),
       ]);
       return {
+        notes: n.count ?? 0,
         blog: b.count ?? 0,
         gallery: g.count ?? 0,
         totalUsers: u.count ?? 0,
@@ -53,7 +61,9 @@ function Dashboard() {
     queryFn: async (): Promise<PublicDiary[]> => {
       const { data, error } = await supabase
         .from("diary_entries")
-        .select("id,title,content,mood,entry_date,music_track_name,music_artist,music_preview_url,music_artwork_url" as never)
+        .select(
+          "id,title,content,mood,entry_date,music_track_name,music_artist,music_preview_url,music_artwork_url" as never,
+        )
         .eq("is_public", true)
         .neq("user_id", user.id)
         .order("entry_date", { ascending: false })
@@ -82,17 +92,25 @@ function Dashboard() {
           <Users className="size-5 text-accent" />
           <div className="leading-tight">
             <div className="font-serif text-2xl text-primary">{counts.data?.totalUsers ?? "—"}</div>
-            <div className="text-[11px] uppercase tracking-wide text-muted-foreground">writers here</div>
+            <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
+              writers here
+            </div>
           </div>
         </div>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
         <StatCard
           to="/app/diary"
           icon={<PenLine className="size-5" />}
           label="Your diary entries"
           value={diaryMetrics.data?.length ?? 0}
+        />
+        <StatCard
+          to="/app/notes"
+          icon={<StickyNote className="size-5" />}
+          label="Your notes"
+          value={counts.data?.notes ?? 0}
         />
         <StatCard
           to="/app/blog"
@@ -106,7 +124,13 @@ function Dashboard() {
           label="Your gallery photos"
           value={counts.data?.gallery ?? 0}
         />
-        <StatCard to="/app/chat" icon={<Sparkles className="size-5" />} label="Talk to companion" value="→" />
+        <StatCard
+          to="/app/chat"
+          icon={<Sparkles className="size-5" />}
+          label="Talk to companion"
+          value="→"
+          className="sm:col-span-2 lg:col-span-1"
+        />
       </div>
 
       <div className="space-y-6">
@@ -133,9 +157,13 @@ function Dashboard() {
         <div className="space-y-4">
           {feed.isLoading && <p className="font-hand text-sepia">listening for strangers...</p>}
           {feed.data?.length === 0 && (
-            <p className="text-muted-foreground">No public entries yet. Be the first from your Diary tab.</p>
+            <p className="text-muted-foreground">
+              No public entries yet. Be the first from your Diary tab.
+            </p>
           )}
-          {feed.data?.map((e) => <FeedCard key={e.id} entry={e} />)}
+          {feed.data?.map((e) => (
+            <FeedCard key={e.id} entry={e} />
+          ))}
         </div>
       </section>
     </div>
@@ -147,19 +175,24 @@ function StatCard({
   icon,
   label,
   value,
+  className = "",
 }: {
   to: string;
   icon: React.ReactNode;
   label: string;
   value: number | string;
+  className?: string;
 }) {
   return (
-    <Link to={to} className="paper-card block p-5 transition hover:-translate-y-0.5 hover:shadow-md">
+    <Link
+      to={to}
+      className={`paper-card flex flex-col justify-between p-5 transition hover:-translate-y-0.5 hover:shadow-md min-h-[104px] ${className}`}
+    >
       <div className="flex items-center gap-2 text-accent">
         {icon}
-        <span className="text-sm text-muted-foreground">{label}</span>
+        <span className="text-sm font-medium text-muted-foreground">{label}</span>
       </div>
-      <div className="mt-2 font-serif text-3xl text-primary">{value}</div>
+      <div className="mt-2 font-serif text-3xl text-primary tabular-nums">{value}</div>
     </Link>
   );
 }
@@ -204,7 +237,10 @@ const FeedCard = memo(function FeedCard({ entry: e }: { entry: PublicDiary }) {
         />
       )}
       {long && (
-        <button onClick={() => setOpen((o) => !o)} className="mt-2 text-sm text-accent hover:text-primary">
+        <button
+          onClick={() => setOpen((o) => !o)}
+          className="mt-2 text-sm text-accent hover:text-primary"
+        >
           {open ? "Show less" : "Read more"}
         </button>
       )}
