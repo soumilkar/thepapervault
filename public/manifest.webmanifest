@@ -1,0 +1,33 @@
+{
+  "id": "/",
+  "name": "The PaperVault — Your personal journal",
+  "short_name": "PaperVault",
+  "description": "A warm, private space for your diary, blog, gallery, and an AI companion that knows your story.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#f6ede0",
+  "theme_color": "#6f371e",
+  "categories": ["lifestyle", "productivity", "books"],
+  "icons": [
+    {
+      "src": "/pwa-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-maskable-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

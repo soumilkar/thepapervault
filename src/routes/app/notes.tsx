@@ -13,8 +13,10 @@ import {
   ChevronRight,
   ChevronDown,
   FileText,
+  Pencil,
 } from "lucide-react";
 import { RichEditor } from "@/components/RichEditor";
+import { RichText } from "@/components/RichText";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { AppSelect } from "@/components/AppSelect";
 import { useBrowserDraft } from "@/lib/browser-drafts";
@@ -327,7 +329,7 @@ function NotesPage() {
     setIsCreatingNew(true);
     setSelectedNoteId(null);
     setDraft((c) => ({ ...c, activeNoteId: null }));
-    setSheetEditing(false);
+    setSheetEditing(true);
     setDraftPreview(false);
     setBrowseOpen(false);
     setTimeout(() => textareaRef.current?.focus(), 30);
@@ -470,6 +472,7 @@ function NotesPage() {
         (old ?? []).map((n) => (n.id === updatedNote.id ? updatedNote : n)),
       );
       setSImage(null);
+      setSheetEditing(false);
       toast.success("Note updated");
       qc.invalidateQueries({ queryKey: ["notes"] });
     },
@@ -850,6 +853,23 @@ function NotesPage() {
         </div>
 
         <div className="flex items-center gap-2">
+          {activeNote && !isCreatingNew && (
+            <button
+              type="button"
+              onClick={() => setSheetEditing((prev) => !prev)}
+              title={sheetEditing ? "Done editing" : "Edit note"}
+              aria-label={sheetEditing ? "Done editing" : "Edit note"}
+              className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition ${
+                sheetEditing
+                  ? "border-primary bg-primary text-primary-foreground shadow-2xs hover:opacity-95"
+                  : "border-border/80 bg-secondary/40 text-primary hover:bg-secondary"
+              }`}
+            >
+              <Pencil className="size-3.5" />
+              <span>{sheetEditing ? "Done editing" : "Edit note"}</span>
+            </button>
+          )}
+
           <button
             type="button"
             onClick={() => {
@@ -870,158 +890,208 @@ function NotesPage() {
         </div>
       </div>
 
-      {/* Main Studio Sheet Card with Instant WYSIWYG RichEditor */}
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (activeNote) {
-            update.mutate(
-              {
-                note: activeNote,
-                title: sTitle,
-                content: sContent,
-                tags: sTags,
-                folder_id: sFolderId,
-                newImage: sImage,
-              },
-              {
-                onSuccess: () => setSheetEditing(false),
-              },
-            );
-          } else if (content.trim() || title.trim() || image) {
-            create.mutate();
-          }
-        }}
-        className="rounded-2xl border border-border bg-card shadow-sm"
-      >
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="image/*"
-          className="hidden"
-          onChange={(e) => {
-            const f = e.target.files?.[0];
-            if (f) {
-              if (f.size > 5 * 1024 * 1024) {
-                toast.error("Image must be smaller than 5 MB");
-              } else if (activeNote) {
-                setSImage(f);
-                setSheetEditing(true);
-              } else {
-                setImage(f);
-              }
-            }
-            e.currentTarget.value = "";
-          }}
-        />
+      {/* Main Studio Sheet: Clean View Mode or Instant WYSIWYG RichEditor */}
+      {activeNote && !sheetEditing && !isCreatingNew ? (
+        <div className="space-y-6 rounded-2xl border border-border bg-card p-6 shadow-sm sm:p-8">
+          <div className="flex items-start justify-between gap-4 border-b border-border/60 pb-4">
+            <h2 className="break-words font-serif text-3xl leading-tight text-primary sm:text-4xl">
+              {activeNote.title || "Untitled"}
+            </h2>
+            <button
+              type="button"
+              onClick={() => setSheetEditing(true)}
+              title="Edit note"
+              aria-label="Edit note"
+              className="flex shrink-0 items-center gap-1.5 rounded-xl border border-border/80 bg-secondary/40 px-3.5 py-1.5 text-xs font-medium text-primary shadow-2xs transition hover:bg-secondary hover:text-primary"
+            >
+              <Pencil className="size-3.5" />
+              <span>Edit</span>
+            </button>
+          </div>
 
-        <RichEditor
-          value={currentText}
-          onChange={updateCurrentText}
-          placeholder="Jot something down..."
-          minHeightClass="min-h-[260px]"
-          onPhotoClick={() => fileInputRef.current?.click()}
-          photoLabel="Photo"
-          headerSlot={
-            <textarea
-              ref={titleInputRef}
-              rows={1}
-              value={currentTitle}
-              onChange={(e) => {
-                const next = e.target.value.replace(/\r?\n/g, " ");
-                if (activeNote) {
-                  setSTitle(next);
-                } else {
-                  setTitle(next);
-                }
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                }
-              }}
-              placeholder="Title"
-              className="block w-full resize-none overflow-hidden break-words bg-transparent font-serif text-3xl leading-tight text-primary outline-none placeholder:text-muted-foreground/50 sm:text-4xl"
+          <div className="min-h-[200px]">
+            {activeNote.content ? (
+              <RichText className="text-foreground/90">{activeNote.content}</RichText>
+            ) : (
+              <p className="italic text-muted-foreground/60">(No content)</p>
+            )}
+          </div>
+
+          {activeNote.image_url && (
+            <NoteImage
+              path={activeNote.image_url}
+              iv={activeNote.image_iv}
+              mime={activeNote.image_mime}
+              cryptoKey={key}
+              framed
             />
-          }
-          footerSlot={
-            <>
-              {/* Attached image preview for new note or updated note */}
-              {(activeNote ? sImagePreview : imagePreview) && (
-                <div className="relative rounded-2xl border border-border bg-secondary/35 p-3 sm:p-4">
-                  <div className="overflow-hidden rounded-xl border border-border/80 bg-card">
-                    <img
-                      src={(activeNote ? sImagePreview : imagePreview) ?? ""}
-                      className="max-h-96 w-full object-contain"
-                      alt=""
-                    />
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => (activeNote ? setSImage(null) : setImage(null))}
-                    className="absolute right-5 top-5 rounded-full border border-border bg-card p-1.5 shadow-sm hover:bg-secondary"
-                    aria-label="Remove attached image"
-                  >
-                    <X className="size-4" />
-                  </button>
-                </div>
-              )}
+          )}
 
-              {activeNote && !sImagePreview && activeNote.image_url && (
-                <NoteImage
-                  path={activeNote.image_url}
-                  iv={activeNote.image_iv}
-                  mime={activeNote.image_mime}
-                  cryptoKey={key}
-                  framed
-                />
-              )}
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border/60 pt-4 text-xs uppercase tracking-wide text-muted-foreground">
+            <span>
+              {(() => {
+                const words = activeNote.content.trim() ? activeNote.content.trim().split(/\s+/).length : 0;
+                return `${words} ${words === 1 ? "word" : "words"}`;
+              })()}
+            </span>
+            <span className="normal-case tracking-normal text-muted-foreground/75">
+              Saved {formatSheetDate(activeNote.updated_at || activeNote.created_at)}
+            </span>
+          </div>
+        </div>
+      ) : (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (activeNote) {
+              update.mutate(
+                {
+                  note: activeNote,
+                  title: sTitle,
+                  content: sContent,
+                  tags: sTags,
+                  folder_id: sFolderId,
+                  newImage: sImage,
+                },
+                {
+                  onSuccess: () => setSheetEditing(false),
+                },
+              );
+            } else if (content.trim() || title.trim() || image) {
+              create.mutate();
+            }
+          }}
+          className="rounded-2xl border border-border bg-card shadow-sm"
+        >
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) {
+                if (f.size > 5 * 1024 * 1024) {
+                  toast.error("Image must be smaller than 5 MB");
+                } else if (activeNote) {
+                  setSImage(f);
+                  setSheetEditing(true);
+                } else {
+                  setImage(f);
+                }
+              }
+              e.currentTarget.value = "";
+            }}
+          />
 
-              {/* Sheet Footer Action Bar */}
-              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border/60 pt-4">
-                <span className="text-xs uppercase tracking-wide text-muted-foreground">
-                  {(() => {
-                    const words = currentText.trim() ? currentText.trim().split(/\s+/).length : 0;
-                    return `${words} ${words === 1 ? "word" : "words"}`;
-                  })()}
-                </span>
-
-                <div className="flex items-center gap-2">
-                  {activeNote && hasActiveNoteChanges && (
+          <RichEditor
+            value={currentText}
+            onChange={updateCurrentText}
+            placeholder="Jot something down..."
+            minHeightClass="min-h-[260px]"
+            onPhotoClick={() => fileInputRef.current?.click()}
+            photoLabel="Photo"
+            headerSlot={
+              <textarea
+                ref={titleInputRef}
+                rows={1}
+                value={currentTitle}
+                onChange={(e) => {
+                  const next = e.target.value.replace(/\r?\n/g, " ");
+                  if (activeNote) {
+                    setSTitle(next);
+                  } else {
+                    setTitle(next);
+                  }
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                  }
+                }}
+                placeholder="Title"
+                className="block w-full resize-none overflow-hidden break-words bg-transparent font-serif text-3xl leading-tight text-primary outline-none placeholder:text-muted-foreground/50 sm:text-4xl"
+              />
+            }
+            footerSlot={
+              <>
+                {/* Attached image preview for new note or updated note */}
+                {(activeNote ? sImagePreview : imagePreview) && (
+                  <div className="relative rounded-2xl border border-border bg-secondary/35 p-3 sm:p-4">
+                    <div className="overflow-hidden rounded-xl border border-border/80 bg-card">
+                      <img
+                        src={(activeNote ? sImagePreview : imagePreview) ?? ""}
+                        className="max-h-96 w-full object-contain"
+                        alt=""
+                      />
+                    </div>
                     <button
                       type="button"
-                      onClick={() => {
-                        setSTitle(activeNote.title);
-                        setSContent(activeNote.content);
-                        setSTags(activeNote.tags.join(", "));
-                        setSFolderId(activeNote.folder_id);
-                        setSImage(null);
-                        setSheetEditing(false);
-                      }}
-                      className="flex items-center gap-1 rounded-lg border border-border px-3.5 py-2 text-sm hover:bg-secondary"
+                      onClick={() => (activeNote ? setSImage(null) : setImage(null))}
+                      className="absolute right-5 top-5 rounded-full border border-border bg-card p-1.5 shadow-sm hover:bg-secondary"
+                      aria-label="Remove attached image"
                     >
-                      <X className="size-4" /> Cancel
+                      <X className="size-4" />
                     </button>
-                  )}
-                  <button
-                    type="submit"
-                    disabled={(activeNote ? update.isPending : create.isPending) || !key}
-                    className="rounded-xl bg-primary px-5 py-2 text-sm font-medium text-primary-foreground shadow-sm transition hover:opacity-95 disabled:opacity-50"
-                  >
-                    {activeNote
-                      ? update.isPending
-                        ? "Saving..."
-                        : "Save changes"
-                      : create.isPending
-                        ? "Saving..."
-                        : "Save note"}
-                  </button>
+                  </div>
+                )}
+
+                {activeNote && !sImagePreview && activeNote.image_url && (
+                  <NoteImage
+                    path={activeNote.image_url}
+                    iv={activeNote.image_iv}
+                    mime={activeNote.image_mime}
+                    cryptoKey={key}
+                    framed
+                  />
+                )}
+
+                {/* Sheet Footer Action Bar */}
+                <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border/60 pt-4">
+                  <span className="text-xs uppercase tracking-wide text-muted-foreground">
+                    {(() => {
+                      const words = currentText.trim() ? currentText.trim().split(/\s+/).length : 0;
+                      return `${words} ${words === 1 ? "word" : "words"}`;
+                    })()}
+                  </span>
+
+                  <div className="flex items-center gap-2">
+                    {activeNote && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSTitle(activeNote.title);
+                          setSContent(activeNote.content);
+                          setSTags(activeNote.tags.join(", "));
+                          setSFolderId(activeNote.folder_id);
+                          setSImage(null);
+                          setSheetEditing(false);
+                        }}
+                        className="flex items-center gap-1 rounded-lg border border-border px-3.5 py-2 text-sm hover:bg-secondary"
+                      >
+                        <X className="size-4" /> Cancel
+                      </button>
+                    )}
+                    <button
+                      type="submit"
+                      disabled={(activeNote ? update.isPending : create.isPending) || !key}
+                      className="rounded-xl bg-primary px-5 py-2 text-sm font-medium text-primary-foreground shadow-sm transition hover:opacity-95 disabled:opacity-50"
+                    >
+                      {activeNote
+                        ? update.isPending
+                          ? "Saving..."
+                          : "Save changes"
+                        : create.isPending
+                          ? "Saving..."
+                          : "Save note"}
+                    </button>
+                  </div>
                 </div>
-              </div>
-            </>
-          }
-        />
-      </form>
+              </>
+            }
+          />
+        </form>
+      )}
 
       <ConfirmDialog
         open={confirmDeleteActive}
