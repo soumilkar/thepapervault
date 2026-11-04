@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import { useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { deriveDataKey, deriveVerifier, randomBytes, timingSafeEqualStr, toB64 } from "@/lib/crypto";
+import { clearOfflineBlobUrls } from "@/lib/offline-supabase";
 
 type VaultStatus = "loading" | "needs_setup" | "locked" | "unlocked";
 
@@ -130,6 +131,7 @@ export function VaultProvider({ userId, children }: { userId: string; children: 
     setStatus(kdfSalt ? "locked" : "needs_setup");
     // Wipe all decrypted data from React Query memory cache immediately on lock
     qc.clear();
+    clearOfflineBlobUrls();
   }, [kdfSalt, qc]);
 
   // Auto-lock the vault and wipe memory after prolonged inactivity

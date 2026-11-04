@@ -908,20 +908,10 @@ function NotesPage() {
       {/* Main Studio Sheet: Clean View Mode or Instant WYSIWYG RichEditor */}
       {activeNote && !sheetEditing && !isCreatingNew ? (
         <div className="space-y-6 rounded-2xl border border-border bg-card p-6 shadow-sm sm:p-8">
-          <div className="flex items-start justify-between gap-4 border-b border-border/60 pb-4">
+          <div className="border-b border-border/60 pb-4">
             <h2 className="break-words font-serif text-3xl leading-tight text-primary sm:text-4xl">
               {activeNote.title || "Untitled"}
             </h2>
-            <button
-              type="button"
-              onClick={() => setSheetEditing(true)}
-              title="Edit note"
-              aria-label="Edit note"
-              className="flex shrink-0 items-center gap-1.5 rounded-xl border border-border/80 bg-secondary/40 px-3.5 py-1.5 text-xs font-medium text-primary shadow-2xs transition hover:bg-secondary hover:text-primary"
-            >
-              <Pencil className="size-3.5" />
-              <span>Edit</span>
-            </button>
           </div>
 
           <div className="min-h-[200px]">

@@ -180,6 +180,17 @@ async function saveStorageBlob(bucket: string, path: string, blob: Blob, content
 
 const blobUrlCache = new Map<string, string>();
 
+export function clearOfflineBlobUrls(): void {
+  for (const url of blobUrlCache.values()) {
+    try {
+      URL.revokeObjectURL(url);
+    } catch {
+      // ignore
+    }
+  }
+  blobUrlCache.clear();
+}
+
 async function getStorageBlobUrl(bucket: string, path: string): Promise<string | null> {
   const key = `${bucket}/${path}`;
   try {
