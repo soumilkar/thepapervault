@@ -2,7 +2,14 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { memo, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { BookOpen, Image as ImageIcon, PenLine, Sparkles, StickyNote, Users } from "lucide-react";
+import {
+  BookOpen,
+  Image as ImageIcon,
+  PenLine,
+  Sparkles,
+  StickyNote,
+  Users,
+} from "lucide-react";
 import { WelcomeTour } from "@/components/WelcomeTour";
 import { Markdown } from "@/components/Markdown";
 import { MusicPlayer } from "@/components/MusicSearch";
@@ -29,8 +36,21 @@ type PublicDiary = {
 };
 
 function Dashboard() {
-  const { user } = Route.useRouteContext();
+  const { user, profileDisplayName } = Route.useRouteContext();
   const diaryMetrics = useDiaryMetrics(user.id);
+
+  const profileQuery = useQuery({
+    queryKey: ["user-profile", user.id],
+    initialData: profileDisplayName ? { id: user.id, display_name: profileDisplayName } : undefined,
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("profiles")
+        .select("id, display_name")
+        .eq("id", user.id)
+        .maybeSingle();
+      return data;
+    },
+  });
 
   const counts = useQuery({
     queryKey: ["dashboard-counts", user.id],
@@ -73,12 +93,21 @@ function Dashboard() {
     },
   });
 
+  const emailPrefix = user.email?.split("@")[0] ?? "";
+  const candidates = [
+    profileQuery.data?.display_name,
+    profileDisplayName,
+    user.user_metadata?.display_name as string | undefined,
+    user.user_metadata?.full_name as string | undefined,
+    user.user_metadata?.name as string | undefined,
+  ]
+    .map((c) => c?.trim())
+    .filter((c): c is string => Boolean(c));
+
+  const nonEmailCandidate = candidates.find((c) => c.toLowerCase() !== emailPrefix.toLowerCase());
   const name =
-    user.user_metadata?.display_name ||
-    user.user_metadata?.full_name ||
-    user.user_metadata?.name ||
-    user.email?.split("@")[0] ||
-    "friend";
+    nonEmailCandidate ||
+    (profileQuery.isLoading ? "" : candidates[0] || emailPrefix || "friend");
 
   return (
     <div className="space-y-10">
@@ -86,7 +115,9 @@ function Dashboard() {
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <p className="font-hand text-2xl text-sepia">hello again</p>
-          <h1 className="font-serif text-5xl text-primary">Welcome back, {name}.</h1>
+          <h1 className="font-serif text-5xl text-primary">
+            Welcome back{name ? `, ${name}` : ""}.
+          </h1>
         </div>
         <div className="flex items-center gap-3 rounded-full border border-border bg-card/70 px-4 py-2 shadow-sm">
           <Users className="size-5 text-accent" />

@@ -14,6 +14,8 @@ import {
   ChevronDown,
   FileText,
   Pencil,
+  ScanText,
+  Loader2,
 } from "lucide-react";
 import { RichEditor } from "@/components/RichEditor";
 import { RichText } from "@/components/RichText";
@@ -21,8 +23,16 @@ import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { AppSelect } from "@/components/AppSelect";
 import { useBrowserDraft } from "@/lib/browser-drafts";
 import { useVault } from "@/lib/vault";
-import { decryptBytes, decryptField, decryptText, encryptBlob, encryptField, encryptText } from "@/lib/crypto";
+import {
+  decryptBytes,
+  decryptField,
+  decryptText,
+  encryptBlob,
+  encryptField,
+  encryptText,
+} from "@/lib/crypto";
 import { folderOptions, folderWithDescendants, type FolderRow } from "@/lib/folders";
+import { transcribeHandwritingFile } from "@/lib/handwriting-ocr";
 
 const NONE = "__none__";
 
@@ -31,9 +41,15 @@ export const Route = createFileRoute("/app/notes")({
   head: () => ({
     meta: [
       { title: "Notes · The PaperVault" },
-      { name: "description", content: "Private, end-to-end encrypted notes with folders, tags and search." },
+      {
+        name: "description",
+        content: "Private, end-to-end encrypted notes with folders, tags and search.",
+      },
       { property: "og:title", content: "Notes · The PaperVault" },
-      { property: "og:description", content: "Private, end-to-end encrypted notes with folders, tags and search." },
+      {
+        property: "og:description",
+        content: "Private, end-to-end encrypted notes with folders, tags and search.",
+      },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary" },
     ],
@@ -107,13 +123,16 @@ function NotesPage() {
     folderId: string | null;
     activeNoteId?: string | null;
   };
-  const [draft, setDraft, clearDraft] = useBrowserDraft<NoteDraft>(`papervault:note-draft:${user.id}`, {
-    title: "",
-    content: "",
-    tags: "",
-    folderId: null,
-    activeNoteId: null,
-  });
+  const [draft, setDraft, clearDraft] = useBrowserDraft<NoteDraft>(
+    `papervault:note-draft:${user.id}`,
+    {
+      title: "",
+      content: "",
+      tags: "",
+      folderId: null,
+      activeNoteId: null,
+    },
+  );
   const { title, content, tags, folderId, activeNoteId: draftActiveNoteId } = draft;
   const setTitle = (value: string) => setDraft((c) => ({ ...c, title: value }));
   const setContent = (value: string) => setDraft((c) => ({ ...c, content: value }));
@@ -213,7 +232,10 @@ function NotesPage() {
             try {
               p = JSON.parse(await decryptText(key, r.content, r.iv)) as Payload;
               if (r.title !== null || r.tags !== null) {
-                void supabase.from("notes").update({ title: null, tags: null } as never).eq("id", r.id);
+                void supabase
+                  .from("notes")
+                  .update({ title: null, tags: null } as never)
+                  .eq("id", r.id);
               }
             } catch {
               p = { t: "", c: "[Could not unlock this note]" };
@@ -253,7 +275,10 @@ function NotesPage() {
       rows = rows.filter((n) => n.folder_id && ids.has(n.folder_id));
     }
     const q = query.trim().toLowerCase();
-    if (q) rows = rows.filter((n) => `${n.title}\n${n.content}\n${n.tags.join(" ")}`.toLowerCase().includes(q));
+    if (q)
+      rows = rows.filter((n) =>
+        `${n.title}\n${n.content}\n${n.tags.join(" ")}`.toLowerCase().includes(q),
+      );
     const time = (s: string) => new Date(s).getTime();
     return [...rows].sort((a, b) => {
       let cmp = 0;
@@ -266,7 +291,8 @@ function NotesPage() {
   }, [notes.data, folders.data, filterFolder, sort, query]);
 
   const activeNote = useMemo(
-    () => (selectedNoteId ? (notes.data ?? []).find((n) => n.id === selectedNoteId) ?? null : null),
+    () =>
+      selectedNoteId ? ((notes.data ?? []).find((n) => n.id === selectedNoteId) ?? null) : null,
     [selectedNoteId, notes.data],
   );
 
@@ -489,7 +515,9 @@ function NotesPage() {
       return note.id;
     },
     onSuccess: (deletedId) => {
-      const remaining = (qc.getQueryData<Note[]>(["notes", user.id]) ?? []).filter((n) => n.id !== deletedId);
+      const remaining = (qc.getQueryData<Note[]>(["notes", user.id]) ?? []).filter(
+        (n) => n.id !== deletedId,
+      );
       qc.setQueryData<Note[]>(["notes", user.id], remaining);
       if (selectedNoteId === deletedId) {
         const nextNote = remaining[0] ?? null;
@@ -521,10 +549,7 @@ function NotesPage() {
       return { id: row.id, name, parent_id: parentId };
     },
     onSuccess: (newF) => {
-      qc.setQueryData<FolderRow[]>(["note-folders", user.id], (old) => [
-        ...(old ?? []),
-        newF,
-      ]);
+      qc.setQueryData<FolderRow[]>(["note-folders", user.id], (old) => [...(old ?? []), newF]);
       setNewFolder("");
       qc.invalidateQueries({ queryKey: ["note-folders"] });
     },
@@ -584,6 +609,64 @@ function NotesPage() {
     [activeNote, setDraft],
   );
 
+  const ocrInputRef = useRef<HTMLInputElement | null>(null);
+  const [ocrProgress, setOcrProgress] = useState<{ current: number; total: number } | null>(null);
+
+  const handleHandwritingFiles = useCallback(
+    async (files: FileList | null) => {
+      if (!files || files.length === 0) return;
+      if (typeof navigator !== "undefined" && !navigator.onLine) {
+        toast.error("Handwriting recognition requires an internet connection.");
+        return;
+      }
+      const list = Array.from(files).filter((f) => f.type.startsWith("image/"));
+      if (list.length === 0) {
+        toast.error("Please select one or more image files.");
+        return;
+      }
+
+      if (activeNote && !sheetEditing) {
+        setSheetEditing(true);
+      }
+
+      setOcrProgress({ current: 1, total: list.length });
+      let accumulated = activeNote ? sContent : content;
+      let successCount = 0;
+
+      try {
+        for (let i = 0; i < list.length; i++) {
+          setOcrProgress({ current: i + 1, total: list.length });
+          const extracted = await transcribeHandwritingFile(list[i]);
+          if (extracted) {
+            accumulated = accumulated.trim()
+              ? `${accumulated.trimEnd()}\n\n${extracted}`
+              : extracted;
+            if (activeNote) {
+              setSContent(accumulated);
+            } else {
+              setDraft((c) => ({ ...c, content: accumulated }));
+            }
+            successCount++;
+          }
+        }
+        if (successCount > 0) {
+          toast.success(
+            list.length === 1
+              ? "Handwriting converted to text"
+              : `Converted ${successCount} of ${list.length} pages to text`,
+          );
+        } else {
+          toast.error("No legible handwriting found in the selected image(s).");
+        }
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Failed to transcribe handwriting.");
+      } finally {
+        setOcrProgress(null);
+      }
+    },
+    [activeNote, sheetEditing, sContent, content, setDraft],
+  );
+
   const totalNotesCount = filtered.length;
   const activeFolderValue = (activeNote ? sFolderId : folderId) ?? NONE;
   const hasActiveNoteChanges =
@@ -602,7 +685,9 @@ function NotesPage() {
         <div>
           <p className="font-hand text-2xl text-sepia">scraps and reminders</p>
           <h1 className="font-serif text-4xl text-primary">Notes</h1>
-          <p className="mt-1 text-xs uppercase tracking-wide text-muted-foreground">end-to-end encrypted</p>
+          <p className="mt-1 text-xs uppercase tracking-wide text-muted-foreground">
+            end-to-end encrypted
+          </p>
         </div>
 
         <div className="flex w-full items-center justify-between gap-2.5 sm:w-auto sm:justify-end">
@@ -695,7 +780,11 @@ function NotesPage() {
                       value={filterFolder}
                       onValueChange={(v) => setFilterFolder(v)}
                       triggerClassName="w-full sm:w-auto border-border/80 bg-card/80 text-foreground hover:bg-card"
-                      options={[{ value: "all", label: "All notes" }, { value: "none", label: "No folder" }, ...fOpts]}
+                      options={[
+                        { value: "all", label: "All notes" },
+                        { value: "none", label: "No folder" },
+                        ...fOpts,
+                      ]}
                     />
                     {filterFolder !== "all" && filterFolder !== "none" && (
                       <button
@@ -797,9 +886,7 @@ function NotesPage() {
                               {n.title || "Untitled"}
                             </p>
                             {folderLabel && (
-                              <p className="mt-0.5 text-xs text-muted-foreground">
-                                {folderLabel}
-                              </p>
+                              <p className="mt-0.5 text-xs text-muted-foreground">{folderLabel}</p>
                             )}
                           </div>
                         </div>
@@ -825,7 +912,19 @@ function NotesPage() {
         )}
       </div>
 
-      {/* Metadata Row Above the Main Studio Sheet (Date · Folder Selector · Tags · Delete Icon) */}
+      <input
+        ref={ocrInputRef}
+        type="file"
+        accept="image/*"
+        multiple
+        className="hidden"
+        onChange={(e) => {
+          void handleHandwritingFiles(e.target.files);
+          e.currentTarget.value = "";
+        }}
+      />
+
+      {/* Metadata Row Above the Main Studio Sheet (Date · Folder Selector · Handwriting to Text · Tags · Delete Icon) */}
       <div className="flex flex-wrap items-center justify-between gap-3 px-1 text-sm text-muted-foreground">
         <div className="flex flex-wrap items-center gap-2 sm:gap-3">
           <div className="inline-flex items-center gap-1.5 text-foreground/85">
@@ -835,27 +934,25 @@ function NotesPage() {
 
           <span className="text-muted-foreground/60">·</span>
 
-          <div className="inline-flex items-center gap-1.5">
-            <AppSelect
-              value={activeFolderValue}
-              onValueChange={(v) => {
-                const nextFolder = v === NONE ? null : v;
-                if (activeNote) {
-                  setSFolderId(nextFolder);
-                  update.mutate({
-                    note: activeNote,
-                    title: sTitle,
-                    content: sContent,
-                    tags: sTags,
-                    folder_id: nextFolder,
-                  });
-                } else {
-                  setFolderId(nextFolder);
-                }
-              }}
-              options={[{ value: NONE, label: "Unfiled Notes" }, ...fOpts]}
-            />
-          </div>
+          <AppSelect
+            value={activeFolderValue}
+            onValueChange={(v) => {
+              const nextFolder = v === NONE ? null : v;
+              if (activeNote) {
+                setSFolderId(nextFolder);
+                update.mutate({
+                  note: activeNote,
+                  title: sTitle,
+                  content: sContent,
+                  tags: sTags,
+                  folder_id: nextFolder,
+                });
+              } else {
+                setFolderId(nextFolder);
+              }
+            }}
+            options={[{ value: NONE, label: "Unfiled Notes" }, ...fOpts]}
+          />
 
           <span className="hidden text-muted-foreground/60 sm:inline">·</span>
 
@@ -935,7 +1032,9 @@ function NotesPage() {
           <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border/60 pt-4 text-xs uppercase tracking-wide text-muted-foreground">
             <span>
               {(() => {
-                const words = activeNote.content.trim() ? activeNote.content.trim().split(/\s+/).length : 0;
+                const words = activeNote.content.trim()
+                  ? activeNote.content.trim().split(/\s+/).length
+                  : 0;
                 return `${words} ${words === 1 ? "word" : "words"}`;
               })()}
             </span>
@@ -996,6 +1095,29 @@ function NotesPage() {
             minHeightClass="min-h-[260px]"
             onPhotoClick={() => fileInputRef.current?.click()}
             photoLabel="Photo"
+            toolbarRightSlot={
+              <button
+                type="button"
+                disabled={!!ocrProgress}
+                onClick={() => ocrInputRef.current?.click()}
+                title="Convert handwritten images to text (supports multiple images)"
+                className="inline-flex items-center gap-1.5 text-sm text-foreground/80 transition hover:text-primary disabled:opacity-50"
+              >
+                {ocrProgress ? (
+                  <>
+                    <Loader2 className="size-4 animate-spin text-sepia" />
+                    <span>
+                      Scanning {ocrProgress.current}/{ocrProgress.total}...
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <ScanText className="size-4 text-sepia" />
+                    <span>Handwriting</span>
+                  </>
+                )}
+              </button>
+            }
             headerSlot={
               <textarea
                 ref={titleInputRef}
@@ -1164,7 +1286,12 @@ function NoteImage({
       </div>
     );
   }
-  return <img src={src} className="mt-3 max-h-56 w-full rounded-md border border-border object-cover" alt="" loading="lazy" />;
+  return (
+    <img
+      src={src}
+      className="mt-3 max-h-56 w-full rounded-md border border-border object-cover"
+      alt=""
+      loading="lazy"
+    />
+  );
 }
-
-

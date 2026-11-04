@@ -3,19 +3,40 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
-import { Trash2, X, Download, Pencil, Check, Globe, Lock, FolderPlus, Folder, Search } from "lucide-react";
+import {
+  Trash2,
+  X,
+  Download,
+  Pencil,
+  Check,
+  Globe,
+  Lock,
+  FolderPlus,
+  Folder,
+  Search,
+  ScanText,
+  Loader2,
+} from "lucide-react";
 import { RichText } from "@/components/RichText";
 import { RichEditor } from "@/components/RichEditor";
 import { folderOptions, folderWithDescendants, type FolderRow } from "@/lib/folders";
 import { previewText } from "@/lib/rich-text";
 import { downloadTextFile } from "@/lib/download";
 import { useVault } from "@/lib/vault";
-import { decryptBytes, decryptField, decryptText, encryptBlob, encryptField, encryptText } from "@/lib/crypto";
+import {
+  decryptBytes,
+  decryptField,
+  decryptText,
+  encryptBlob,
+  encryptField,
+  encryptText,
+} from "@/lib/crypto";
 import { MusicSearch, MusicPlayer, type SelectedTrack } from "@/components/MusicSearch";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { AppSelect } from "@/components/AppSelect";
 import { useBrowserDraft } from "@/lib/browser-drafts";
 import { type DiaryMetricRow } from "@/lib/diary-metrics";
+import { transcribeHandwritingFile } from "@/lib/handwriting-ocr";
 
 const NONE = "__none__";
 
@@ -89,21 +110,26 @@ function DiaryPage() {
     folderId: string | null;
     music: SelectedTrack | null;
   };
-  const [draft, setDraft, clearDraft] = useBrowserDraft<DiaryDraft>(`papervault:diary-draft:${user.id}`, {
-    title: "",
-    content: "",
-    mood: "",
-    isPublic: false,
-    folderId: null,
-    music: null,
-  });
+  const [draft, setDraft, clearDraft] = useBrowserDraft<DiaryDraft>(
+    `papervault:diary-draft:${user.id}`,
+    {
+      title: "",
+      content: "",
+      mood: "",
+      isPublic: false,
+      folderId: null,
+      music: null,
+    },
+  );
   const { title, content, mood, isPublic, folderId, music } = draft;
   const setTitle = (value: string) => setDraft((current) => ({ ...current, title: value }));
   const setContent = (value: string) => setDraft((current) => ({ ...current, content: value }));
   const setMood = (value: string) => setDraft((current) => ({ ...current, mood: value }));
   const setIsPublic = (value: boolean) => setDraft((current) => ({ ...current, isPublic: value }));
-  const setFolderId = (value: string | null) => setDraft((current) => ({ ...current, folderId: value }));
-  const setMusic = (value: SelectedTrack | null) => setDraft((current) => ({ ...current, music: value }));
+  const setFolderId = (value: string | null) =>
+    setDraft((current) => ({ ...current, folderId: value }));
+  const setMusic = (value: SelectedTrack | null) =>
+    setDraft((current) => ({ ...current, music: value }));
   const [photo, setPhoto] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const photoInputRef = useRef<HTMLInputElement | null>(null);
@@ -270,7 +296,10 @@ function DiaryPage() {
       rows = rows.filter((e) => e.folder_id && ids.has(e.folder_id));
     }
     const q = query.trim().toLowerCase();
-    if (q) rows = rows.filter((e) => `${e.title}\n${e.content}\n${e.mood}\n${e.entry_date}`.toLowerCase().includes(q));
+    if (q)
+      rows = rows.filter((e) =>
+        `${e.title}\n${e.content}\n${e.mood}\n${e.entry_date}`.toLowerCase().includes(q),
+      );
     rows = [...rows].sort((a, b) => {
       if (sort === "title") return (a.title || "").localeCompare(b.title || "");
       const cmp = new Date(a.entry_date).getTime() - new Date(b.entry_date).getTime();
@@ -337,7 +366,8 @@ function DiaryPage() {
           "image/webp": "webp",
           "image/gif": "gif",
         };
-        if (!ALLOWED[photo.type]) throw new Error("Only JPEG, PNG, WebP, or GIF images are allowed");
+        if (!ALLOWED[photo.type])
+          throw new Error("Only JPEG, PNG, WebP, or GIF images are allowed");
         if (photo.size > 5 * 1024 * 1024) throw new Error("Photo must be smaller than 5 MB");
         imagePath = `${user.id}/${crypto.randomUUID()}.bin`;
         const { blob, iv: imgIv } = await encryptBlob(key, photo);
@@ -426,7 +456,14 @@ function DiaryPage() {
       folder_id: string | null;
       music: SelectedTrack | null;
       wasPrivate: boolean;
-    }): Promise<{ id: string; title: string; content: string; mood: string; folder_id: string | null; music: SelectedTrack | null }> => {
+    }): Promise<{
+      id: string;
+      title: string;
+      content: string;
+      mood: string;
+      folder_id: string | null;
+      music: SelectedTrack | null;
+    }> => {
       const musicPatch = {
         music_track_id: vars.music?.music_track_id ?? null,
         music_track_name: vars.music?.music_track_name ?? null,
@@ -525,10 +562,7 @@ function DiaryPage() {
       return { id: row.id, name, parent_id: parentId };
     },
     onSuccess: (newF) => {
-      qc.setQueryData<FolderRow[]>(["diary-folders", user.id], (old) => [
-        ...(old ?? []),
-        newF,
-      ]);
+      qc.setQueryData<FolderRow[]>(["diary-folders", user.id], (old) => [...(old ?? []), newF]);
       setNewFolder("");
       qc.invalidateQueries({ queryKey: ["diary-folders"] });
     },
@@ -562,11 +596,67 @@ function DiaryPage() {
     (
       id: string,
       wasPrivate: boolean,
-      v: { title: string; content: string; mood: string; folder_id: string | null; music: SelectedTrack | null },
+      v: {
+        title: string;
+        content: string;
+        mood: string;
+        folder_id: string | null;
+        music: SelectedTrack | null;
+      },
     ) => {
       update.mutate({ id, ...v, wasPrivate });
     },
     [update],
+  );
+
+  const ocrInputRef = useRef<HTMLInputElement | null>(null);
+  const [ocrProgress, setOcrProgress] = useState<{ current: number; total: number } | null>(null);
+
+  const handleHandwritingFiles = useCallback(
+    async (files: FileList | null) => {
+      if (!files || files.length === 0) return;
+      if (typeof navigator !== "undefined" && !navigator.onLine) {
+        toast.error("Handwriting recognition requires an internet connection.");
+        return;
+      }
+      const list = Array.from(files).filter((f) => f.type.startsWith("image/"));
+      if (list.length === 0) {
+        toast.error("Please select one or more image files.");
+        return;
+      }
+
+      setOcrProgress({ current: 1, total: list.length });
+      let accumulated = content;
+      let successCount = 0;
+
+      try {
+        for (let i = 0; i < list.length; i++) {
+          setOcrProgress({ current: i + 1, total: list.length });
+          const extracted = await transcribeHandwritingFile(list[i]);
+          if (extracted) {
+            accumulated = accumulated.trim()
+              ? `${accumulated.trimEnd()}\n\n${extracted}`
+              : extracted;
+            setDraft((current) => ({ ...current, content: accumulated }));
+            successCount++;
+          }
+        }
+        if (successCount > 0) {
+          toast.success(
+            list.length === 1
+              ? "Handwriting converted to text"
+              : `Converted ${successCount} of ${list.length} pages to text`,
+          );
+        } else {
+          toast.error("No legible handwriting found in the selected image(s).");
+        }
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Failed to transcribe handwriting.");
+      } finally {
+        setOcrProgress(null);
+      }
+    },
+    [content, setDraft],
   );
 
   return (
@@ -575,7 +665,9 @@ function DiaryPage() {
         <div>
           <p className="font-hand text-2xl text-sepia">today's page</p>
           <h1 className="font-serif text-4xl text-primary">Diary</h1>
-          <p className="mt-1 text-xs uppercase tracking-wide text-muted-foreground">end-to-end encrypted</p>
+          <p className="mt-1 text-xs uppercase tracking-wide text-muted-foreground">
+            end-to-end encrypted
+          </p>
         </div>
         <button
           type="button"
@@ -620,6 +712,17 @@ function DiaryPage() {
             e.currentTarget.value = "";
           }}
         />
+        <input
+          ref={ocrInputRef}
+          type="file"
+          accept="image/*"
+          multiple
+          className="hidden"
+          onChange={(e) => {
+            void handleHandwritingFiles(e.target.files);
+            e.currentTarget.value = "";
+          }}
+        />
 
         <RichEditor
           value={content}
@@ -628,6 +731,29 @@ function DiaryPage() {
           minHeightClass="min-h-[180px]"
           onPhotoClick={!isPublic ? () => photoInputRef.current?.click() : undefined}
           photoLabel={photo ? "Change photo" : "Photo"}
+          toolbarRightSlot={
+            <button
+              type="button"
+              disabled={!!ocrProgress}
+              onClick={() => ocrInputRef.current?.click()}
+              title="Convert handwritten images to text (supports multiple images)"
+              className="inline-flex items-center gap-1.5 text-sm text-foreground/80 transition hover:text-primary disabled:opacity-50"
+            >
+              {ocrProgress ? (
+                <>
+                  <Loader2 className="size-4 animate-spin text-sepia" />
+                  <span>
+                    Scanning {ocrProgress.current}/{ocrProgress.total}...
+                  </span>
+                </>
+              ) : (
+                <>
+                  <ScanText className="size-4 text-sepia" />
+                  <span>Handwriting</span>
+                </>
+              )}
+            </button>
+          }
           bodyClassName="space-y-4 p-6"
           headerSlot={
             <div className="space-y-2">
@@ -649,7 +775,11 @@ function DiaryPage() {
             <div className="space-y-4 pt-2">
               {photoPreview && !isPublic && (
                 <div className="relative inline-block">
-                  <img src={photoPreview} alt="preview" className="max-h-56 rounded-md border border-border" />
+                  <img
+                    src={photoPreview}
+                    alt="preview"
+                    className="max-h-56 rounded-md border border-border"
+                  />
                   <button
                     type="button"
                     onClick={() => setPhoto(null)}
@@ -731,7 +861,11 @@ function DiaryPage() {
           <AppSelect
             value={filterFolder}
             onValueChange={(v) => setFilterFolder(v as typeof filterFolder)}
-            options={[{ value: "all", label: "All entries" }, { value: "none", label: "No folder" }, ...fOpts]}
+            options={[
+              { value: "all", label: "All entries" },
+              { value: "none", label: "No folder" },
+              ...fOpts,
+            ]}
           />
           {filterFolder !== "all" && filterFolder !== "none" && (
             <button
@@ -772,7 +906,10 @@ function DiaryPage() {
           <AppSelect
             value={newFolderParent}
             onValueChange={setNewFolderParent}
-            options={[{ value: NONE, label: "Top level" }, ...fOpts.map((o) => ({ value: o.value, label: `inside ${o.label}` }))]}
+            options={[
+              { value: NONE, label: "Top level" },
+              ...fOpts.map((o) => ({ value: o.value, label: `inside ${o.label}` })),
+            ]}
           />
           <button
             type="submit"
@@ -785,7 +922,9 @@ function DiaryPage() {
 
       <div className="space-y-4">
         {entries.isLoading && <p className="font-hand text-sepia">opening your pages...</p>}
-        {entries.data?.length === 0 && <p className="text-muted-foreground">Your diary is a blank page. Start above.</p>}
+        {entries.data?.length === 0 && (
+          <p className="text-muted-foreground">Your diary is a blank page. Start above.</p>
+        )}
         {filteredSorted.map((e) => (
           <DiaryCard
             key={e.id}
@@ -816,7 +955,9 @@ function DiaryImage({
     let cancelled = false;
     let objectUrl: string | null = null;
     (async () => {
-      const { data: signed } = await supabase.storage.from("gallery").createSignedUrl(path, 60 * 60);
+      const { data: signed } = await supabase.storage
+        .from("gallery")
+        .createSignedUrl(path, 60 * 60);
       if (!signed?.signedUrl || cancelled) return;
       if (!encrypted || !cryptoKey) {
         setSrc(signed.signedUrl);
@@ -849,7 +990,14 @@ function DiaryImage({
   }, [path, encrypted, cryptoKey]);
 
   if (!src) return null;
-  return <img src={src} alt="" className="mt-4 max-h-96 rounded-md border border-border" loading="lazy" />;
+  return (
+    <img
+      src={src}
+      alt=""
+      className="mt-4 max-h-96 rounded-md border border-border"
+      loading="lazy"
+    />
+  );
 }
 
 const DiaryCard = memo(function DiaryCard({
@@ -866,7 +1014,13 @@ const DiaryCard = memo(function DiaryCard({
   onSave: (
     id: string,
     wasPrivate: boolean,
-    v: { title: string; content: string; mood: string; folder_id: string | null; music: SelectedTrack | null },
+    v: {
+      title: string;
+      content: string;
+      mood: string;
+      folder_id: string | null;
+      music: SelectedTrack | null;
+    },
   ) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -877,17 +1031,102 @@ const DiaryCard = memo(function DiaryCard({
   const [eFolder, setEFolder] = useState<string | null>(e.folder_id);
   const [eMusic, setEMusic] = useState<SelectedTrack | null>(e.music);
   const [confirmDel, setConfirmDel] = useState(false);
+  const cardOcrInputRef = useRef<HTMLInputElement | null>(null);
+  const [cardOcrProgress, setCardOcrProgress] = useState<{ current: number; total: number } | null>(
+    null,
+  );
   const pv = useMemo(() => previewText(e.content, 220), [e.content]);
   const long = pv.truncated || !!e.image_path;
+
+  const handleCardHandwritingFiles = useCallback(
+    async (files: FileList | null) => {
+      if (!files || files.length === 0) return;
+      if (typeof navigator !== "undefined" && !navigator.onLine) {
+        toast.error("Handwriting recognition requires an internet connection.");
+        return;
+      }
+      const list = Array.from(files).filter((f) => f.type.startsWith("image/"));
+      if (list.length === 0) {
+        toast.error("Please select one or more image files.");
+        return;
+      }
+
+      setCardOcrProgress({ current: 1, total: list.length });
+      let accumulated = eContent;
+      let successCount = 0;
+
+      try {
+        for (let i = 0; i < list.length; i++) {
+          setCardOcrProgress({ current: i + 1, total: list.length });
+          const extracted = await transcribeHandwritingFile(list[i]);
+          if (extracted) {
+            accumulated = accumulated.trim()
+              ? `${accumulated.trimEnd()}\n\n${extracted}`
+              : extracted;
+            setEContent(accumulated);
+            successCount++;
+          }
+        }
+        if (successCount > 0) {
+          toast.success(
+            list.length === 1
+              ? "Handwriting converted to text"
+              : `Converted ${successCount} of ${list.length} pages to text`,
+          );
+        } else {
+          toast.error("No legible handwriting found in the selected image(s).");
+        }
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Failed to transcribe handwriting.");
+      } finally {
+        setCardOcrProgress(null);
+      }
+    },
+    [eContent],
+  );
 
   if (editing) {
     return (
       <article className="paper-card overflow-hidden">
+        <input
+          ref={cardOcrInputRef}
+          type="file"
+          accept="image/*"
+          multiple
+          className="hidden"
+          onChange={(ev) => {
+            void handleCardHandwritingFiles(ev.target.files);
+            ev.currentTarget.value = "";
+          }}
+        />
         <RichEditor
           value={eContent}
           onChange={setEContent}
           placeholder="Pour it out..."
           minHeightClass="min-h-[180px]"
+          toolbarRightSlot={
+            <button
+              type="button"
+              disabled={!!cardOcrProgress}
+              onClick={() => cardOcrInputRef.current?.click()}
+              title="Convert handwritten images to text (supports multiple images)"
+              className="inline-flex items-center gap-1.5 text-sm text-foreground/80 transition hover:text-primary disabled:opacity-50"
+            >
+              {cardOcrProgress ? (
+                <>
+                  <Loader2 className="size-4 animate-spin text-sepia" />
+                  <span>
+                    Scanning {cardOcrProgress.current}/{cardOcrProgress.total}...
+                  </span>
+                </>
+              ) : (
+                <>
+                  <ScanText className="size-4 text-sepia" />
+                  <span>Handwriting</span>
+                </>
+              )}
+            </button>
+          }
           bodyClassName="space-y-3 p-6"
           headerSlot={
             <div className="space-y-2">
@@ -908,14 +1147,16 @@ const DiaryCard = memo(function DiaryCard({
           footerSlot={
             <div className="space-y-3 pt-2">
               <MusicSearch selected={eMusic} onChange={setEMusic} />
-              <label className="flex items-center gap-2 text-sm">
-                <span className="text-muted-foreground">Folder</span>
-                <AppSelect
-                  value={eFolder ?? NONE}
-                  onValueChange={(v) => setEFolder(v === NONE ? null : v)}
-                  options={[{ value: NONE, label: "— none —" }, ...folderOpts]}
-                />
-              </label>
+              <div className="flex flex-wrap items-center gap-3 text-sm">
+                <label className="flex items-center gap-2">
+                  <span className="text-muted-foreground">Folder</span>
+                  <AppSelect
+                    value={eFolder ?? NONE}
+                    onValueChange={(v) => setEFolder(v === NONE ? null : v)}
+                    options={[{ value: NONE, label: "— none —" }, ...folderOpts]}
+                  />
+                </label>
+              </div>
               <div className="flex items-center justify-between gap-2 border-t border-border/60 pt-3">
                 <span className="text-xs uppercase tracking-wide text-muted-foreground">
                   {(() => {
@@ -973,7 +1214,10 @@ const DiaryCard = memo(function DiaryCard({
               year: "numeric",
             })}
           </span>
-          <span title={e.is_public ? "Public · anonymous" : "Private"} className="text-muted-foreground">
+          <span
+            title={e.is_public ? "Public · anonymous" : "Private"}
+            className="text-muted-foreground"
+          >
             {e.is_public ? <Globe className="size-4" /> : <Lock className="size-4" />}
           </span>
           <button
@@ -1003,7 +1247,9 @@ const DiaryCard = memo(function DiaryCard({
       <div className="mt-3 break-words">
         <RichText>{open ? e.content : pv.text}</RichText>
       </div>
-      {open && e.image_path && <DiaryImage path={e.image_path} encrypted={!e.is_public} cryptoKey={cryptoKey} />}
+      {open && e.image_path && (
+        <DiaryImage path={e.image_path} encrypted={!e.is_public} cryptoKey={cryptoKey} />
+      )}
       {e.music?.music_preview_url && (
         <MusicPlayer
           track={{
@@ -1015,7 +1261,10 @@ const DiaryCard = memo(function DiaryCard({
         />
       )}
       {long && (
-        <button onClick={() => setOpen((o) => !o)} className="mt-2 text-sm text-accent hover:text-primary">
+        <button
+          onClick={() => setOpen((o) => !o)}
+          className="mt-2 text-sm text-accent hover:text-primary"
+        >
           {open ? "Show less" : "Read more"}
         </button>
       )}

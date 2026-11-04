@@ -2,6 +2,91 @@
 @source "../src";
 @import "tw-animate-css";
 
+/* Self-hosted fonts with font-display: block to eliminate Flash of Unstyled Text (FOUT) */
+@font-face {
+  font-family: "Cormorant Garamond";
+  font-style: normal;
+  font-display: block;
+  font-weight: 400;
+  src: url("@fontsource/cormorant-garamond/files/cormorant-garamond-latin-400-normal.woff2")
+    format("woff2");
+}
+@font-face {
+  font-family: "Cormorant Garamond";
+  font-style: normal;
+  font-display: block;
+  font-weight: 500;
+  src: url("@fontsource/cormorant-garamond/files/cormorant-garamond-latin-500-normal.woff2")
+    format("woff2");
+}
+@font-face {
+  font-family: "Cormorant Garamond";
+  font-style: normal;
+  font-display: block;
+  font-weight: 600;
+  src: url("@fontsource/cormorant-garamond/files/cormorant-garamond-latin-600-normal.woff2")
+    format("woff2");
+}
+@font-face {
+  font-family: "Cormorant Garamond";
+  font-style: normal;
+  font-display: block;
+  font-weight: 700;
+  src: url("@fontsource/cormorant-garamond/files/cormorant-garamond-latin-700-normal.woff2")
+    format("woff2");
+}
+
+@font-face {
+  font-family: "Nunito";
+  font-style: normal;
+  font-display: block;
+  font-weight: 400;
+  src: url("@fontsource/nunito/files/nunito-latin-400-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Nunito";
+  font-style: italic;
+  font-display: block;
+  font-weight: 400;
+  src: url("@fontsource/nunito/files/nunito-latin-400-italic.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Nunito";
+  font-style: normal;
+  font-display: block;
+  font-weight: 500;
+  src: url("@fontsource/nunito/files/nunito-latin-500-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Nunito";
+  font-style: normal;
+  font-display: block;
+  font-weight: 600;
+  src: url("@fontsource/nunito/files/nunito-latin-600-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Nunito";
+  font-style: normal;
+  font-display: block;
+  font-weight: 700;
+  src: url("@fontsource/nunito/files/nunito-latin-700-normal.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Caveat";
+  font-style: normal;
+  font-display: block;
+  font-weight: 400;
+  src: url("@fontsource/caveat/files/caveat-latin-400-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Caveat";
+  font-style: normal;
+  font-display: block;
+  font-weight: 600;
+  src: url("@fontsource/caveat/files/caveat-latin-600-normal.woff2") format("woff2");
+}
+
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
@@ -41,7 +126,7 @@
 
   --paper: oklch(0.97 0.02 80);
   --ink: oklch(0.28 0.04 50);
-  --sepia: oklch(0.55 0.10 55);
+  --sepia: oklch(0.55 0.1 55);
 
   --background: oklch(0.96 0.025 78);
   --foreground: oklch(0.28 0.04 50);
@@ -51,24 +136,24 @@
   --popover: oklch(0.985 0.018 82);
   --popover-foreground: oklch(0.28 0.04 50);
 
-  --primary: oklch(0.42 0.10 40);
+  --primary: oklch(0.42 0.1 40);
   --primary-foreground: oklch(0.97 0.02 80);
 
   --secondary: oklch(0.92 0.04 75);
   --secondary-foreground: oklch(0.32 0.06 45);
 
   --muted: oklch(0.93 0.025 78);
-  --muted-foreground: oklch(0.50 0.04 55);
+  --muted-foreground: oklch(0.5 0.04 55);
 
   --accent: oklch(0.78 0.13 55);
   --accent-foreground: oklch(0.25 0.05 45);
 
-  --destructive: oklch(0.55 0.20 25);
+  --destructive: oklch(0.55 0.2 25);
   --destructive-foreground: oklch(0.98 0.01 80);
 
   --border: oklch(0.86 0.04 75);
-  --input: oklch(0.90 0.03 75);
-  --ring: oklch(0.55 0.10 55);
+  --input: oklch(0.9 0.03 75);
+  --ring: oklch(0.55 0.1 55);
 
   --font-serif: "Cormorant Garamond", "Georgia", serif;
   --font-body: "Nunito", "Quicksand", "SF Pro Rounded", system-ui, sans-serif;
@@ -78,15 +163,21 @@
 }
 
 @layer base {
-  * { border-color: var(--color-border); }
+  * {
+    border-color: var(--color-border);
+  }
 
-  html, body {
+  html,
+  body {
     background-color: var(--color-background);
     color: var(--color-foreground);
     font-family: var(--font-body);
   }
 
-  h1, h2, h3, h4 {
+  h1,
+  h2,
+  h3,
+  h4 {
     font-family: var(--font-serif);
     letter-spacing: -0.01em;
   }
@@ -112,10 +203,16 @@
     border-radius: calc(var(--radius) + 4px);
     backdrop-filter: blur(12px) saturate(1.2);
     box-shadow:
-      0 1px 0 rgba(255,255,255,0.4) inset,
+      0 1px 0 rgba(255, 255, 255, 0.4) inset,
       0 10px 30px -10px oklch(0.4 0.05 50 / 0.2);
   }
-  .font-hand { font-family: var(--font-hand); }
-  .font-serif { font-family: var(--font-serif); }
-  .font-body { font-family: var(--font-body); }
+  .font-hand {
+    font-family: var(--font-hand);
+  }
+  .font-serif {
+    font-family: var(--font-serif);
+  }
+  .font-body {
+    font-family: var(--font-body);
+  }
 }

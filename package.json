@@ -12,6 +12,10 @@
     "format": "prettier --write ."
   },
   "dependencies": {
+    "@fontsource/caveat": "^5.3.0",
+    "@fontsource/cormorant-garamond": "^5.3.0",
+    "@fontsource/nunito": "^5.3.0",
+    "@google/genai": "^2.32.0",
     "@hookform/resolvers": "^5.2.2",
     "@lovable.dev/cloud-auth-js": "^1.1.2",
     "@radix-ui/react-accordion": "^1.2.12",

@@ -7,7 +7,7 @@ import {
   useRouterState,
 } from "@tanstack/react-router";
 import { useEffect, useRef } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import {
   BookOpen,
@@ -35,7 +35,19 @@ export const Route = createFileRoute("/app")({
   beforeLoad: async () => {
     const { data, error } = await supabase.auth.getSession();
     if (error || !data.session?.user) throw redirect({ to: "/auth" });
-    return { user: data.session.user };
+    const user = data.session.user;
+    let profileDisplayName: string | null = null;
+    try {
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("id, display_name")
+        .eq("id", user.id)
+        .maybeSingle();
+      profileDisplayName = profile?.display_name?.trim() || null;
+    } catch {
+      // ignore error and allow fallback resolution
+    }
+    return { user, profileDisplayName };
   },
   component: AuthedLayout,
 });
@@ -52,10 +64,24 @@ const NAV: { to: string; icon: typeof Home; label: string; exact?: boolean }[] =
 function AuthedLayout() {
   const router = useRouter();
   const qc = useQueryClient();
-  const { user } = Route.useRouteContext();
+  const { user, profileDisplayName } = Route.useRouteContext();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const current =
     NAV.find((n) => (n.exact ? pathname === n.to : pathname.startsWith(n.to))) ?? NAV[0];
+
+  // Warm the user-profile query while VaultGate is still waiting for the passkey
+  useQuery({
+    queryKey: ["user-profile", user.id],
+    initialData: profileDisplayName ? { id: user.id, display_name: profileDisplayName } : undefined,
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("profiles")
+        .select("id, display_name")
+        .eq("id", user.id)
+        .maybeSingle();
+      return data;
+    },
+  });
 
   const handleSignOut = async () => {
     qc.clear();
@@ -151,9 +177,10 @@ function VaultOfflineWarmer({ userId }: { userId: string }) {
 
     const timers: number[] = [];
 
-    // 1. Fetch note folders & up to 500 notes
+    // 1. Fetch user profile, note folders & up to 500 notes
     timers.push(
       scheduleWarm(async () => {
+        await supabase.from("profiles").select("id, display_name").eq("id", userId).maybeSingle();
         await supabase.from("note_folders").select("id,name,parent_id").eq("user_id", userId);
         await supabase.from("notes").select("*").eq("user_id", userId).limit(500);
       }, 600),

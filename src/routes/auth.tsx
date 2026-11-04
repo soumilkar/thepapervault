@@ -26,15 +26,24 @@ function AuthPage() {
     setLoading(true);
     try {
       if (mode === "signup") {
-        const { error } = await supabase.auth.signUp({
+        const trimmedName = displayName.trim();
+        if (!trimmedName) {
+          throw new Error("Please enter a display name.");
+        }
+        const { data, error } = await supabase.auth.signUp({
           email,
           password,
           options: {
             emailRedirectTo: `${window.location.origin}/app`,
-            data: { display_name: displayName || email.split("@")[0] },
+            data: { display_name: trimmedName },
           },
         });
         if (error) throw error;
+        if (data.user && data.session) {
+          await supabase
+            .from("profiles")
+            .upsert({ id: data.user.id, display_name: trimmedName });
+        }
         toast.success("Welcome! Check your email if confirmation is required.");
       } else {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
@@ -62,6 +71,7 @@ function AuthPage() {
           {mode === "signup" && (
             <Field
               label="Display name"
+              required
               value={displayName}
               onChange={setDisplayName}
               placeholder="What should we call you?"

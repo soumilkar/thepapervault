@@ -13,6 +13,11 @@ import { Toaster } from "sonner";
 import { ScrollToTop } from "@/components/ScrollToTop";
 
 import appCss from "../styles.css?url";
+import cormorant400Url from "@fontsource/cormorant-garamond/files/cormorant-garamond-latin-400-normal.woff2?url";
+import cormorant600Url from "@fontsource/cormorant-garamond/files/cormorant-garamond-latin-600-normal.woff2?url";
+import nunito400Url from "@fontsource/nunito/files/nunito-latin-400-normal.woff2?url";
+import nunito600Url from "@fontsource/nunito/files/nunito-latin-600-normal.woff2?url";
+import caveat400Url from "@fontsource/caveat/files/caveat-latin-400-normal.woff2?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
 import { supabase } from "@/integrations/supabase/client";
 
@@ -22,7 +27,9 @@ function NotFoundComponent() {
       <div className="paper-card max-w-md p-10 text-center">
         <h1 className="text-6xl font-serif text-primary">404</h1>
         <p className="mt-4 text-muted-foreground">This page seems to have wandered off.</p>
-        <Link to="/" className="mt-6 inline-block text-primary underline">Return home</Link>
+        <Link to="/" className="mt-6 inline-block text-primary underline">
+          Return home
+        </Link>
       </div>
     </div>
   );
@@ -38,11 +45,18 @@ function ErrorComponent({ error, reset }: ErrorComponentProps) {
     <div className="flex min-h-screen items-center justify-center px-4">
       <div className="paper-card max-w-md p-10 text-center">
         <h2 className="text-2xl font-serif">Something went sideways</h2>
-        <p className="mt-2 text-sm text-muted-foreground">An unexpected error occurred. Please try again.</p>
+        <p className="mt-2 text-sm text-muted-foreground">
+          An unexpected error occurred. Please try again.
+        </p>
         <button
-          onClick={() => { router.invalidate(); reset(); }}
+          onClick={() => {
+            router.invalidate();
+            reset();
+          }}
           className="mt-6 rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground"
-        >Try again</button>
+        >
+          Try again
+        </button>
       </div>
     </div>
   );
@@ -54,24 +68,76 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
       { title: "The PaperVault — Your personal journal" },
-      { name: "description", content: "A warm, private space for your diary, blog, gallery, and an AI companion that knows your story." },
+      {
+        name: "description",
+        content:
+          "A warm, private space for your diary, blog, gallery, and an AI companion that knows your story.",
+      },
       { property: "og:title", content: "The PaperVault — Your personal journal" },
       { name: "twitter:title", content: "The PaperVault — Your personal journal" },
-      { property: "og:description", content: "A warm, private space for your diary, blog, gallery, and an AI companion that knows your story." },
-      { name: "twitter:description", content: "A warm, private space for your diary, blog, gallery, and an AI companion that knows your story." },
-      { property: "og:image", content: "https://storage.googleapis.com/gpt-engineer-file-uploads/attachments/og-images/1430fae1-cc9e-4a3a-87be-a6694be59784" },
-      { name: "twitter:image", content: "https://storage.googleapis.com/gpt-engineer-file-uploads/attachments/og-images/1430fae1-cc9e-4a3a-87be-a6694be59784" },
+      {
+        property: "og:description",
+        content:
+          "A warm, private space for your diary, blog, gallery, and an AI companion that knows your story.",
+      },
+      {
+        name: "twitter:description",
+        content:
+          "A warm, private space for your diary, blog, gallery, and an AI companion that knows your story.",
+      },
+      {
+        property: "og:image",
+        content:
+          "https://storage.googleapis.com/gpt-engineer-file-uploads/attachments/og-images/1430fae1-cc9e-4a3a-87be-a6694be59784",
+      },
+      {
+        name: "twitter:image",
+        content:
+          "https://storage.googleapis.com/gpt-engineer-file-uploads/attachments/og-images/1430fae1-cc9e-4a3a-87be-a6694be59784",
+      },
       { name: "twitter:card", content: "summary_large_image" },
       { property: "og:type", content: "website" },
     ],
     links: [
+      {
+        rel: "preload",
+        as: "font",
+        type: "font/woff2",
+        href: cormorant400Url,
+        crossOrigin: "anonymous",
+      },
+      {
+        rel: "preload",
+        as: "font",
+        type: "font/woff2",
+        href: cormorant600Url,
+        crossOrigin: "anonymous",
+      },
+      {
+        rel: "preload",
+        as: "font",
+        type: "font/woff2",
+        href: nunito400Url,
+        crossOrigin: "anonymous",
+      },
+      {
+        rel: "preload",
+        as: "font",
+        type: "font/woff2",
+        href: nunito600Url,
+        crossOrigin: "anonymous",
+      },
+      {
+        rel: "preload",
+        as: "font",
+        type: "font/woff2",
+        href: caveat400Url,
+        crossOrigin: "anonymous",
+      },
       { rel: "stylesheet", href: appCss },
       { rel: "manifest", href: "/manifest.webmanifest" },
       { rel: "apple-touch-icon", href: "/apple-touch-icon.png" },
       { rel: "icon", type: "image/svg+xml", href: "/icon.svg" },
-      { rel: "preconnect", href: "https://fonts.googleapis.com" },
-      { rel: "preconnect", href: "https://fonts.gstatic.com", crossOrigin: "anonymous" },
-      { rel: "stylesheet", href: "https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600;700&family=Caveat:wght@400;600&family=Nunito:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" },
     ],
   }),
   shellComponent: RootShell,
@@ -83,8 +149,13 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
 function RootShell({ children }: { children: ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <head><HeadContent /></head>
-      <body suppressHydrationWarning>{children}<Scripts /></body>
+      <head>
+        <HeadContent />
+      </head>
+      <body suppressHydrationWarning>
+        {children}
+        <Scripts />
+      </body>
     </html>
   );
 }
