@@ -83,13 +83,33 @@ export async function encryptText(
   return { ct: toB64(ct), iv: toB64(iv) };
 }
 
+let decryptTextCache = new WeakMap<CryptoKey, Map<string, string>>();
+
+export function clearCryptoCache(): void {
+  decryptTextCache = new WeakMap<CryptoKey, Map<string, string>>();
+}
+
 export async function decryptText(key: CryptoKey, ctB64: string, ivB64: string): Promise<string> {
+  let keyMap = decryptTextCache.get(key);
+  const cacheKey = `${ivB64}:${ctB64}`;
+  if (keyMap) {
+    const cached = keyMap.get(cacheKey);
+    if (cached !== undefined) return cached;
+  }
+
   const pt = await crypto.subtle.decrypt(
     { name: "AES-GCM", iv: buf(fromB64(ivB64)), tagLength: 128 },
     key,
     buf(fromB64(ctB64)),
   );
-  return dec.decode(pt);
+  const plain = dec.decode(pt);
+
+  if (!keyMap) {
+    keyMap = new Map<string, string>();
+    decryptTextCache.set(key, keyMap);
+  }
+  keyMap.set(cacheKey, plain);
+  return plain;
 }
 
 const FIELD_PREFIX = "e2ee:v1:";

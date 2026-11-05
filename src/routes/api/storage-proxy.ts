@@ -51,6 +51,10 @@ function getAdminClient(request: Request) {
   });
 }
 
+import type { User } from "@supabase/supabase-js";
+
+const verifiedTokenCache = new Map<string, { user: User; expiresAt: number }>();
+
 async function authenticateUser(request: Request, adminClient: ReturnType<typeof getAdminClient>) {
   const authorization =
     request.headers.get("authorization") || request.headers.get("Authorization");
@@ -60,11 +64,18 @@ async function authenticateUser(request: Request, adminClient: ReturnType<typeof
   const token = authorization.slice("Bearer ".length).trim();
   if (!token) return null;
 
+  const now = Date.now();
+  const cached = verifiedTokenCache.get(token);
+  if (cached && cached.expiresAt > now) {
+    return cached.user;
+  }
+
   try {
     const { data, error } = await adminClient.auth.getUser(token);
     if (error || !data?.user?.id) {
       return null;
     }
+    verifiedTokenCache.set(token, { user: data.user, expiresAt: now + 5 * 60 * 1000 });
     return data.user;
   } catch {
     return null;

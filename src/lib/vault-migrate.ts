@@ -16,28 +16,44 @@ function countWords(s: string) {
 }
 
 export async function runVaultMigration(userId: string, key: CryptoKey) {
-  if (!key || migrationRunning) return;
+  if (!key || migrationRunning || typeof window === "undefined") return;
 
-  const sessionFlag = `papervault:migrated:v2:${userId}`;
+  const storageFlag = `papervault:migrated:v2:${userId}`;
   try {
-    if (window.sessionStorage.getItem(sessionFlag) === "1") return;
+    if (
+      window.localStorage.getItem(storageFlag) === "1" ||
+      window.sessionStorage.getItem(storageFlag) === "1"
+    ) {
+      return;
+    }
   } catch {
     // ignore storage errors
   }
 
+  // Defer background maintenance by 25s so initial page data loads with zero contention
+  await new Promise<void>((resolve) => {
+    window.setTimeout(() => {
+      if ("requestIdleCallback" in window) {
+        window.requestIdleCallback(() => resolve(), { timeout: 10000 });
+      } else {
+        resolve();
+      }
+    }, 25000);
+  });
+
+  if (migrationRunning) return;
   migrationRunning = true;
   try {
-    await Promise.all([
-      migrateDiary(userId, key),
-      migrateFolders("diary_folders", userId, key),
-      migrateNotes(userId, key),
-      migrateFolders("note_folders", userId, key),
-      migrateGallery(userId, key),
-      migrateChatSessions(userId, key),
-      migrateChatMessages(userId, key),
-    ]);
+    await migrateDiary(userId, key);
+    await migrateFolders("diary_folders", userId, key);
+    await migrateNotes(userId, key);
+    await migrateFolders("note_folders", userId, key);
+    await migrateGallery(userId, key);
+    await migrateChatSessions(userId, key);
+    await migrateChatMessages(userId, key);
     try {
-      window.sessionStorage.setItem(sessionFlag, "1");
+      window.localStorage.setItem(storageFlag, "1");
+      window.sessionStorage.setItem(storageFlag, "1");
     } catch {
       // ignore
     }

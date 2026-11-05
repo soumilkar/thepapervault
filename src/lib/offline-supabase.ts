@@ -50,7 +50,43 @@ export interface OfflineSyncState {
 
 export const OFFLINE_SYNC_EVENT = "papervault:offline-sync-state";
 export const OFFLINE_SYNC_SUCCESS_EVENT = "papervault:sync-success";
+export const OFFLINE_DATA_UPDATED_EVENT = "papervault:data-updated";
 const OFFLINE_AUTH_SESSION_KEY = "papervault:offline-cached-session:v1";
+const HYDRATED_TABLES_KEY = "papervault:hydrated-tables:v1";
+
+const memTableCache = new Map<string, Map<string | number, Record<string, unknown>>>();
+const hydratedTables = new Set<string>();
+const recentRevalidations = new Map<string, number>();
+
+if (typeof window !== "undefined") {
+  try {
+    const raw = window.localStorage.getItem(HYDRATED_TABLES_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as string[];
+      if (Array.isArray(parsed)) {
+        for (const t of parsed) hydratedTables.add(t);
+      }
+    }
+  } catch {
+    // ignore
+  }
+}
+
+function isTableHydrated(table: string): boolean {
+  return hydratedTables.has(table);
+}
+
+function markTableHydrated(table: string): void {
+  if (hydratedTables.has(table)) return;
+  hydratedTables.add(table);
+  if (typeof window !== "undefined") {
+    try {
+      window.localStorage.setItem(HYDRATED_TABLES_KEY, JSON.stringify(Array.from(hydratedTables)));
+    } catch {
+      // ignore
+    }
+  }
+}
 
 type TokenGetter = (forceRefresh?: boolean) => Promise<string | null>;
 let externalTokenGetter: TokenGetter | null = null;
@@ -144,15 +180,31 @@ function openOfflineDB(): Promise<IDBDatabase> {
 }
 
 async function idbGetAll<T = Record<string, unknown>>(storeName: string): Promise<T[]> {
+  const isDataTable = (TABLES as readonly string[]).includes(storeName);
+  if (isDataTable && memTableCache.has(storeName)) {
+    return Array.from(memTableCache.get(storeName)!.values()) as unknown as T[];
+  }
   try {
     const db = await openOfflineDB();
-    return await new Promise<T[]>((resolve, reject) => {
+    const rows = await new Promise<T[]>((resolve, reject) => {
       const tx = db.transaction(storeName, "readonly");
       const store = tx.objectStore(storeName);
       const req = store.getAll();
       req.onsuccess = () => resolve((req.result ?? []) as T[]);
       req.onerror = () => reject(req.error);
     });
+    if (isDataTable) {
+      const pk = getPrimaryKey(storeName);
+      const map = new Map<string | number, Record<string, unknown>>();
+      for (const r of rows as unknown as Record<string, unknown>[]) {
+        const keyVal = r?.[pk];
+        if (typeof keyVal === "string" || typeof keyVal === "number") {
+          map.set(keyVal, r);
+        }
+      }
+      memTableCache.set(storeName, map);
+    }
+    return rows;
   } catch {
     return [];
   }
@@ -160,9 +212,27 @@ async function idbGetAll<T = Record<string, unknown>>(storeName: string): Promis
 
 async function idbPutMany(storeName: string, rows: Record<string, unknown>[]): Promise<void> {
   if (!rows.length) return;
+  const pk = getPrimaryKey(storeName);
+  if ((TABLES as readonly string[]).includes(storeName)) {
+    let map = memTableCache.get(storeName);
+    if (!map) {
+      map = new Map<string | number, Record<string, unknown>>();
+      memTableCache.set(storeName, map);
+    }
+    for (const row of rows) {
+      const keyVal = row?.[pk];
+      if (
+        row &&
+        typeof row === "object" &&
+        (typeof keyVal === "string" || typeof keyVal === "number")
+      ) {
+        const existing = map.get(keyVal);
+        map.set(keyVal, existing ? { ...existing, ...row } : row);
+      }
+    }
+  }
   try {
     const db = await openOfflineDB();
-    const pk = getPrimaryKey(storeName);
     await new Promise<void>((resolve, reject) => {
       const tx = db.transaction(storeName, "readwrite");
       const store = tx.objectStore(storeName);
@@ -181,6 +251,10 @@ async function idbPutMany(storeName: string, rows: Record<string, unknown>[]): P
 
 async function idbDeleteKeys(storeName: string, keys: (string | number)[]): Promise<void> {
   if (!keys.length) return;
+  if (memTableCache.has(storeName)) {
+    const map = memTableCache.get(storeName)!;
+    for (const k of keys) map.delete(k);
+  }
   try {
     const db = await openOfflineDB();
     await new Promise<void>((resolve, reject) => {
@@ -225,6 +299,33 @@ async function saveStorageBlob(
 }
 
 const blobUrlCache = new Map<string, string>();
+const decryptedMediaUrlCache = new Map<string, string>();
+
+export function peekDecryptedMediaUrl(
+  bucket: string,
+  path: string,
+  iv: string | null | undefined,
+): string | null {
+  return decryptedMediaUrlCache.get(`${bucket}/${path}:${iv ?? "plain"}`) ?? null;
+}
+
+export function setDecryptedMediaUrl(
+  bucket: string,
+  path: string,
+  iv: string | null | undefined,
+  blobUrl: string,
+): void {
+  const key = `${bucket}/${path}:${iv ?? "plain"}`;
+  const prev = decryptedMediaUrlCache.get(key);
+  if (prev && prev !== blobUrl) {
+    try {
+      URL.revokeObjectURL(prev);
+    } catch {
+      // ignore
+    }
+  }
+  decryptedMediaUrlCache.set(key, blobUrl);
+}
 
 export function clearOfflineBlobUrls(): void {
   for (const url of blobUrlCache.values()) {
@@ -235,6 +336,14 @@ export function clearOfflineBlobUrls(): void {
     }
   }
   blobUrlCache.clear();
+  for (const url of decryptedMediaUrlCache.values()) {
+    try {
+      URL.revokeObjectURL(url);
+    } catch {
+      // ignore
+    }
+  }
+  decryptedMediaUrlCache.clear();
 }
 
 export async function getStorageBlobRecord(
@@ -1156,27 +1265,10 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
               },
               body: JSON.stringify(bodyJson),
             },
-            8000,
+            5000,
           );
           if (proxyRes.ok) {
-            const list = (await proxyRes.clone().json()) as {
-              path: string;
-              signedURL?: string;
-              signedUrl?: string;
-            }[];
-            const enhanced = await Promise.all(
-              list.map(async (item) => {
-                const localUrl = await getStorageBlobUrl(bucket, item.path);
-                if (localUrl && !item.signedUrl) {
-                  return { ...item, signedURL: localUrl, signedUrl: localUrl };
-                }
-                return item;
-              }),
-            );
-            return new Response(JSON.stringify(enhanced), {
-              status: 200,
-              headers: { "Content-Type": "application/json" },
-            });
+            return proxyRes;
           }
         } catch {
           // Fall through to local blob URLs
@@ -1205,7 +1297,6 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
     if (singleSignMatch && method === "POST") {
       const bucket = decodeURIComponent(singleSignMatch[1]);
       const objectPath = decodeURIComponent(singleSignMatch[2]);
-      const localUrl = await getStorageBlobUrl(bucket, objectPath);
 
       if (navigator.onLine) {
         try {
@@ -1221,7 +1312,7 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
               },
               body: JSON.stringify({ path: objectPath }),
             },
-            6000,
+            4000,
           );
           if (proxyRes.ok) return proxyRes;
         } catch {
@@ -1229,6 +1320,7 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
         }
       }
 
+      const localUrl = await getStorageBlobUrl(bucket, objectPath);
       if (localUrl) {
         return new Response(JSON.stringify({ signedURL: localUrl, signedUrl: localUrl }), {
           status: 200,
@@ -1342,32 +1434,81 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
     if ((TABLES as readonly string[]).includes(table)) {
       const pk = getPrimaryKey(table);
 
-      // SELECT / HEAD
+      // SELECT / HEAD — Local-first Stale-While-Revalidate for <1ms page loads
       if (method === "GET" || method === "HEAD") {
+        const allLocal = await idbGetAll<Record<string, unknown>>(table);
+        const hasLocalCache = allLocal.length > 0 || isTableHydrated(table);
+
+        if (hasLocalCache) {
+          const filtered = filterAndSortRows(allLocal, url.searchParams);
+
+          if (navigator.onLine) {
+            if (currentSyncState.pendingCount > 0) {
+              void flushOfflineSyncQueue();
+            }
+            const revalidateKey = `${method}:${req.url}`;
+            const nowMs = Date.now();
+            const lastReval = recentRevalidations.get(revalidateKey) ?? 0;
+            if (nowMs - lastReval > 8000) {
+              recentRevalidations.set(revalidateKey, nowMs);
+              const reqClone = req.clone();
+              void quickFetch(reqClone, undefined, 6000)
+                .then(async (res) => {
+                  if (!res.ok) return;
+                  markTableHydrated(table);
+                  if (method !== "GET") return;
+                  const data = await res.json().catch(() => null);
+                  if (data === null) return;
+                  const freshList = Array.isArray(data)
+                    ? (data as Record<string, unknown>[])
+                    : typeof data === "object"
+                      ? [data as Record<string, unknown>]
+                      : [];
+                  await idbPutMany(table, freshList);
+                  if (JSON.stringify(freshList) !== JSON.stringify(filtered)) {
+                    if (typeof window !== "undefined") {
+                      window.dispatchEvent(
+                        new CustomEvent(OFFLINE_DATA_UPDATED_EVENT, { detail: { table } }),
+                      );
+                    }
+                  }
+                })
+                .catch(() => {});
+            }
+          }
+
+          return buildPostgrestResponse(filtered, method, req.headers, 200);
+        }
+
         if (navigator.onLine) {
           try {
-            // Flush sync queue in background without blocking this read
-            void flushOfflineSyncQueue();
-
-            const res = await quickFetch(req.clone(), undefined, 15000);
-            if (res.ok && method === "GET") {
-              const data = await res
-                .clone()
-                .json()
-                .catch(() => null);
-              if (Array.isArray(data)) {
-                await idbPutMany(table, data as Record<string, unknown>[]);
-              } else if (data && typeof data === "object") {
-                await idbPutMany(table, [data as Record<string, unknown>]);
-              }
+            if (currentSyncState.pendingCount > 0) {
+              void flushOfflineSyncQueue();
             }
-            if (res.ok) return res;
+
+            const res = await quickFetch(req.clone(), undefined, 4000);
+            if (res.ok) {
+              markTableHydrated(table);
+              if (method === "GET") {
+                const cloned = res.clone();
+                void cloned
+                  .json()
+                  .then((data) => {
+                    if (Array.isArray(data)) {
+                      void idbPutMany(table, data as Record<string, unknown>[]);
+                    } else if (data && typeof data === "object") {
+                      void idbPutMany(table, [data as Record<string, unknown>]);
+                    }
+                  })
+                  .catch(() => {});
+              }
+              return res;
+            }
           } catch {
             // Fall through to IndexedDB offline query on network failure
           }
         }
 
-        const allLocal = await idbGetAll<Record<string, unknown>>(table);
         const filtered = filterAndSortRows(allLocal, url.searchParams);
         return buildPostgrestResponse(filtered, method, req.headers, 200);
       }

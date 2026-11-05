@@ -80,9 +80,11 @@ async function writeEncrypted(
     .upload(storagePath(userId), blob, { contentType: "application/octet-stream", upsert: true });
 }
 
-async function loadEncryptedTrackers(userId: string, key: CryptoKey): Promise<VaultTrackersData> {
-  const local = await readLocalEncrypted(userId, key);
-
+async function fetchRemoteTrackers(
+  userId: string,
+  key: CryptoKey,
+  local: VaultTrackersData | null,
+): Promise<VaultTrackersData | null> {
   try {
     const { data: signed } = await supabase.storage
       .from(BUCKET)
@@ -116,16 +118,7 @@ async function loadEncryptedTrackers(userId: string, key: CryptoKey): Promise<Va
   } catch {
     // fallback to local encrypted copy if remote object doesn't exist yet
   }
-
-  if (local) {
-    return {
-      moods: Array.isArray(local.moods) ? local.moods : [],
-      goals: Array.isArray(local.goals) ? local.goals : [],
-      updated_at: local.updated_at || new Date().toISOString(),
-    };
-  }
-
-  return EMPTY_TRACKERS;
+  return null;
 }
 
 export function useVaultTrackers(userId: string) {
@@ -138,7 +131,33 @@ export function useVaultTrackers(userId: string) {
     queryKey,
     queryFn: async () => {
       if (!key) return EMPTY_TRACKERS;
-      return loadEncryptedTrackers(userId, key);
+      const local = await readLocalEncrypted(userId, key);
+      if (local) {
+        const normalizedLocal: VaultTrackersData = {
+          moods: Array.isArray(local.moods) ? local.moods : [],
+          goals: Array.isArray(local.goals) ? local.goals : [],
+          updated_at: local.updated_at || new Date().toISOString(),
+        };
+        // Revalidate remote in background without blocking UI
+        void fetchRemoteTrackers(userId, key, normalizedLocal).then((remote) => {
+          if (remote && remote.updated_at !== normalizedLocal.updated_at) {
+            qc.setQueryData(queryKey, remote);
+          }
+        });
+        return normalizedLocal;
+      }
+
+      const remote = await fetchRemoteTrackers(userId, key, null);
+      if (remote) return remote;
+
+      // Seed local encrypted empty state so future loads are <1ms
+      try {
+        const enc = await encryptText(key, JSON.stringify(EMPTY_TRACKERS));
+        window.localStorage.setItem(localCacheKey(userId), JSON.stringify(enc));
+      } catch {
+        // ignore
+      }
+      return EMPTY_TRACKERS;
     },
   });
 

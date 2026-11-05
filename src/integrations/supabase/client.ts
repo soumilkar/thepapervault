@@ -8,7 +8,6 @@ import type { Database } from "./types";
 import { brokeredPreviewStorage } from "./previewAuthStorage";
 import {
   cacheAuthSession,
-  cacheRemoteStorageUrl,
   getCachedAuthSession,
   getStorageBlobUrl,
   offlineAwareSupabaseFetch,
@@ -146,8 +145,22 @@ function createSupabaseClient(): SupabaseClient<Database> {
   });
 
   if (typeof window !== "undefined") {
+    const signedUrlMemCache = new Map<string, { signedUrl: string; expiresAt: number }>();
+    const SIGNED_URL_TTL_MS = 45 * 60 * 1000;
+
     const origGetSession = client.auth.getSession.bind(client.auth);
     client.auth.getSession = async () => {
+      // Fast path: if we already have a valid non-expired cached session in memory, return it immediately
+      const cached = getCachedAuthSession() as Session | null;
+      const nowSec = Math.floor(Date.now() / 1000);
+      if (
+        cached?.user &&
+        cached?.access_token &&
+        (!cached.expires_at || cached.expires_at > nowSec + 60)
+      ) {
+        return { data: { session: cached }, error: null };
+      }
+
       try {
         const res = await origGetSession();
         if (res.data?.session) {
@@ -166,7 +179,6 @@ function createSupabaseClient(): SupabaseClient<Database> {
 
       // ONLY when truly offline (!navigator.onLine), allow the cached offline session
       if (typeof navigator !== "undefined" && !navigator.onLine) {
-        const cached = getCachedAuthSession() as Session | null;
         if (cached?.user) {
           return { data: { session: cached }, error: null };
         }
@@ -177,6 +189,7 @@ function createSupabaseClient(): SupabaseClient<Database> {
     const origSignOut = client.auth.signOut.bind(client.auth);
     client.auth.signOut = async (options) => {
       cacheAuthSession(null);
+      signedUrlMemCache.clear();
       try {
         const res = await origSignOut(options);
         return res;
@@ -213,6 +226,7 @@ function createSupabaseClient(): SupabaseClient<Database> {
         }
       } else if (event === "SIGNED_OUT") {
         cacheAuthSession(null);
+        signedUrlMemCache.clear();
       }
     });
 
@@ -223,11 +237,14 @@ function createSupabaseClient(): SupabaseClient<Database> {
       const origCreateSignedUrls = api.createSignedUrls.bind(api);
 
       api.createSignedUrl = async (path, expiresIn, options) => {
-        const isMutable = path.endsWith("vault-trackers.bin");
+        const isMutable =
+          path.endsWith("vault-trackers.bin") || path.endsWith("gallery-folders.bin");
+        const cacheKey = `${bucket}/${path}`;
+        const now = Date.now();
         if (!isMutable) {
-          const cachedUrl = await getStorageBlobUrl(bucket, path);
-          if (cachedUrl) {
-            return { data: { signedUrl: cachedUrl }, error: null };
+          const hit = signedUrlMemCache.get(cacheKey);
+          if (hit && hit.expiresAt > now) {
+            return { data: { signedUrl: hit.signedUrl }, error: null };
           }
         }
         if (typeof navigator !== "undefined" && !navigator.onLine) {
@@ -236,8 +253,13 @@ function createSupabaseClient(): SupabaseClient<Database> {
         }
         try {
           const res = await origCreateSignedUrl(path, expiresIn, options);
-          if (res.data?.signedUrl && !res.data.signedUrl.startsWith("blob:")) {
-            void cacheRemoteStorageUrl(bucket, path, res.data.signedUrl);
+          if (res.data?.signedUrl) {
+            if (!isMutable) {
+              signedUrlMemCache.set(cacheKey, {
+                signedUrl: res.data.signedUrl,
+                expiresAt: now + SIGNED_URL_TTL_MS,
+              });
+            }
             return res;
           }
         } catch {
@@ -262,23 +284,46 @@ function createSupabaseClient(): SupabaseClient<Database> {
           );
           return { data: offlineItems, error: null };
         }
+
+        const now = Date.now();
+        const uncachedPaths: string[] = [];
+        for (const p of paths) {
+          const hit = signedUrlMemCache.get(`${bucket}/${p}`);
+          if (!hit || hit.expiresAt <= now) {
+            uncachedPaths.push(p);
+          }
+        }
+
+        if (uncachedPaths.length === 0) {
+          return {
+            data: paths.map((p) => {
+              const url = signedUrlMemCache.get(`${bucket}/${p}`)?.signedUrl ?? "";
+              return { error: null, path: p, signedURL: url, signedUrl: url };
+            }),
+            error: null,
+          };
+        }
+
         try {
-          const res = await origCreateSignedUrls(paths, expiresIn, options);
+          const res = await origCreateSignedUrls(uncachedPaths, expiresIn, options);
           if (res.data) {
-            const enhanced = await Promise.all(
-              res.data.map(async (item) => {
-                if (!item.path) return item;
-                const localUrl = await getStorageBlobUrl(bucket, item.path);
-                if (localUrl) {
-                  return { ...item, signedURL: localUrl, signedUrl: localUrl };
-                }
-                if (item.signedUrl && !item.signedUrl.startsWith("blob:")) {
-                  void cacheRemoteStorageUrl(bucket, item.path, item.signedUrl);
-                }
-                return item;
+            for (const item of res.data) {
+              const signed =
+                item.signedUrl || (item as unknown as { signedURL?: string }).signedURL || "";
+              if (item.path && signed) {
+                signedUrlMemCache.set(`${bucket}/${item.path}`, {
+                  signedUrl: signed,
+                  expiresAt: now + SIGNED_URL_TTL_MS,
+                });
+              }
+            }
+            return {
+              data: paths.map((p) => {
+                const url = signedUrlMemCache.get(`${bucket}/${p}`)?.signedUrl ?? "";
+                return { error: null, path: p, signedURL: url, signedUrl: url };
               }),
-            );
-            return { data: enhanced, error: null };
+              error: null,
+            };
           }
         } catch {
           // fallback below

@@ -10,6 +10,7 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import {
+  clearCryptoCache,
   deriveDataKey,
   deriveVerifier,
   randomBytes,
@@ -164,8 +165,10 @@ export function VaultProvider({ userId, children }: { userId: string; children: 
       if (passphrase.length < 8) throw new Error("Passphrase must be at least 8 characters");
       const newKdfSalt = toB64(randomBytes(16));
       const newVerifierSalt = toB64(randomBytes(16));
-      const newVerifier = await deriveVerifier(passphrase, newVerifierSalt);
-      const dataKey = await deriveDataKey(passphrase, newKdfSalt);
+      const [newVerifier, dataKey] = await Promise.all([
+        deriveVerifier(passphrase, newVerifierSalt),
+        deriveDataKey(passphrase, newKdfSalt),
+      ]);
       cacheVaultMeta(userId, {
         kdf_salt: newKdfSalt,
         verifier: newVerifier,
@@ -191,9 +194,11 @@ export function VaultProvider({ userId, children }: { userId: string; children: 
   const unlock = useCallback(
     async (passphrase: string): Promise<CryptoKey> => {
       if (!kdfSalt || !verifier || !verifierSalt) throw new Error("Vault not initialized");
-      const check = await deriveVerifier(passphrase, verifierSalt);
+      const [check, dataKey] = await Promise.all([
+        deriveVerifier(passphrase, verifierSalt),
+        deriveDataKey(passphrase, kdfSalt),
+      ]);
       if (!timingSafeEqualStr(check, verifier)) throw new Error("Wrong passphrase");
-      const dataKey = await deriveDataKey(passphrase, kdfSalt);
       setKey(dataKey);
       setStatus("unlocked");
       return dataKey;
@@ -205,6 +210,7 @@ export function VaultProvider({ userId, children }: { userId: string; children: 
     setKey(null);
     setStatus(kdfSalt ? "locked" : "needs_setup");
     // Wipe all decrypted data from React Query memory cache immediately on lock
+    clearCryptoCache();
     qc.clear();
     clearOfflineBlobUrls();
   }, [kdfSalt, qc]);
@@ -230,8 +236,9 @@ export function VaultProvider({ userId, children }: { userId: string; children: 
     [status, key, setup, unlock, lock],
   );
 
-  (globalThis as unknown as Record<string, VaultContextValue | undefined>).__papervault_vault_value__ =
-    value;
+  (
+    globalThis as unknown as Record<string, VaultContextValue | undefined>
+  ).__papervault_vault_value__ = value;
 
   return <VaultContext.Provider value={value}>{children}</VaultContext.Provider>;
 }

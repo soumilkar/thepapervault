@@ -54,12 +54,11 @@ async function writeEncrypted(
     .upload(storagePath(userId), blob, { contentType: "application/octet-stream", upsert: true });
 }
 
-async function loadEncryptedGalleryFolders(
+async function fetchRemoteGalleryFolders(
   userId: string,
   key: CryptoKey,
-): Promise<GalleryFolder[]> {
-  const local = await readLocalEncrypted(userId, key);
-
+  local: { folders: GalleryFolder[]; updated_at: string } | null,
+): Promise<{ folders: GalleryFolder[]; updated_at: string } | null> {
   try {
     const { data: signed } = await supabase.storage
       .from(BUCKET)
@@ -81,7 +80,10 @@ async function loadEncryptedGalleryFolders(
             } catch {
               // ignore
             }
-            return remote.folders ?? [];
+            return {
+              folders: remote.folders ?? [],
+              updated_at: remote.updated_at || new Date().toISOString(),
+            };
           }
         }
       }
@@ -89,8 +91,7 @@ async function loadEncryptedGalleryFolders(
   } catch {
     // Offline or network error: rely on local
   }
-
-  return local?.folders ?? [];
+  return null;
 }
 
 export function useGalleryFolders(userId: string) {
@@ -100,11 +101,33 @@ export function useGalleryFolders(userId: string) {
   const query = useQuery({
     queryKey: ["gallery-folders", userId],
     enabled: !!key && !!userId,
-    queryFn: () => {
-      if (!key) return Promise.resolve([]);
-      return loadEncryptedGalleryFolders(userId, key);
+    queryFn: async () => {
+      if (!key) return [];
+      const local = await readLocalEncrypted(userId, key);
+      if (local) {
+        // Revalidate remote in background without blocking Gallery render
+        void fetchRemoteGalleryFolders(userId, key, local).then((remote) => {
+          if (remote && remote.updated_at !== local.updated_at) {
+            qc.setQueryData(["gallery-folders", userId], remote.folders);
+          }
+        });
+        return local.folders ?? [];
+      }
+
+      const remote = await fetchRemoteGalleryFolders(userId, key, null);
+      if (remote) return remote.folders;
+
+      // Seed local encrypted empty state so future Gallery loads are <1ms
+      try {
+        const emptyPayload = { folders: [], updated_at: new Date(0).toISOString() };
+        const enc = await encryptText(key, JSON.stringify(emptyPayload));
+        window.localStorage.setItem(localCacheKey(userId), JSON.stringify(enc));
+      } catch {
+        // ignore
+      }
+      return [];
     },
-    staleTime: 1000 * 60 * 5,
+    staleTime: 1000 * 60 * 10,
   });
 
   const mutation = useMutation({

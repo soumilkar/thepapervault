@@ -1,4 +1,4 @@
-const CACHE_NAME = "papervault-core-v2";
+const CACHE_NAME = "papervault-core-v3";
 const FONT_CACHE = "papervault-fonts-v2";
 
 const STATIC_PRECACHE = [
@@ -46,8 +46,17 @@ self.addEventListener("fetch", (event) => {
 
   const url = new URL(request.url);
 
-  // Never intercept AI companion stream or live API routes
-  if (url.pathname.startsWith("/api/")) return;
+  // Never intercept API routes, Vite module requests, or query-string requests
+  if (
+    url.pathname.startsWith("/api/") ||
+    url.pathname.startsWith("/src/") ||
+    url.pathname.startsWith("/node_modules/") ||
+    url.pathname.startsWith("/@") ||
+    url.pathname.startsWith("/__vite") ||
+    url.search.length > 0
+  ) {
+    return;
+  }
 
   // Cache Google Fonts
   if (url.hostname === "fonts.googleapis.com" || url.hostname === "fonts.gstatic.com") {
@@ -99,24 +108,28 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Static assets (CSS, JS, images)
+  // Only cache static production build assets, icons, and manifests
+  const isStaticAsset =
+    url.pathname.startsWith("/assets/") ||
+    STATIC_PRECACHE.includes(url.pathname) ||
+    /\.(?:png|svg|ico|webp|woff2?)$/i.test(url.pathname);
+
+  if (!isStaticAsset) return;
+
   event.respondWith(
     (async () => {
       const cache = await caches.open(CACHE_NAME);
       const cached = await cache.match(request);
-      const fetchPromise = fetch(request)
-        .then((res) => {
-          if (res.ok) {
-            cache.put(request, res.clone());
-          }
-          return res;
-        })
-        .catch(() => null);
-
       if (cached) return cached;
-      const networkRes = await fetchPromise;
-      if (networkRes) return networkRes;
-      return new Response("", { status: 504 });
+      try {
+        const res = await fetch(request);
+        if (res.ok) {
+          cache.put(request, res.clone());
+        }
+        return res;
+      } catch {
+        return new Response("", { status: 504 });
+      }
     })(),
   );
 });

@@ -30,6 +30,9 @@ import { folderOptions, folderWithDescendants, type FolderRow } from "@/lib/fold
 import {
   fetchStorageBytesWithOfflineCache,
   fetchStorageUrlWithOfflineCache,
+  getStorageBlobRecord,
+  peekDecryptedMediaUrl,
+  setDecryptedMediaUrl,
 } from "@/lib/offline-supabase";
 import { useGalleryFolders, type GalleryFolder } from "@/lib/gallery-folders";
 import { getBrowserNow } from "@/lib/browser-time";
@@ -382,7 +385,7 @@ function GalleryPage() {
 
       if (!combinedItems.length) return [];
 
-      // Generate signed URLs across both buckets
+      // Warm batch signed URLs in the background without blocking Gallery render
       const galleryPaths = combinedItems
         .filter((i) => i.bucket === "gallery")
         .map((i) => i.storage_path);
@@ -390,23 +393,11 @@ function GalleryPage() {
         .filter((i) => i.bucket === "media")
         .map((i) => i.storage_path);
 
-      const [gallerySigned, mediaSigned] = await Promise.all([
-        galleryPaths.length > 0
-          ? supabase.storage.from("gallery").createSignedUrls(galleryPaths, 60 * 60)
-          : { data: [] },
-        mediaPaths.length > 0
-          ? supabase.storage.from("media").createSignedUrls(mediaPaths, 60 * 60)
-          : { data: [] },
-      ]);
-
-      const urlMap = new Map<string, string>();
-      for (const item of gallerySigned.data ?? []) {
-        const signed = item.signedUrl || (item as { signedURL?: string }).signedURL;
-        if (item.path && signed) urlMap.set(item.path, signed);
+      if (galleryPaths.length > 0) {
+        void supabase.storage.from("gallery").createSignedUrls(galleryPaths, 60 * 60);
       }
-      for (const item of mediaSigned.data ?? []) {
-        const signed = item.signedUrl || (item as { signedURL?: string }).signedURL;
-        if (item.path && signed) urlMap.set(item.path, signed);
+      if (mediaPaths.length > 0) {
+        void supabase.storage.from("media").createSignedUrls(mediaPaths, 60 * 60);
       }
 
       return Promise.all(
@@ -449,7 +440,7 @@ function GalleryPage() {
             bucket: img.bucket,
             caption: captionPlain,
             created_at: img.created_at,
-            signedUrl: urlMap.get(img.storage_path) ?? "",
+            signedUrl: "",
             iv: img.iv,
             mime: img.mime,
             source: itemSource,
@@ -1570,62 +1561,90 @@ const DecryptedGalleryPhoto = memo(function DecryptedGalleryPhoto({
   cryptoKey: CryptoKey | null;
   fullscreen?: boolean;
 }) {
-  const [src, setSrc] = useState<string | null>(null);
+  const [src, setSrc] = useState<string | null>(() =>
+    peekDecryptedMediaUrl(bucket, storagePath, iv),
+  );
 
   useEffect(() => {
+    const cachedUrl = peekDecryptedMediaUrl(bucket, storagePath, iv);
+    if (cachedUrl) {
+      setSrc(cachedUrl);
+      return;
+    }
+
     let cancelled = false;
-    let objectUrl: string | null = null;
 
     (async () => {
       try {
-        let currentSignedUrl = initialSignedUrl;
-
-        // If initial signedUrl is missing, generate one dynamically
-        if (!currentSignedUrl) {
-          try {
-            const { data } = await supabase.storage.from(bucket).createSignedUrl(storagePath, 3600);
-            currentSignedUrl = data?.signedUrl || (data as { signedURL?: string })?.signedURL || "";
-          } catch {
-            // ignore
-          }
+        // 1. Check local IndexedDB blob first before making any network signed-URL call
+        const altBucket = bucket === "gallery" ? "media" : "gallery";
+        let localRecord = await getStorageBlobRecord(bucket, storagePath);
+        if (!localRecord?.buffer) {
+          localRecord = await getStorageBlobRecord(altBucket, storagePath);
         }
 
-        // Try primary bucket first
-        let bytes: ArrayBuffer | null = null;
-        if (iv) {
-          bytes = await fetchStorageBytesWithOfflineCache(bucket, storagePath, currentSignedUrl);
-          // Fallback to alternative bucket if primary fails
+        let bytes: ArrayBuffer | null = localRecord?.buffer ?? null;
+        let currentSignedUrl = initialSignedUrl;
+
+        // 2. Only request a signed URL and download if not yet cached in IndexedDB
+        if (!bytes) {
+          if (!currentSignedUrl) {
+            try {
+              const { data } = await supabase.storage
+                .from(bucket)
+                .createSignedUrl(storagePath, 3600);
+              currentSignedUrl =
+                data?.signedUrl || (data as { signedURL?: string })?.signedURL || "";
+            } catch {
+              // ignore
+            }
+          }
+          if (currentSignedUrl) {
+            bytes = await fetchStorageBytesWithOfflineCache(bucket, storagePath, currentSignedUrl);
+          }
           if (!bytes) {
-            const altBucket = bucket === "gallery" ? "media" : "gallery";
             try {
               const { data: altData } = await supabase.storage
                 .from(altBucket)
                 .createSignedUrl(storagePath, 3600);
               const altUrl =
                 altData?.signedUrl || (altData as { signedURL?: string })?.signedURL || "";
-              bytes = await fetchStorageBytesWithOfflineCache(altBucket, storagePath, altUrl);
+              if (altUrl) {
+                bytes = await fetchStorageBytesWithOfflineCache(altBucket, storagePath, altUrl);
+              }
             } catch {
               // ignore
             }
           }
+        }
 
-          if (bytes && cryptoKey && !cancelled) {
-            try {
-              const pt = await decryptBytes(cryptoKey, bytes, iv);
-              objectUrl = URL.createObjectURL(new Blob([pt], { type: mime || "image/jpeg" }));
-              if (!cancelled) setSrc(objectUrl);
-              return;
-            } catch {
-              // Fallback to raw bytes if unencrypted
-              objectUrl = URL.createObjectURL(new Blob([bytes], { type: mime || "image/jpeg" }));
-              if (!cancelled) setSrc(objectUrl);
-              return;
-            }
+        if (iv && bytes && cryptoKey && !cancelled) {
+          try {
+            const pt = await decryptBytes(cryptoKey, bytes, iv);
+            const objectUrl = URL.createObjectURL(new Blob([pt], { type: mime || "image/jpeg" }));
+            setDecryptedMediaUrl(bucket, storagePath, iv, objectUrl);
+            if (!cancelled) setSrc(objectUrl);
+            return;
+          } catch {
+            const objectUrl = URL.createObjectURL(
+              new Blob([bytes], { type: mime || "image/jpeg" }),
+            );
+            setDecryptedMediaUrl(bucket, storagePath, iv, objectUrl);
+            if (!cancelled) setSrc(objectUrl);
+            return;
           }
         }
 
         // Plain / Unencrypted fallback
         if (!iv && !cancelled) {
+          if (bytes) {
+            const objectUrl = URL.createObjectURL(
+              new Blob([bytes], { type: mime || "image/jpeg" }),
+            );
+            setDecryptedMediaUrl(bucket, storagePath, iv, objectUrl);
+            if (!cancelled) setSrc(objectUrl);
+            return;
+          }
           const directUrl = await fetchStorageUrlWithOfflineCache(
             bucket,
             storagePath,
@@ -1643,7 +1662,6 @@ const DecryptedGalleryPhoto = memo(function DecryptedGalleryPhoto({
 
     return () => {
       cancelled = true;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
   }, [bucket, storagePath, initialSignedUrl, iv, mime, cryptoKey]);
 

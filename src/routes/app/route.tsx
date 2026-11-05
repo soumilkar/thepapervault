@@ -23,7 +23,12 @@ import {
 import { VaultProvider, useVault } from "@/lib/vault";
 import { VaultGate } from "@/components/VaultGate";
 import { toast } from "sonner";
-import { OFFLINE_SYNC_SUCCESS_EVENT, triggerAutoSync } from "@/lib/offline-supabase";
+import {
+  getCachedAuthSession,
+  OFFLINE_DATA_UPDATED_EVENT,
+  OFFLINE_SYNC_SUCCESS_EVENT,
+  triggerAutoSync,
+} from "@/lib/offline-supabase";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -31,25 +36,61 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import type { User } from "@supabase/supabase-js";
+
+let memAuthedUser: User | null = null;
+let memProfileDisplayName: string | null = null;
+
+function getStoredProfileName(userId: string): string | null {
+  if (memProfileDisplayName) return memProfileDisplayName;
+  if (typeof window === "undefined") return null;
+  try {
+    return window.localStorage.getItem(`papervault:profile_name:${userId}`);
+  } catch {
+    return null;
+  }
+}
+
+function setStoredProfileName(userId: string, name: string | null) {
+  memProfileDisplayName = name;
+  if (typeof window === "undefined") return;
+  try {
+    if (name) {
+      window.localStorage.setItem(`papervault:profile_name:${userId}`, name);
+    }
+  } catch {
+    // ignore storage errors
+  }
+}
 
 export const Route = createFileRoute("/app")({
   ssr: false,
   beforeLoad: async () => {
+    // Fast path: use in-memory or cached session for 0ms route transitions
+    if (memAuthedUser) {
+      return {
+        user: memAuthedUser,
+        profileDisplayName: getStoredProfileName(memAuthedUser.id),
+      };
+    }
+
+    const cached = getCachedAuthSession() as { user?: User } | null;
+    if (cached?.user) {
+      memAuthedUser = cached.user;
+      return {
+        user: cached.user,
+        profileDisplayName: getStoredProfileName(cached.user.id),
+      };
+    }
+
     const { data, error } = await supabase.auth.getSession();
     if (error || !data.session?.user) throw redirect({ to: "/auth" });
     const user = data.session.user;
-    let profileDisplayName: string | null = null;
-    try {
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("id, display_name")
-        .eq("id", user.id)
-        .maybeSingle();
-      profileDisplayName = profile?.display_name?.trim() || null;
-    } catch {
-      // ignore error and allow fallback resolution
-    }
-    return { user, profileDisplayName };
+    memAuthedUser = user;
+    return {
+      user,
+      profileDisplayName: getStoredProfileName(user.id),
+    };
   },
   component: AuthedLayout,
 });
@@ -71,7 +112,17 @@ function AuthedLayout() {
   const current =
     NAV.find((n) => (n.exact ? pathname === n.to : pathname.startsWith(n.to))) ?? NAV[0];
 
-  // Warm the user-profile query while VaultGate is still waiting for the passkey
+  // Preload all main app route chunks right after layout mounts so tab switching is instant
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      for (const item of NAV) {
+        void router.preloadRoute({ to: item.to }).catch(() => {});
+      }
+    }, 150);
+    return () => window.clearTimeout(timer);
+  }, [router]);
+
+  // Warm the user-profile query in background without blocking route navigation
   useQuery({
     queryKey: ["user-profile", user.id],
     initialData: profileDisplayName ? { id: user.id, display_name: profileDisplayName } : undefined,
@@ -81,6 +132,10 @@ function AuthedLayout() {
         .select("id, display_name")
         .eq("id", user.id)
         .maybeSingle();
+      const trimmed = data?.display_name?.trim() || null;
+      if (trimmed) {
+        setStoredProfileName(user.id, trimmed);
+      }
       return data;
     },
   });
@@ -119,17 +174,48 @@ function AuthedLayout() {
       }
     };
 
+    const handleDataUpdated = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { table?: string } | undefined;
+      const t = detail?.table;
+      if (!t) return;
+      if (t === "notes") {
+        qc.invalidateQueries({ queryKey: ["notes"] });
+        qc.invalidateQueries({ queryKey: ["gallery"] });
+      } else if (t === "note_folders") {
+        qc.invalidateQueries({ queryKey: ["note-folders"] });
+      } else if (t === "diary_entries") {
+        qc.invalidateQueries({ queryKey: ["diary"] });
+        qc.invalidateQueries({ queryKey: ["diary-metrics"] });
+        qc.invalidateQueries({ queryKey: ["public-diary-feed"] });
+        qc.invalidateQueries({ queryKey: ["gallery"] });
+      } else if (t === "diary_folders") {
+        qc.invalidateQueries({ queryKey: ["diary-folders"] });
+      } else if (t === "gallery_images") {
+        qc.invalidateQueries({ queryKey: ["gallery"] });
+      } else if (t === "blog_posts" || t === "blog_comments" || t === "blog_likes") {
+        qc.invalidateQueries({ queryKey: ["blog"] });
+      } else if (t === "profiles") {
+        qc.invalidateQueries({ queryKey: ["user-profile"] });
+      } else if (t === "chat_sessions") {
+        window.dispatchEvent(new Event("chat-sessions-updated"));
+      }
+    };
+
     if (typeof window !== "undefined") {
       window.addEventListener(OFFLINE_SYNC_SUCCESS_EVENT, handleSyncSuccess);
+      window.addEventListener(OFFLINE_DATA_UPDATED_EVENT, handleDataUpdated);
     }
     return () => {
       if (typeof window !== "undefined") {
         window.removeEventListener(OFFLINE_SYNC_SUCCESS_EVENT, handleSyncSuccess);
+        window.removeEventListener(OFFLINE_DATA_UPDATED_EVENT, handleDataUpdated);
       }
     };
   }, [qc]);
 
   const handleSignOut = async () => {
+    memAuthedUser = null;
+    memProfileDisplayName = null;
     qc.clear();
     await supabase.auth.signOut();
     window.location.href = "/auth";
@@ -207,15 +293,15 @@ function VaultOfflineWarmer({ userId }: { userId: string }) {
 
   useEffect(() => {
     if (status !== "unlocked" || !key || typeof window === "undefined" || !navigator.onLine) return;
-    triggerAutoSync(300);
+    triggerAutoSync(1500);
     if (hasWarmed.current) return;
     hasWarmed.current = true;
 
-    // Use idle time to smoothly cache past entries, notes, folders, and images into IndexedDB
+    // Wait until the app has been open and idle for 15+ seconds before warming metadata
     const scheduleWarm = (fn: () => Promise<unknown>, delayMs: number) => {
       return window.setTimeout(() => {
         if (typeof window !== "undefined" && "requestIdleCallback" in window) {
-          window.requestIdleCallback(() => void fn(), { timeout: 4000 });
+          window.requestIdleCallback(() => void fn(), { timeout: 10000 });
         } else {
           void fn();
         }
@@ -224,57 +310,11 @@ function VaultOfflineWarmer({ userId }: { userId: string }) {
 
     const timers: number[] = [];
 
-    // 1. Fetch user profile, note folders & up to 500 notes
     timers.push(
       scheduleWarm(async () => {
-        await supabase.from("profiles").select("id, display_name").eq("id", userId).maybeSingle();
         await supabase.from("note_folders").select("id,name,parent_id").eq("user_id", userId);
-        const { data: noteRows } = await supabase
-          .from("notes")
-          .select("*")
-          .eq("user_id", userId)
-          .limit(500);
-        const mediaPaths = (noteRows ?? [])
-          .map((n) => (n as { image_url?: string | null }).image_url)
-          .filter((p): p is string => typeof p === "string" && p.length > 0)
-          .slice(0, 60);
-        if (mediaPaths.length > 0) {
-          await supabase.storage.from("media").createSignedUrls(mediaPaths, 60 * 60);
-        }
-      }, 600),
-    );
-
-    // 2. Fetch diary folders & past diary entries (up to 500)
-    timers.push(
-      scheduleWarm(async () => {
         await supabase.from("diary_folders").select("id,name,parent_id").eq("user_id", userId);
-        await supabase
-          .from("diary_entries")
-          .select("*")
-          .eq("user_id", userId)
-          .order("entry_date", { ascending: false })
-          .order("created_at", { ascending: false })
-          .limit(500);
-      }, 1600),
-    );
-
-    // 3. Fetch gallery images (up to 200) & pre-cache binary blobs into IndexedDB
-    timers.push(
-      scheduleWarm(async () => {
-        const { data: galleryRows } = await supabase
-          .from("gallery_images")
-          .select("*")
-          .eq("user_id", userId)
-          .order("created_at", { ascending: false })
-          .limit(200);
-        const galleryPaths = (galleryRows ?? [])
-          .map((g) => (g as { storage_path?: string | null }).storage_path)
-          .filter((p): p is string => typeof p === "string" && p.length > 0)
-          .slice(0, 60);
-        if (galleryPaths.length > 0) {
-          await supabase.storage.from("gallery").createSignedUrls(galleryPaths, 60 * 60);
-        }
-      }, 3000),
+      }, 15000),
     );
 
     return () => {
