@@ -16,7 +16,7 @@ export const GoalsTracker = memo(function GoalsTracker({ userId }: { userId: str
   const [horizon, setHorizon] = useState<GoalHorizon>("weekly");
   const [filter, setFilter] = useState<"active" | "completed" | "all">("active");
 
-  const goals = data.goals ?? [];
+  const goals = useMemo(() => data.goals ?? [], [data.goals]);
 
   const stats = useMemo(() => {
     const total = goals.length;

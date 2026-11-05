@@ -196,10 +196,10 @@ export const MoodTracker = memo(function MoodTracker({ userId }: { userId: strin
                       fontSize: 12,
                       color: "var(--foreground)",
                     }}
-                    formatter={(_, __, props: any) => {
-                      const p = props?.payload;
+                    formatter={(_, __, props) => {
+                      const p = (props as { payload?: { label?: string; note?: string } })?.payload;
                       if (!p) return [];
-                      return [p.note ? `${p.label} — ${p.note}` : p.label, "Mood"];
+                      return [p.note ? `${p.label} — ${p.note}` : (p.label ?? ""), "Mood"];
                     }}
                   />
                   <Area
@@ -208,8 +208,16 @@ export const MoodTracker = memo(function MoodTracker({ userId }: { userId: strin
                     stroke="var(--accent)"
                     strokeWidth={2}
                     fill="url(#moodTrackerGrad)"
-                    dot={({ cx, cy, payload }: any) => {
-                      const color = moodMeta(payload.score as MoodLevel).color;
+                    dot={(props) => {
+                      const { cx, cy, payload } = props as {
+                        cx?: number;
+                        cy?: number;
+                        payload?: { score?: MoodLevel };
+                      };
+                      if (typeof cx !== "number" || typeof cy !== "number" || !payload?.score) {
+                        return <span key="empty-dot" />;
+                      }
+                      const color = moodMeta(payload.score).color;
                       return (
                         <circle
                           key={`${cx}-${cy}`}

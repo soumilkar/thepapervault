@@ -34,8 +34,7 @@ function getAdminClient(request: Request) {
     readRuntimeEnv("VITE_SUPABASE_URL", request) ||
     (typeof process !== "undefined"
       ? process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
-      : "") ||
-    "https://lffxkhqwyvgpqkkqhznm.supabase.co";
+      : "");
 
   const serviceKey =
     readRuntimeEnv("SUPABASE_SERVICE_ROLE_KEY", request) ||
@@ -53,7 +52,56 @@ function getAdminClient(request: Request) {
 
 import type { User } from "@supabase/supabase-js";
 
+const MAX_VERIFIED_TOKENS = 500;
 const verifiedTokenCache = new Map<string, { user: User; expiresAt: number }>();
+
+function cacheVerifiedUser(token: string, user: User, expiresAt: number) {
+  if (verifiedTokenCache.size >= MAX_VERIFIED_TOKENS) {
+    const now = Date.now();
+    for (const [key, val] of verifiedTokenCache) {
+      if (val.expiresAt <= now || verifiedTokenCache.size >= MAX_VERIFIED_TOKENS) {
+        verifiedTokenCache.delete(key);
+      }
+    }
+  }
+  verifiedTokenCache.set(token, { user, expiresAt });
+}
+
+function normalizeStoragePath(p: string): string {
+  const clean = p.replace(/^[/\\]+/, "").trim();
+  if (clean.includes("..") || clean.includes("\0")) {
+    return "";
+  }
+  return clean;
+}
+
+function isAllowedStoragePath(
+  user: User,
+  bucket: string,
+  rawPath: string,
+  isRead = false,
+): boolean {
+  const path = normalizeStoragePath(rawPath);
+  if (!path) return false;
+
+  const userPrefix = `${user.id}/`;
+
+  if (bucket === "gallery") {
+    return path.startsWith(userPrefix);
+  }
+
+  if (bucket === "media") {
+    if (isRead) {
+      if (path.endsWith(".bin")) {
+        return path.startsWith(userPrefix);
+      }
+      return true;
+    }
+    return path.startsWith(userPrefix);
+  }
+
+  return path.startsWith(userPrefix);
+}
 
 async function authenticateUser(request: Request, adminClient: ReturnType<typeof getAdminClient>) {
   const authorization =
@@ -75,7 +123,7 @@ async function authenticateUser(request: Request, adminClient: ReturnType<typeof
     if (error || !data?.user?.id) {
       return null;
     }
-    verifiedTokenCache.set(token, { user: data.user, expiresAt: now + 5 * 60 * 1000 });
+    cacheVerifiedUser(token, data.user, now + 5 * 60 * 1000);
     return data.user;
   } catch {
     return null;
@@ -120,12 +168,14 @@ export const Route = createFileRoute("/api/storage-proxy")({
               });
             }
 
-            // Path must begin with user.id/ for security
-            if (!path.startsWith(`${user.id}/`)) {
-              return new Response(JSON.stringify({ error: "Path does not match user ID" }), {
-                status: 403,
-                headers: { "Content-Type": "application/json" },
-              });
+            if (!isAllowedStoragePath(user, bucket, path, false)) {
+              return new Response(
+                JSON.stringify({ error: "Forbidden: path not permitted for user" }),
+                {
+                  status: 403,
+                  headers: { "Content-Type": "application/json" },
+                },
+              );
             }
 
             let fileBuffer: ArrayBuffer;
@@ -155,9 +205,10 @@ export const Route = createFileRoute("/api/storage-proxy")({
               fileBuffer = await request.arrayBuffer();
             }
 
+            const safeUploadPath = normalizeStoragePath(path);
             const { data, error } = await adminClient.storage
               .from(bucket)
-              .upload(path, fileBuffer, {
+              .upload(safeUploadPath, fileBuffer, {
                 contentType,
                 upsert: true,
               });
@@ -171,9 +222,9 @@ export const Route = createFileRoute("/api/storage-proxy")({
 
             return new Response(
               JSON.stringify({
-                Key: `${bucket}/${path}`,
+                Key: `${bucket}/${safeUploadPath}`,
                 Id: data?.id || crypto.randomUUID(),
-                fullPath: data?.fullPath || `${bucket}/${path}`,
+                fullPath: data?.fullPath || `${bucket}/${safeUploadPath}`,
               }),
               {
                 status: 200,
@@ -189,7 +240,12 @@ export const Route = createFileRoute("/api/storage-proxy")({
               (p): p is string => typeof p === "string" && Boolean(p),
             );
 
-            if (paths.length === 0) {
+            // Enforce authorization: only allow owner paths (and non-.bin public media)
+            const authorizedPaths = paths
+              .map((p) => normalizeStoragePath(p))
+              .filter((p) => p && isAllowedStoragePath(user, bucket, p, true));
+
+            if (authorizedPaths.length === 0) {
               return new Response(JSON.stringify([]), {
                 status: 200,
                 headers: { "Content-Type": "application/json" },
@@ -198,7 +254,7 @@ export const Route = createFileRoute("/api/storage-proxy")({
 
             const { data, error } = await adminClient.storage
               .from(bucket)
-              .createSignedUrls(paths, 60 * 60);
+              .createSignedUrls(authorizedPaths, 60 * 60);
             if (error) {
               return new Response(JSON.stringify({ error: error.message }), {
                 status: 400,
@@ -231,16 +287,27 @@ export const Route = createFileRoute("/api/storage-proxy")({
           if (action === "sign-single") {
             const body = (await request.json().catch(() => ({}))) as { path?: string };
             const targetPath = body.path || path;
-            if (!targetPath) {
-              return new Response(JSON.stringify({ error: "Missing path" }), {
+            const normalizedTarget = normalizeStoragePath(targetPath);
+            if (!normalizedTarget) {
+              return new Response(JSON.stringify({ error: "Missing or invalid path" }), {
                 status: 400,
                 headers: { "Content-Type": "application/json" },
               });
             }
 
+            if (!isAllowedStoragePath(user, bucket, normalizedTarget, true)) {
+              return new Response(
+                JSON.stringify({ error: "Forbidden: unauthorized access to object" }),
+                {
+                  status: 403,
+                  headers: { "Content-Type": "application/json" },
+                },
+              );
+            }
+
             const { data, error } = await adminClient.storage
               .from(bucket)
-              .createSignedUrl(targetPath, 60 * 60);
+              .createSignedUrl(normalizedTarget, 60 * 60);
 
             if (error) {
               return new Response(JSON.stringify({ error: error.message }), {
@@ -267,9 +334,13 @@ export const Route = createFileRoute("/api/storage-proxy")({
           // 4. Batch Remove Objects
           if (action === "remove") {
             const body = (await request.json().catch(() => ({}))) as { prefixes?: string[] };
-            const prefixes = (body.prefixes ?? []).filter(
-              (p): p is string => typeof p === "string" && p.startsWith(`${user.id}/`),
-            );
+            const prefixes = (body.prefixes ?? [])
+              .filter(
+                (p): p is string =>
+                  typeof p === "string" && isAllowedStoragePath(user, bucket, p, false),
+              )
+              .map((p) => normalizeStoragePath(p))
+              .filter(Boolean);
 
             if (prefixes.length === 0) {
               return new Response(JSON.stringify([]), {

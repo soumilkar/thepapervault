@@ -25,12 +25,14 @@ import { Markdown } from "@/components/Markdown";
 import { downloadTextFile } from "@/lib/download";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { useBrowserDraft } from "@/lib/browser-drafts";
+import type { Database } from "@/integrations/supabase/types";
 
 export const Route = createFileRoute("/app/blog")({
   component: BlogPage,
 });
 
 type Tab = "mine" | "community";
+type BlogPostRow = Database["public"]["Tables"]["blog_posts"]["Row"];
 
 const MEDIA_BUCKET = "media";
 
@@ -92,6 +94,8 @@ function BlogPage() {
 
   useEffect(() => {
     if (draftReady && (title.trim() || content.trim() || tags.trim())) setOpen(true);
+    // Only auto-open composer once when encrypted draft is restored
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draftReady]);
 
   useEffect(() => {
@@ -242,7 +246,7 @@ function BlogPage() {
     }
     const txt = rows
       .map(
-        (p: any) =>
+        (p: BlogPostRow) =>
           `${new Date(p.created_at).toISOString().slice(0, 10)} — ${p.title}${p.tags?.length ? `  [${p.tags.join(", ")}]` : ""}\n${"=".repeat(60)}\n${p.content}\n`,
       )
       .join("\n\n");
@@ -475,7 +479,7 @@ const BlogCard = memo(function BlogCard({
   onDelete,
   onSave,
 }: {
-  post: any;
+  post: BlogPostRow;
   isOwner: boolean;
   author?: string;
   currentUserId: string;
@@ -806,14 +810,14 @@ function Comments({
           .in("id", ids);
         (profs ?? []).forEach((p) => nameMap.set(p.id, p.display_name || "someone"));
       }
-      return (data ?? []).map((c: any) => ({ ...c, author: nameMap.get(c.user_id) || "someone" }));
+      return (data ?? []).map((c) => ({ ...c, author: nameMap.get(c.user_id) || "someone" }));
     },
   });
 
   const tree = useMemo<CommentNode[]>(() => {
     const rows = comments.data ?? [];
     const map = new Map<string, CommentNode>();
-    rows.forEach((r: any) => map.set(r.id, { ...r, children: [] }));
+    rows.forEach((r) => map.set(r.id, { ...r, children: [] }));
     const roots: CommentNode[] = [];
     map.forEach((n) => {
       if (n.parent_id && map.has(n.parent_id)) map.get(n.parent_id)!.children.push(n);
@@ -1076,8 +1080,8 @@ function CommentVotes({ commentId, currentUserId }: { commentId: string; current
         .eq("comment_id", commentId);
       if (error) throw error;
       const rows = data ?? [];
-      const score = rows.reduce((s, v: any) => s + v.value, 0);
-      const mineRow = rows.find((v: any) => v.user_id === currentUserId);
+      const score = rows.reduce((s, v) => s + v.value, 0);
+      const mineRow = rows.find((v) => v.user_id === currentUserId);
       return { score, mine: (mineRow?.value as 1 | -1 | undefined) ?? 0 };
     },
   });

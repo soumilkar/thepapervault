@@ -92,37 +92,74 @@ How you use their context:
 ${context || "(no entries shared yet)"}`;
 }
 
-async function authenticate(request: Request) {
+const MAX_COMPANION_TOKENS = 500;
+const verifiedCompanionTokenCache = new Map<string, number>();
+
+function cacheVerifiedCompanionToken(token: string, expiresAt: number) {
+  if (verifiedCompanionTokenCache.size >= MAX_COMPANION_TOKENS) {
+    const now = Date.now();
+    for (const [k, exp] of verifiedCompanionTokenCache) {
+      if (exp <= now || verifiedCompanionTokenCache.size >= MAX_COMPANION_TOKENS) {
+        verifiedCompanionTokenCache.delete(k);
+      }
+    }
+  }
+  verifiedCompanionTokenCache.set(token, expiresAt);
+}
+
+async function authenticate(request: Request): Promise<boolean> {
   const authorization = request.headers.get("authorization");
   if (!authorization?.startsWith("Bearer ")) return false;
 
-  const token = authorization.slice("Bearer ".length);
+  const token = authorization.slice("Bearer ".length).trim();
+  if (!token) return false;
+
+  const now = Date.now();
+  const cachedExp = verifiedCompanionTokenCache.get(token);
+  if (cachedExp && cachedExp > now) {
+    return true;
+  }
+
   const url =
     readRuntimeEnv("SUPABASE_URL", request) ||
     readRuntimeEnv("VITE_SUPABASE_URL", request) ||
-    process.env.SUPABASE_URL ||
+    (typeof process !== "undefined" ? process.env.SUPABASE_URL : "") ||
     import.meta.env.VITE_SUPABASE_URL;
   const key =
     readRuntimeEnv("SUPABASE_PUBLISHABLE_KEY", request) ||
     readRuntimeEnv("SUPABASE_ANON_KEY", request) ||
     readRuntimeEnv("VITE_SUPABASE_PUBLISHABLE_KEY", request) ||
     readRuntimeEnv("VITE_SUPABASE_ANON_KEY", request) ||
-    process.env.SUPABASE_PUBLISHABLE_KEY ||
-    process.env.SUPABASE_ANON_KEY ||
+    (typeof process !== "undefined"
+      ? process.env.SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_ANON_KEY
+      : "") ||
     import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY ||
     import.meta.env.VITE_SUPABASE_ANON_KEY;
+
   if (!url || !key) {
-    return Boolean(token);
+    // Fail closed: never allow unauthenticated access when Supabase config is missing
+    return false;
   }
 
-  const client = createClient<Database>(url, key, {
-    auth: { persistSession: false, autoRefreshToken: false },
-  });
-  const { data, error } = await client.auth.getClaims(token);
-  if (!error && Boolean(data?.claims?.sub)) return true;
+  try {
+    const client = createClient<Database>(url, key, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+    const { data, error } = await client.auth.getClaims(token);
+    if (!error && Boolean(data?.claims?.sub)) {
+      cacheVerifiedCompanionToken(token, now + 5 * 60 * 1000);
+      return true;
+    }
 
-  const { data: userData, error: userError } = await client.auth.getUser(token);
-  return !userError && Boolean(userData?.user?.id);
+    const { data: userData, error: userError } = await client.auth.getUser(token);
+    if (!userError && Boolean(userData?.user?.id)) {
+      cacheVerifiedCompanionToken(token, now + 5 * 60 * 1000);
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
 }
 
 function streamGroqResponse(response: Response, signal: AbortSignal) {

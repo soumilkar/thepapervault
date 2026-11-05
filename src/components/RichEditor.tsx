@@ -15,14 +15,25 @@ function escapeHtml(s: string): string {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function sanitizeUrl(rawUrl: string): string {
+  const trimmed = rawUrl.trim();
+  if (/^https?:\/\//i.test(trimmed) || trimmed.startsWith("blob:")) {
+    return trimmed.replace(/"/g, "%22").replace(/'/g, "%27");
+  }
+  return "";
 }
 
 function formatInlineMarkdownToHtml(raw: string): string {
   let s = escapeHtml(raw);
   // Markdown links: [label](url)
-  s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_m, label, url) => {
-    return `<a href="${url}" target="_blank" rel="noreferrer">${label}</a>`;
+  s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)"']+)\)/gi, (_m, label, url) => {
+    const safeUrl = sanitizeUrl(url);
+    if (!safeUrl) return label;
+    return `<a href="${safeUrl}" target="_blank" rel="noreferrer noopener">${label}</a>`;
   });
   // Bold: **text**
   s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
@@ -32,8 +43,10 @@ function formatInlineMarkdownToHtml(raw: string): string {
 }
 
 function buildImageBlockHtml(url: string): string {
-  const safeUrl = escapeHtml(url.trim());
-  return `<div contenteditable="false" data-md-image="${safeUrl}" class="my-3 rounded-2xl border border-border bg-secondary/35 p-2.5 sm:p-3.5 select-none"><img src="${safeUrl}" alt="" class="block max-h-[28rem] w-full rounded-xl border border-border/80 bg-card object-contain" /></div>`;
+  const safeUrl = sanitizeUrl(url);
+  if (!safeUrl) return "";
+  const escapedAttr = escapeHtml(safeUrl);
+  return `<div contenteditable="false" data-md-image="${escapedAttr}" class="my-3 rounded-2xl border border-border bg-secondary/35 p-2.5 sm:p-3.5 select-none"><img src="${escapedAttr}" alt="" class="block max-h-[28rem] w-full rounded-xl border border-border/80 bg-card object-contain" /></div>`;
 }
 
 export function markdownToHtml(md: string): string {
