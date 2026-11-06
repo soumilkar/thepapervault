@@ -72,25 +72,16 @@ export function getChatGapSeparatorLabel(
   currInput?: Date | string | number | null,
   gapThresholdMinutes = 30,
 ): string | null {
-  if (!prevInput || !currInput) return null;
-  const prev = prevInput instanceof Date ? prevInput : new Date(prevInput);
+  if (!currInput) return null;
   const curr = currInput instanceof Date ? currInput : new Date(currInput);
-  if (Number.isNaN(prev.getTime()) || Number.isNaN(curr.getTime())) return null;
-
-  const diffMs = curr.getTime() - prev.getTime();
-  const prevDay = toBrowserLocalDate(prev);
-  const currDay = toBrowserLocalDate(curr);
-  const dayChanged = prevDay !== currDay;
-
-  if (!dayChanged && diffMs < gapThresholdMinutes * 60 * 1000) {
-    return null;
-  }
+  if (Number.isNaN(curr.getTime())) return null;
 
   const now = new Date();
   const todayDay = toBrowserLocalDate(now);
+  const currDay = toBrowserLocalDate(curr);
   const timeStr = formatBrowserTimeOnly(curr);
 
-  if (dayChanged || currDay !== todayDay) {
+  const formatDateAndTime = () => {
     if (currDay === todayDay) {
       return `Today · ${timeStr}`;
     }
@@ -102,6 +93,28 @@ export function getChatGapSeparatorLabel(
       ...(sameYear ? {} : { year: "numeric" }),
     });
     return `${dateStr} · ${timeStr}`;
+  };
+
+  // Always display the horizontal time bar above the first message in a chat
+  if (!prevInput) {
+    return formatDateAndTime();
+  }
+
+  const prev = prevInput instanceof Date ? prevInput : new Date(prevInput);
+  if (Number.isNaN(prev.getTime())) {
+    return formatDateAndTime();
+  }
+
+  const diffMs = curr.getTime() - prev.getTime();
+  const prevDay = toBrowserLocalDate(prev);
+  const dayChanged = prevDay !== currDay;
+
+  if (!dayChanged && diffMs < gapThresholdMinutes * 60 * 1000) {
+    return null;
+  }
+
+  if (dayChanged || currDay !== todayDay) {
+    return formatDateAndTime();
   }
 
   return timeStr;

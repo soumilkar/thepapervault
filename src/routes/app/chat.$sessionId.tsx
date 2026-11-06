@@ -229,9 +229,14 @@ function SessionChat() {
     };
   }, [sessionId, user.id, key]);
 
-  const send = async (question: string) => {
-    if (!question.trim() || loading) return;
-    inputRef.current?.blur();
+  const send = async (rawQuestion: string) => {
+    const question = rawQuestion.trim();
+    if (!question || loading) return;
+    clearDraft();
+    if (inputRef.current) {
+      inputRef.current.value = "";
+      inputRef.current.blur();
+    }
     const sentSnap = getBrowserNow();
     const priorHistory = messages.filter((m) => !isCorruptedWarmupMessage(m.content));
     const userMsg: Msg = { role: "user", content: question, createdAt: sentSnap.iso };
@@ -251,7 +256,6 @@ function SessionChat() {
         created_at: sentSnap.iso,
       });
       if (userMessageError) throw userMessageError;
-      clearDraft();
 
       const context = await buildContext(user.id, key, source, startDate, endDate);
       const emailPrefix = user.email?.split("@")[0]?.toLowerCase() ?? "";

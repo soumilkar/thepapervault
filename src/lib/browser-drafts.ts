@@ -9,6 +9,7 @@ export function useBrowserDraft<T>(storageKey: string, initialValue: T) {
   const [value, setValue] = useState<T>(initialValue);
   const [ready, setReady] = useState(false);
   const skipNextWrite = useRef(false);
+  const userTouchedRef = useRef(false);
 
   const initialRef = useRef<T>(initialValue);
 
@@ -16,6 +17,7 @@ export function useBrowserDraft<T>(storageKey: string, initialValue: T) {
     let cancelled = false;
     setReady(false);
     skipNextWrite.current = false;
+    userTouchedRef.current = false;
     if (!key) {
       setValue(initialRef.current);
       return;
@@ -23,16 +25,18 @@ export function useBrowserDraft<T>(storageKey: string, initialValue: T) {
     (async () => {
       try {
         const saved = window.localStorage.getItem(storageKey);
-        if (saved) {
+        if (saved && !userTouchedRef.current) {
           const parsed = JSON.parse(saved) as { ct?: string; iv?: string };
           if (parsed && typeof parsed === "object" && parsed.ct && parsed.iv) {
             const plain = await decryptText(key, parsed.ct, parsed.iv);
-            if (!cancelled) setValue(JSON.parse(plain) as T);
+            if (!cancelled && !userTouchedRef.current) {
+              setValue(JSON.parse(plain) as T);
+            }
           } else {
             // Legacy unencrypted draft: remove plaintext immediately and write encrypted version
             window.localStorage.removeItem(storageKey);
             const enc = await encryptText(key, JSON.stringify(parsed));
-            if (!cancelled) {
+            if (!cancelled && !userTouchedRef.current) {
               window.localStorage.setItem(storageKey, JSON.stringify(enc));
               setValue(parsed as T);
             }
@@ -69,15 +73,21 @@ export function useBrowserDraft<T>(storageKey: string, initialValue: T) {
     };
   }, [storageKey, ready, value, key]);
 
+  const updateValue: Dispatch<SetStateAction<T>> = (next) => {
+    userTouchedRef.current = true;
+    setValue(next);
+  };
+
   const clear = () => {
+    userTouchedRef.current = true;
     skipNextWrite.current = true;
     try {
       window.localStorage.removeItem(storageKey);
     } catch {
       // ignore
     }
-    setValue(initialValue);
+    setValue(initialRef.current);
   };
 
-  return [value, setValue as Dispatch<SetStateAction<T>>, clear, ready] as const;
+  return [value, updateValue, clear, ready] as const;
 }
