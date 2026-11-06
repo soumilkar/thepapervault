@@ -785,40 +785,89 @@ function buildPostgrestResponse(
   return new Response(JSON.stringify(rows), { status, headers: resHeaders });
 }
 
+export function clearAllOfflineUserData() {
+  memTableCache.clear();
+  hydratedTables.clear();
+  recentRevalidations.clear();
+  clearOfflineBlobUrls();
+
+  if (typeof window !== "undefined") {
+    try {
+      const keysToRemove: string[] = [];
+      for (let i = 0; i < window.localStorage.length; i++) {
+        const k = window.localStorage.key(i);
+        if (
+          k &&
+          (k.startsWith("papervault:") ||
+            k.startsWith("sb-") ||
+            k.includes("auth-token") ||
+            k.includes("supabase"))
+        ) {
+          keysToRemove.push(k);
+        }
+      }
+      for (const k of keysToRemove) {
+        window.localStorage.removeItem(k);
+      }
+    } catch {
+      // ignore
+    }
+
+    try {
+      const sessionKeys: string[] = [];
+      for (let i = 0; i < window.sessionStorage.length; i++) {
+        const k = window.sessionStorage.key(i);
+        if (
+          k &&
+          (k.startsWith("papervault:") ||
+            k.startsWith("sb-") ||
+            k.includes("auth-token") ||
+            k.includes("supabase"))
+        ) {
+          sessionKeys.push(k);
+        }
+      }
+      for (const k of sessionKeys) {
+        window.sessionStorage.removeItem(k);
+      }
+    } catch {
+      // ignore
+    }
+
+    // Clear all IndexedDB stores asynchronously so no prior account data persists
+    void openOfflineDB()
+      .then((db) => {
+        const allStores = [...TABLES, "sync_queue", "storage_blobs"];
+        const existingStores = allStores.filter((s) => db.objectStoreNames.contains(s));
+        if (existingStores.length === 0) return;
+        const tx = db.transaction(existingStores, "readwrite");
+        for (const s of existingStores) {
+          tx.objectStore(s).clear();
+        }
+      })
+      .catch(() => {});
+  }
+}
+
 export function cacheAuthSession(session: unknown) {
   if (typeof window === "undefined") return;
   try {
     if (!session) {
-      window.localStorage.removeItem(OFFLINE_AUTH_SESSION_KEY);
-      try {
-        const keysToRemove: string[] = [];
-        for (let i = 0; i < window.localStorage.length; i++) {
-          const k = window.localStorage.key(i);
-          if (k && (k.startsWith("sb-") || k.includes("auth-token") || k.includes("supabase"))) {
-            keysToRemove.push(k);
-          }
-        }
-        for (const k of keysToRemove) {
-          window.localStorage.removeItem(k);
-        }
-      } catch {
-        // ignore
-      }
-      try {
-        const sessionKeys: string[] = [];
-        for (let i = 0; i < window.sessionStorage.length; i++) {
-          const k = window.sessionStorage.key(i);
-          if (k && (k.startsWith("sb-") || k.includes("auth-token") || k.includes("supabase"))) {
-            sessionKeys.push(k);
-          }
-        }
-        for (const k of sessionKeys) {
-          window.sessionStorage.removeItem(k);
-        }
-      } catch {
-        // ignore
-      }
+      clearAllOfflineUserData();
     } else {
+      const newUserId = (session as { user?: { id?: string } })?.user?.id;
+      try {
+        const prevRaw = window.localStorage.getItem(OFFLINE_AUTH_SESSION_KEY);
+        if (prevRaw) {
+          const prevParsed = JSON.parse(prevRaw) as { user?: { id?: string } };
+          const prevUserId = prevParsed?.user?.id;
+          if (prevUserId && newUserId && prevUserId !== newUserId) {
+            clearAllOfflineUserData();
+          }
+        }
+      } catch {
+        // ignore
+      }
       window.localStorage.setItem(OFFLINE_AUTH_SESSION_KEY, JSON.stringify(session));
     }
   } catch {

@@ -17,6 +17,15 @@ type Result = {
   artworkUrl100: string;
 };
 
+function isSafeHttpsUrl(url: string | null | undefined): string | null {
+  if (!url || typeof url !== "string") return null;
+  const trimmed = url.trim();
+  if (/^https:\/\/[^\s"<>]+$/i.test(trimmed)) {
+    return trimmed;
+  }
+  return null;
+}
+
 export function MusicSearch({
   selected,
   onChange,
@@ -41,6 +50,10 @@ export function MusicSearch({
       try {
         const res = await fetch(
           `https://itunes.apple.com/search?media=music&entity=song&limit=8&term=${encodeURIComponent(q)}`,
+          {
+            referrerPolicy: "no-referrer",
+            credentials: "omit",
+          },
         );
         const json = await res.json();
         setResults(json.results ?? []);
@@ -53,10 +66,11 @@ export function MusicSearch({
   }, [q]);
 
   if (selected) {
+    const safeArt = isSafeHttpsUrl(selected.music_artwork_url);
     return (
       <div className="flex items-center gap-3 rounded-md border border-border bg-secondary/40 p-2">
-        {selected.music_artwork_url && (
-          <img src={selected.music_artwork_url} alt="" className="size-10 rounded" />
+        {safeArt && (
+          <img src={safeArt} alt="" referrerPolicy="no-referrer" className="size-10 rounded" />
         )}
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium">{selected.music_track_name}</p>
@@ -96,32 +110,44 @@ export function MusicSearch({
           </div>
           {loading && <p className="text-xs text-muted-foreground">Searching…</p>}
           <ul className="max-h-64 space-y-1 overflow-y-auto">
-            {results.map((r) => (
-              <li key={r.trackId}>
-                <button
-                  type="button"
-                  onClick={() => {
-                    onChange({
-                      music_track_id: String(r.trackId),
-                      music_track_name: r.trackName,
-                      music_artist: r.artistName,
-                      music_preview_url: r.previewUrl,
-                      music_artwork_url: r.artworkUrl100,
-                    });
-                    setOpen(false);
-                    setQ("");
-                    setResults([]);
-                  }}
-                  className="flex w-full items-center gap-3 rounded-md p-2 text-left hover:bg-secondary"
-                >
-                  <img src={r.artworkUrl100} alt="" className="size-10 rounded" />
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm">{r.trackName}</p>
-                    <p className="truncate text-xs text-muted-foreground">{r.artistName}</p>
-                  </div>
-                </button>
-              </li>
-            ))}
+            {results.map((r) => {
+              const safeResultArt = isSafeHttpsUrl(r.artworkUrl100);
+              const safeResultPreview = isSafeHttpsUrl(r.previewUrl);
+              if (!safeResultPreview) return null;
+              return (
+                <li key={r.trackId}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onChange({
+                        music_track_id: String(r.trackId),
+                        music_track_name: r.trackName,
+                        music_artist: r.artistName,
+                        music_preview_url: safeResultPreview,
+                        music_artwork_url: safeResultArt ?? "",
+                      });
+                      setOpen(false);
+                      setQ("");
+                      setResults([]);
+                    }}
+                    className="flex w-full items-center gap-3 rounded-md p-2 text-left hover:bg-secondary"
+                  >
+                    {safeResultArt && (
+                      <img
+                        src={safeResultArt}
+                        alt=""
+                        referrerPolicy="no-referrer"
+                        className="size-10 rounded"
+                      />
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm">{r.trackName}</p>
+                      <p className="truncate text-xs text-muted-foreground">{r.artistName}</p>
+                    </div>
+                  </button>
+                </li>
+              );
+            })}
           </ul>
           <p className="text-xs text-muted-foreground">
             Powered by iTunes Search — 30-second previews.
@@ -153,7 +179,10 @@ export function MusicPlayer({
     return () => a.removeEventListener("ended", onEnd);
   }, []);
 
-  if (!track.music_preview_url) return null;
+  const safePreviewUrl = isSafeHttpsUrl(track.music_preview_url);
+  const safeArtworkUrl = isSafeHttpsUrl(track.music_artwork_url);
+
+  if (!safePreviewUrl) return null;
 
   const toggle = () => {
     const a = audioRef.current;
@@ -170,8 +199,13 @@ export function MusicPlayer({
 
   return (
     <div className="mt-4 flex items-center gap-3 rounded-lg border border-border bg-gradient-to-br from-secondary/60 to-accent/10 p-3 shadow-sm">
-      {track.music_artwork_url && (
-        <img src={track.music_artwork_url} alt="" className="size-14 rounded-md shadow-sm" />
+      {safeArtworkUrl && (
+        <img
+          src={safeArtworkUrl}
+          alt=""
+          referrerPolicy="no-referrer"
+          className="size-14 rounded-md shadow-sm"
+        />
       )}
       <div className="min-w-0 flex-1">
         <p className="font-hand text-sepia text-sm leading-none">now playing</p>
@@ -186,7 +220,7 @@ export function MusicPlayer({
       >
         {playing ? <Pause className="size-5" /> : <Play className="size-5 translate-x-0.5" />}
       </button>
-      <audio ref={audioRef} src={track.music_preview_url} preload="none" />
+      <audio ref={audioRef} src={safePreviewUrl} preload="none" />
     </div>
   );
 }

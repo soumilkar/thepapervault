@@ -21,9 +21,11 @@ import {
   StickyNote,
 } from "lucide-react";
 import { VaultProvider, useVault } from "@/lib/vault";
+import { clearCryptoCache } from "@/lib/crypto";
 import { VaultGate } from "@/components/VaultGate";
 import { toast } from "sonner";
 import {
+  clearAllOfflineUserData,
   getCachedAuthSession,
   OFFLINE_DATA_UPDATED_EVENT,
   OFFLINE_SYNC_SUCCESS_EVENT,
@@ -216,6 +218,8 @@ function AuthedLayout() {
   const handleSignOut = async () => {
     memAuthedUser = null;
     memProfileDisplayName = null;
+    clearCryptoCache();
+    clearAllOfflineUserData();
     qc.clear();
     await supabase.auth.signOut();
     window.location.href = "/auth";

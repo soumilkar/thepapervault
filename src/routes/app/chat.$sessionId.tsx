@@ -6,6 +6,7 @@ import { Markdown } from "@/components/Markdown";
 import { supabase } from "@/integrations/supabase/client";
 import { useVault } from "@/lib/vault";
 import { decryptText, encryptText } from "@/lib/crypto";
+import { decryptStreamChunk, postEncryptedCompanionRequest } from "@/lib/companion-transport";
 import { AppSelect } from "@/components/AppSelect";
 import { CHAT_SESSIONS_UPDATED } from "./chat";
 import { useBrowserDraft } from "@/lib/browser-drafts";
@@ -41,6 +42,7 @@ async function buildContext(
   startDate: string,
   endDate: string,
 ): Promise<string> {
+  if (!key) return "";
   type DiaryRow = { content: string; iv: string | null; entry_date: string };
   type BlogRow = { title: string; content: string; tags: string[] | null; created_at: string };
   const startIso = new Date(startDate).toISOString();
@@ -93,8 +95,6 @@ async function buildContext(
           } catch {
             return null;
           }
-        } else if (!row.iv) {
-          return `[${row.entry_date}] ${trim(row.content, DIARY_ENTRY_MAX)}`;
         }
         return null;
       }),
@@ -183,6 +183,7 @@ function SessionChat() {
         .from("chat_messages")
         .select("id,role,content,iv,created_at")
         .eq("session_id", sessionId)
+        .eq("user_id", user.id)
         .order("created_at", { ascending: true });
       if (cancelled) return;
       if (error) {
@@ -203,10 +204,11 @@ function SessionChat() {
               void supabase
                 .from("chat_messages")
                 .update({ content: enc.ct, iv: enc.iv })
-                .eq("id", r.id);
+                .eq("id", r.id)
+                .eq("user_id", user.id);
             }
             if (r.role === "assistant" && isCorruptedWarmupMessage(content)) {
-              void supabase.from("chat_messages").delete().eq("id", r.id);
+              void supabase.from("chat_messages").delete().eq("id", r.id).eq("user_id", user.id);
               return null;
             }
             return {
@@ -225,7 +227,7 @@ function SessionChat() {
     return () => {
       cancelled = true;
     };
-  }, [sessionId, key]);
+  }, [sessionId, user.id, key]);
 
   const send = async (question: string) => {
     if (!question.trim() || loading) return;
@@ -252,24 +254,26 @@ function SessionChat() {
       clearDraft();
 
       const context = await buildContext(user.id, key, source, startDate, endDate);
-      const name =
+      const emailPrefix = user.email?.split("@")[0]?.toLowerCase() ?? "";
+      const rawName =
         profileDisplayName ||
-        user.user_metadata?.display_name ||
-        user.user_metadata?.full_name ||
-        user.user_metadata?.name ||
-        user.email?.split("@")[0] ||
-        "the writer";
+        (user.user_metadata?.display_name as string | undefined) ||
+        (user.user_metadata?.full_name as string | undefined) ||
+        (user.user_metadata?.name as string | undefined) ||
+        "";
+      const name =
+        rawName.trim() && rawName.trim().toLowerCase() !== emailPrefix
+          ? rawName.trim()
+          : "the writer";
+
       const { data: sessionData } = await supabase.auth.getSession();
       const accessToken = sessionData.session?.access_token;
       if (!accessToken) throw new Error("Please sign in again to continue");
 
-      const response = await fetch("/api/companion-stream", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${accessToken}`,
-        },
-        body: JSON.stringify({
+      const { response, transportKey, envelope } = await postEncryptedCompanionRequest(
+        "/api/companion-stream",
+        accessToken,
+        {
           question,
           sentAt: sentSnap.localDateTime,
           browserTime: sentSnap.localDateTime,
@@ -280,8 +284,8 @@ function SessionChat() {
             content: m.content,
             sentAt: m.createdAt ? formatBrowserFullDateTime(m.createdAt) : undefined,
           })),
-        }),
-      });
+        },
+      );
       const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
       if (!response.ok) {
         const message = await response.text();
@@ -298,20 +302,44 @@ function SessionChat() {
         );
       }
 
+      const isEncryptedStream = response.headers.get("x-companion-encrypted") === "1";
       const reader = response.body?.getReader();
       if (!reader) throw new Error("The Companion returned an empty response");
 
       const decoder = new TextDecoder();
       let answer = "";
+      let frameBuffer = "";
+      let expectedSeq = 0;
       const streamStartSnap = getBrowserNow();
       setMessages((current) => [
         ...current,
         { role: "assistant", content: "", createdAt: streamStartSnap.iso },
       ]);
+
+      const processEncryptedLines = async (lines: string[]) => {
+        for (const rawLine of lines) {
+          const line = rawLine.trim();
+          if (!line) continue;
+          const chunk = await decryptStreamChunk(transportKey, envelope.ts, expectedSeq, line);
+          expectedSeq++;
+          answer += chunk;
+        }
+      };
+
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        answer += decoder.decode(value, { stream: true });
+        const decodedPart = decoder.decode(value, { stream: true });
+        if (isEncryptedStream) {
+          frameBuffer += decodedPart;
+          const lines = frameBuffer.split("\n");
+          frameBuffer = lines.pop() ?? "";
+          if (lines.length > 0) {
+            await processEncryptedLines(lines);
+          }
+        } else {
+          answer += decodedPart;
+        }
         if (isCorruptedWarmupMessage(answer)) {
           void reader.cancel();
           throw new Error(
@@ -323,7 +351,17 @@ function SessionChat() {
           { role: "assistant", content: answer, createdAt: streamStartSnap.iso },
         ]);
       }
-      answer += decoder.decode();
+
+      const tail = decoder.decode();
+      if (isEncryptedStream) {
+        frameBuffer += tail;
+        if (frameBuffer.trim()) {
+          await processEncryptedLines(frameBuffer.split("\n"));
+        }
+      } else {
+        answer += tail;
+      }
+
       if (!answer.trim() || isCorruptedWarmupMessage(answer)) {
         throw new Error("The Companion returned an empty response");
       }
@@ -353,7 +391,7 @@ function SessionChat() {
         patch.title = encT.ct;
         patch.title_iv = encT.iv;
       }
-      await supabase.from("chat_sessions").update(patch).eq("id", sessionId);
+      await supabase.from("chat_sessions").update(patch).eq("id", sessionId).eq("user_id", user.id);
       window.dispatchEvent(new Event(CHAT_SESSIONS_UPDATED));
     } catch (e: unknown) {
       setMessages((current) => {

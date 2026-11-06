@@ -81,21 +81,18 @@ self.addEventListener("fetch", (event) => {
   // Same origin requests
   if (url.origin !== self.location.origin) return;
 
-  // HTML page navigations: NetworkFirst with cache fallback
+  // HTML page navigations: NetworkFirst with app-shell fallback
   if (request.mode === "navigate") {
     event.respondWith(
       (async () => {
         const cache = await caches.open(CACHE_NAME);
         try {
           const res = await fetch(request);
-          if (res.ok) {
-            cache.put(request, res.clone());
-            cache.put("/", res.clone());
+          if (res.ok && (url.pathname === "/" || url.pathname === "/app")) {
+            cache.put(url.pathname, res.clone());
           }
           return res;
         } catch {
-          const exact = await cache.match(request);
-          if (exact) return exact;
           const fallback = (await cache.match("/app")) || (await cache.match("/"));
           if (fallback) return fallback;
           return new Response(

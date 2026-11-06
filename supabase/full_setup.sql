@@ -40,10 +40,10 @@ BEGIN
   VALUES (
     NEW.id,
     COALESCE(
-      NEW.raw_user_meta_data->>'display_name',
-      NEW.raw_user_meta_data->>'full_name',
-      NEW.raw_user_meta_data->>'name',
-      split_part(NEW.email, '@', 1)
+      NULLIF(BTRIM(NEW.raw_user_meta_data->>'display_name'), ''),
+      NULLIF(BTRIM(NEW.raw_user_meta_data->>'full_name'), ''),
+      NULLIF(BTRIM(NEW.raw_user_meta_data->>'name'), ''),
+      'Writer'
     )
   )
   ON CONFLICT (id) DO NOTHING;
@@ -407,6 +407,42 @@ CREATE POLICY "diary entries visible when public and owned" ON public.diary_entr
     (is_public = true AND visibility = 'public_anon')
     OR (auth.uid() IS NOT NULL AND auth.uid() = user_id)
   );
+
+-- Column-level protection: anon role can never read user_id, folder_id, iv, or image_path on diary_entries
+REVOKE SELECT ON public.diary_entries FROM anon;
+GRANT SELECT (
+  id,
+  title,
+  content,
+  mood,
+  entry_date,
+  is_public,
+  visibility,
+  music_track_id,
+  music_track_name,
+  music_artist,
+  music_preview_url,
+  music_artwork_url,
+  created_at
+) ON public.diary_entries TO anon;
+
+-- Anonymous view that strips user_id for "Notes from Strangers"
+CREATE OR REPLACE VIEW public.public_diary_feed AS
+SELECT
+  id,
+  title,
+  content,
+  mood,
+  entry_date,
+  music_track_name,
+  music_artist,
+  music_preview_url,
+  music_artwork_url,
+  created_at
+FROM public.diary_entries
+WHERE is_public = true AND visibility = 'public_anon';
+
+GRANT SELECT ON public.public_diary_feed TO anon, authenticated;
 
 -- note_folders policies
 DROP POLICY IF EXISTS "own note folders" ON public.note_folders;

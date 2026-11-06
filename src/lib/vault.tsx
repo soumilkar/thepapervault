@@ -31,14 +31,8 @@ type VaultContextValue = {
 
 const IDLE_LOCK_MS = 15 * 60 * 1000; // 15 minutes of inactivity auto-locks the vault
 
-const GLOBAL_VAULT_CTX_KEY = "__papervault_vault_context_v1__";
-const globalStore = globalThis as unknown as Record<
-  string,
-  ReturnType<typeof createContext<VaultContextValue | null>> | undefined
->;
-const VaultContext =
-  globalStore[GLOBAL_VAULT_CTX_KEY] ??
-  (globalStore[GLOBAL_VAULT_CTX_KEY] = createContext<VaultContextValue | null>(null));
+const VaultContext = createContext<VaultContextValue | null>(null);
+let moduleScopedVaultValue: VaultContextValue | null = null;
 
 const FALLBACK_VAULT_CONTEXT: VaultContextValue = {
   status: "loading",
@@ -209,6 +203,7 @@ export function VaultProvider({ userId, children }: { userId: string; children: 
   const lock = useCallback(() => {
     setKey(null);
     setStatus(kdfSalt ? "locked" : "needs_setup");
+    moduleScopedVaultValue = null;
     // Wipe all decrypted data from React Query memory cache immediately on lock
     clearCryptoCache();
     qc.clear();
@@ -236,9 +231,13 @@ export function VaultProvider({ userId, children }: { userId: string; children: 
     [status, key, setup, unlock, lock],
   );
 
-  (
-    globalThis as unknown as Record<string, VaultContextValue | undefined>
-  ).__papervault_vault_value__ = value;
+  moduleScopedVaultValue = value;
+
+  useEffect(() => {
+    return () => {
+      moduleScopedVaultValue = null;
+    };
+  }, []);
 
   return <VaultContext.Provider value={value}>{children}</VaultContext.Provider>;
 }
@@ -246,9 +245,7 @@ export function VaultProvider({ userId, children }: { userId: string; children: 
 export function useVault(): VaultContextValue {
   const v = useContext(VaultContext);
   if (v) return v;
-  const globalVal = (globalThis as unknown as Record<string, VaultContextValue | undefined>)
-    .__papervault_vault_value__;
-  return globalVal ?? FALLBACK_VAULT_CONTEXT;
+  return moduleScopedVaultValue ?? FALLBACK_VAULT_CONTEXT;
 }
 
 // Throws if the vault is locked. Use inside mutations to fail fast with a helpful message.

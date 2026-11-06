@@ -41,7 +41,7 @@ function ChatLayout() {
       const kept = all.slice(0, MAX_SESSIONS);
       const excessIds = all.slice(MAX_SESSIONS).map((r) => r.id);
       if (excessIds.length > 0) {
-        void supabase.from("chat_sessions").delete().in("id", excessIds);
+        void supabase.from("chat_sessions").delete().in("id", excessIds).eq("user_id", user.id);
       }
       const rows: SessionRow[] = await Promise.all(
         kept.map(async (r) => {
@@ -60,7 +60,8 @@ function ChatLayout() {
             void supabase
               .from("chat_sessions")
               .update({ title: enc.ct, title_iv: enc.iv })
-              .eq("id", r.id);
+              .eq("id", r.id)
+              .eq("user_id", user.id);
           }
           return { id: r.id, title, last_message_at: r.last_message_at };
         }),
@@ -106,7 +107,7 @@ function ChatLayout() {
     ];
     const excess = next.slice(MAX_SESSIONS).map((s) => s.id);
     if (excess.length > 0) {
-      void supabase.from("chat_sessions").delete().in("id", excess);
+      void supabase.from("chat_sessions").delete().in("id", excess).eq("user_id", user.id);
     }
     setSessions(next.slice(0, MAX_SESSIONS));
     setMenuOpen(false);
@@ -116,7 +117,11 @@ function ChatLayout() {
   const remove = async (id: string) => {
     const prev = sessions;
     setSessions((s) => s.filter((x) => x.id !== id));
-    const { error } = await supabase.from("chat_sessions").delete().eq("id", id);
+    const { error } = await supabase
+      .from("chat_sessions")
+      .delete()
+      .eq("id", id)
+      .eq("user_id", user.id);
     if (error) {
       setSessions(prev);
       toast.error("Could not delete");

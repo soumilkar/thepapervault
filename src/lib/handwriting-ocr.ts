@@ -1,4 +1,5 @@
 import { supabase } from "@/integrations/supabase/client";
+import { decryptStreamChunk, postEncryptedCompanionRequest } from "@/lib/companion-transport";
 
 const MAX_DIM = 2048;
 
@@ -60,23 +61,41 @@ export async function fileToOptimizedBase64(
 export async function transcribeHandwritingFile(file: File): Promise<string> {
   const { data: sessionData } = await supabase.auth.getSession();
   const token = sessionData.session?.access_token ?? "";
+  if (!token) {
+    throw new Error("Please sign in to transcribe handwriting.");
+  }
   const { base64, mimeType } = await fileToOptimizedBase64(file);
 
-  const res = await fetch("/api/handwriting-ocr", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    body: JSON.stringify({
-      imageBase64: base64,
-      mimeType,
-    }),
+  const normalizedMime = ["image/jpeg", "image/png", "image/webp", "image/gif"].includes(mimeType)
+    ? mimeType
+    : "image/jpeg";
+
+  const {
+    response: res,
+    transportKey,
+    envelope,
+  } = await postEncryptedCompanionRequest("/api/handwriting-ocr", token, {
+    imageBase64: base64,
+    mimeType: normalizedMime,
   });
 
-  const payload = (await res.json().catch(() => ({}))) as { text?: string; error?: string };
+  const payload = (await res.json().catch(() => ({}))) as {
+    text?: string;
+    encryptedFrame?: string;
+    error?: string;
+  };
   if (!res.ok) {
     throw new Error(payload.error || "Failed to transcribe handwriting from image.");
+  }
+  if (payload.encryptedFrame) {
+    const decryptedJson = await decryptStreamChunk(
+      transportKey,
+      envelope.ts,
+      0,
+      payload.encryptedFrame,
+    );
+    const parsed = JSON.parse(decryptedJson) as { text?: string };
+    return (parsed.text ?? "").trim();
   }
   return (payload.text ?? "").trim();
 }

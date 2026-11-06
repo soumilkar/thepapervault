@@ -130,16 +130,31 @@ async function authenticateUser(request: Request, adminClient: ReturnType<typeof
   }
 }
 
+const ALLOWED_BUCKETS = new Set(["gallery", "media"]);
+
+const JSON_SECURITY_HEADERS = {
+  "Content-Type": "application/json",
+  "Cache-Control": "no-store, no-cache, must-revalidate, private",
+  Pragma: "no-cache",
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "DENY",
+  "Referrer-Policy": "no-referrer",
+};
+
 export const Route = createFileRoute("/api/storage-proxy")({
   server: {
     handlers: {
-      OPTIONS: async () => {
+      OPTIONS: async ({ request }) => {
+        const reqOrigin = request.headers.get("origin");
+        const selfOrigin = new URL(request.url).origin;
+        const allowedOrigin = reqOrigin && reqOrigin === selfOrigin ? reqOrigin : selfOrigin;
         return new Response(null, {
           status: 204,
           headers: {
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+            "Access-Control-Allow-Origin": allowedOrigin,
+            "Access-Control-Allow-Methods": "POST, OPTIONS",
             "Access-Control-Allow-Headers": "authorization, content-type, apikey, x-client-info",
+            Vary: "Origin",
           },
         });
       },
@@ -150,12 +165,19 @@ export const Route = createFileRoute("/api/storage-proxy")({
           const bucket = url.searchParams.get("bucket") || "gallery";
           const path = url.searchParams.get("path") || "";
 
+          if (!ALLOWED_BUCKETS.has(bucket)) {
+            return new Response(JSON.stringify({ error: "Invalid storage bucket" }), {
+              status: 400,
+              headers: JSON_SECURITY_HEADERS,
+            });
+          }
+
           const adminClient = getAdminClient(request);
           const user = await authenticateUser(request, adminClient);
           if (!user) {
             return new Response(
               JSON.stringify({ error: "Unauthorized: valid session token required" }),
-              { status: 401, headers: { "Content-Type": "application/json" } },
+              { status: 401, headers: JSON_SECURITY_HEADERS },
             );
           }
 

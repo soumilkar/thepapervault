@@ -1,6 +1,7 @@
 # Storage Upload & Gallery Organization Implementation Plan
 
 ## Problem Identified
+
 1. **Image Upload Failures**: Direct Supabase storage uploads from the client were being rejected with a `403 / 400 new row violates row-level security policy` on `storage.objects` because the storage buckets lacked insert permissions for authenticated tokens.
 2. **Missing Source Folder Organization in Gallery**: The Gallery tab only had a flat display without distinguishing between photos uploaded from the Diary versus Notes, and did not support browsing images organized into Notes directories and nested subfolders.
 
