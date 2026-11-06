@@ -83,6 +83,7 @@ export async function encryptText(
   return { ct: toB64(ct), iv: toB64(iv) };
 }
 
+const MAX_DECRYPT_CACHE_ENTRIES = 2000;
 let decryptTextCache = new WeakMap<CryptoKey, Map<string, string>>();
 
 export function clearCryptoCache(): void {
@@ -107,6 +108,9 @@ export async function decryptText(key: CryptoKey, ctB64: string, ivB64: string):
   if (!keyMap) {
     keyMap = new Map<string, string>();
     decryptTextCache.set(key, keyMap);
+  } else if (keyMap.size >= MAX_DECRYPT_CACHE_ENTRIES) {
+    const oldestKey = keyMap.keys().next().value;
+    if (oldestKey !== undefined) keyMap.delete(oldestKey);
   }
   keyMap.set(cacheKey, plain);
   return plain;

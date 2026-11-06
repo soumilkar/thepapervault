@@ -157,7 +157,8 @@ async function migrateDiary(userId: string, key: CryptoKey) {
           music_preview_url: null,
           music_artwork_url: null,
         })
-        .eq("id", row.id);
+        .eq("id", row.id)
+        .eq("user_id", userId);
     }),
   );
 }
@@ -173,7 +174,7 @@ async function migrateFolders(
     rows.map(async (f) => {
       if (!f.name || isEncryptedField(f.name)) return;
       const encName = await encryptField(key, f.name);
-      await supabase.from(table).update({ name: encName }).eq("id", f.id);
+      await supabase.from(table).update({ name: encName }).eq("id", f.id).eq("user_id", userId);
     }),
   );
 }
@@ -192,9 +193,14 @@ async function migrateNotes(userId: string, key: CryptoKey) {
         await supabase
           .from("notes")
           .update({ content: ct, iv, title: null, tags: null })
-          .eq("id", r.id);
+          .eq("id", r.id)
+          .eq("user_id", userId);
       } else if (r.title !== null || r.tags !== null) {
-        await supabase.from("notes").update({ title: null, tags: null }).eq("id", r.id);
+        await supabase
+          .from("notes")
+          .update({ title: null, tags: null })
+          .eq("id", r.id)
+          .eq("user_id", userId);
       }
     }),
   );
@@ -236,7 +242,7 @@ async function migrateGallery(userId: string, key: CryptoKey) {
       updates.caption_iv = iv;
     }
     if (Object.keys(updates).length) {
-      await supabase.from("gallery_images").update(updates).eq("id", row.id);
+      await supabase.from("gallery_images").update(updates).eq("id", row.id).eq("user_id", userId);
     }
   }
 }
@@ -253,7 +259,7 @@ async function migrateChatSessions(userId: string, key: CryptoKey) {
   const kept = sessions.slice(0, 7);
   const excessIds = sessions.slice(7).map((s) => s.id);
   if (excessIds.length > 0) {
-    await supabase.from("chat_sessions").delete().in("id", excessIds);
+    await supabase.from("chat_sessions").delete().in("id", excessIds).eq("user_id", userId);
   }
 
   await Promise.all(
@@ -263,7 +269,8 @@ async function migrateChatSessions(userId: string, key: CryptoKey) {
         await supabase
           .from("chat_sessions")
           .update({ title: enc.ct, title_iv: enc.iv })
-          .eq("id", s.id);
+          .eq("id", s.id)
+          .eq("user_id", userId);
       }
     }),
   );
@@ -280,7 +287,11 @@ async function migrateChatMessages(userId: string, key: CryptoKey) {
     rows.map(async (m) => {
       if (m.iv) return;
       const enc = await encryptText(key, m.content);
-      await supabase.from("chat_messages").update({ content: enc.ct, iv: enc.iv }).eq("id", m.id);
+      await supabase
+        .from("chat_messages")
+        .update({ content: enc.ct, iv: enc.iv })
+        .eq("id", m.id)
+        .eq("user_id", userId);
     }),
   );
 }

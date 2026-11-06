@@ -674,7 +674,11 @@ function GalleryPage() {
           .eq("image_url", img.storage_path),
       ]);
       if (!img.id.startsWith("note-") && !img.id.startsWith("diary-")) {
-        const { error } = await supabase.from("gallery_images").delete().eq("id", img.id);
+        const { error } = await supabase
+          .from("gallery_images")
+          .delete()
+          .eq("id", img.id)
+          .eq("user_id", user.id);
         if (error) throw error;
       }
     },
@@ -715,7 +719,8 @@ function GalleryPage() {
             caption: enc.ct,
             caption_iv: enc.iv,
           })
-          .eq("id", item.id);
+          .eq("id", item.id)
+          .eq("user_id", user.id);
         if (error) throw error;
       }
     },
@@ -1618,29 +1623,24 @@ const DecryptedGalleryPhoto = memo(function DecryptedGalleryPhoto({
           }
         }
 
-        if (iv && bytes && cryptoKey && !cancelled) {
-          try {
-            const pt = await decryptBytes(cryptoKey, bytes, iv);
-            const objectUrl = URL.createObjectURL(new Blob([pt], { type: mime || "image/jpeg" }));
-            setDecryptedMediaUrl(bucket, storagePath, iv, objectUrl);
-            if (!cancelled) setSrc(objectUrl);
-            return;
-          } catch {
-            const objectUrl = URL.createObjectURL(
-              new Blob([bytes], { type: mime || "image/jpeg" }),
-            );
-            setDecryptedMediaUrl(bucket, storagePath, iv, objectUrl);
-            if (!cancelled) setSrc(objectUrl);
-            return;
-          }
+        const safeMime =
+          mime && ["image/jpeg", "image/png", "image/webp", "image/gif"].includes(mime)
+            ? mime
+            : "image/jpeg";
+
+        if (iv) {
+          if (!bytes || !cryptoKey || cancelled) return;
+          const pt = await decryptBytes(cryptoKey, bytes, iv);
+          const objectUrl = URL.createObjectURL(new Blob([pt], { type: safeMime }));
+          setDecryptedMediaUrl(bucket, storagePath, iv, objectUrl);
+          if (!cancelled) setSrc(objectUrl);
+          return;
         }
 
-        // Plain / Unencrypted fallback
+        // Legacy unencrypted image fallback (only when iv is null)
         if (!iv && !cancelled) {
           if (bytes) {
-            const objectUrl = URL.createObjectURL(
-              new Blob([bytes], { type: mime || "image/jpeg" }),
-            );
+            const objectUrl = URL.createObjectURL(new Blob([bytes], { type: safeMime }));
             setDecryptedMediaUrl(bucket, storagePath, iv, objectUrl);
             if (!cancelled) setSrc(objectUrl);
             return;

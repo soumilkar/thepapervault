@@ -852,10 +852,13 @@ export function clearAllOfflineUserData() {
 export function cacheAuthSession(session: unknown) {
   if (typeof window === "undefined") return;
   try {
-    if (!session) {
+    if (!session || typeof session !== "object") {
       clearAllOfflineUserData();
     } else {
-      const newUserId = (session as { user?: { id?: string } })?.user?.id;
+      const s = session as Record<string, unknown>;
+      const userObj = s.user as
+        { id?: string; email?: string; user_metadata?: unknown } | undefined;
+      const newUserId = userObj?.id;
       try {
         const prevRaw = window.localStorage.getItem(OFFLINE_AUTH_SESSION_KEY);
         if (prevRaw) {
@@ -868,7 +871,18 @@ export function cacheAuthSession(session: unknown) {
       } catch {
         // ignore
       }
-      window.localStorage.setItem(OFFLINE_AUTH_SESSION_KEY, JSON.stringify(session));
+      // Store only minimal non-refresh identity metadata for offline fallback; never duplicate refresh_token
+      const minimalOfflineSession = {
+        token_type: "bearer",
+        user: userObj
+          ? {
+              id: userObj.id,
+              email: userObj.email,
+              user_metadata: userObj.user_metadata,
+            }
+          : undefined,
+      };
+      window.localStorage.setItem(OFFLINE_AUTH_SESSION_KEY, JSON.stringify(minimalOfflineSession));
     }
   } catch {
     // ignore storage errors

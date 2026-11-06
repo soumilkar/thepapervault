@@ -48,13 +48,43 @@ const FALLBACK_VAULT_CONTEXT: VaultContextValue = {
 
 const VAULT_META_PREFIX = "papervault:vault_meta:";
 
+let failedUnlockAttempts = 0;
+let unlockLockedUntil = 0;
+
+function isValidVaultMeta(
+  meta: unknown,
+): meta is { kdf_salt: string; verifier: string; verifier_salt: string } {
+  if (!meta || typeof meta !== "object") return false;
+  const m = meta as Record<string, unknown>;
+  if (
+    typeof m.kdf_salt !== "string" ||
+    typeof m.verifier !== "string" ||
+    typeof m.verifier_salt !== "string"
+  ) {
+    return false;
+  }
+  // Prevent salt-swap attacks where kdf_salt === verifier_salt
+  if (
+    m.kdf_salt.length < 16 ||
+    m.verifier_salt.length < 16 ||
+    m.verifier.length < 16 ||
+    m.kdf_salt === m.verifier_salt
+  ) {
+    return false;
+  }
+  return true;
+}
+
 function getCachedVaultMeta(
   userId: string,
 ): { kdf_salt: string; verifier: string; verifier_salt: string } | null {
   if (typeof window === "undefined") return null;
   try {
     const raw = window.localStorage.getItem(`${VAULT_META_PREFIX}${userId}`);
-    if (raw) return JSON.parse(raw);
+    if (raw) {
+      const parsed: unknown = JSON.parse(raw);
+      if (isValidVaultMeta(parsed)) return parsed;
+    }
   } catch {
     // ignore
   }
@@ -65,7 +95,7 @@ function cacheVaultMeta(
   userId: string,
   meta: { kdf_salt: string; verifier: string; verifier_salt: string },
 ) {
-  if (typeof window === "undefined") return;
+  if (typeof window === "undefined" || !isValidVaultMeta(meta)) return;
   try {
     window.localStorage.setItem(`${VAULT_META_PREFIX}${userId}`, JSON.stringify(meta));
   } catch {
@@ -119,7 +149,7 @@ export function VaultProvider({ userId, children }: { userId: string; children: 
 
         if (cancelled) return;
 
-        if (data) {
+        if (data && isValidVaultMeta(data)) {
           setKdfSalt(data.kdf_salt);
           setVerifier(data.verifier);
           setVerifierSalt(data.verifier_salt);
@@ -158,7 +188,10 @@ export function VaultProvider({ userId, children }: { userId: string; children: 
     async (passphrase: string): Promise<CryptoKey> => {
       if (passphrase.length < 8) throw new Error("Passphrase must be at least 8 characters");
       const newKdfSalt = toB64(randomBytes(16));
-      const newVerifierSalt = toB64(randomBytes(16));
+      let newVerifierSalt = toB64(randomBytes(16));
+      while (newVerifierSalt === newKdfSalt) {
+        newVerifierSalt = toB64(randomBytes(16));
+      }
       const [newVerifier, dataKey] = await Promise.all([
         deriveVerifier(passphrase, newVerifierSalt),
         deriveDataKey(passphrase, newKdfSalt),
@@ -175,6 +208,8 @@ export function VaultProvider({ userId, children }: { userId: string; children: 
         verifier_salt: newVerifierSalt,
       });
       if (error) throw error;
+      failedUnlockAttempts = 0;
+      unlockLockedUntil = 0;
       setKdfSalt(newKdfSalt);
       setVerifier(newVerifier);
       setVerifierSalt(newVerifierSalt);
@@ -187,12 +222,29 @@ export function VaultProvider({ userId, children }: { userId: string; children: 
 
   const unlock = useCallback(
     async (passphrase: string): Promise<CryptoKey> => {
+      const now = Date.now();
+      if (unlockLockedUntil > now) {
+        const waitSec = Math.ceil((unlockLockedUntil - now) / 1000);
+        throw new Error(`Too many failed attempts. Please wait ${waitSec}s before trying again.`);
+      }
       if (!kdfSalt || !verifier || !verifierSalt) throw new Error("Vault not initialized");
+      if (kdfSalt === verifierSalt) {
+        throw new Error("Invalid vault key parameters detected");
+      }
       const [check, dataKey] = await Promise.all([
         deriveVerifier(passphrase, verifierSalt),
         deriveDataKey(passphrase, kdfSalt),
       ]);
-      if (!timingSafeEqualStr(check, verifier)) throw new Error("Wrong passphrase");
+      if (!timingSafeEqualStr(check, verifier)) {
+        failedUnlockAttempts += 1;
+        if (failedUnlockAttempts >= 5) {
+          const backoffMs = Math.min(60_000, 2000 * Math.pow(2, failedUnlockAttempts - 5));
+          unlockLockedUntil = Date.now() + backoffMs;
+        }
+        throw new Error("Wrong passphrase");
+      }
+      failedUnlockAttempts = 0;
+      unlockLockedUntil = 0;
       setKey(dataKey);
       setStatus("unlocked");
       return dataKey;

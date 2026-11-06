@@ -98,8 +98,7 @@ function Dashboard() {
     .filter((c): c is string => Boolean(c));
 
   const nonEmailCandidate = candidates.find((c) => c.toLowerCase() !== emailPrefix.toLowerCase());
-  const name =
-    nonEmailCandidate || (profileQuery.isLoading ? "" : candidates[0] || emailPrefix || "friend");
+  const name = nonEmailCandidate || (profileQuery.isLoading ? "" : "friend");
 
   return (
     <div className="space-y-10">

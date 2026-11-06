@@ -208,7 +208,11 @@ function NotesPage() {
             const { plaintext, wasEncrypted } = await decryptField(key, f.name);
             if (!wasEncrypted && f.name) {
               const encName = await encryptField(key, f.name);
-              void supabase.from("note_folders").update({ name: encName }).eq("id", f.id);
+              void supabase
+                .from("note_folders")
+                .update({ name: encName })
+                .eq("id", f.id)
+                .eq("user_id", user.id);
             }
             return { id: f.id, name: plaintext, parent_id: f.parent_id };
           } catch {
@@ -239,7 +243,8 @@ function NotesPage() {
                 void supabase
                   .from("notes")
                   .update({ title: null, tags: null } as never)
-                  .eq("id", r.id);
+                  .eq("id", r.id)
+                  .eq("user_id", user.id);
               }
             } catch {
               p = { t: "", c: "[Could not unlock this note]" };
@@ -251,7 +256,8 @@ function NotesPage() {
               void supabase
                 .from("notes")
                 .update({ content: ct, iv, title: null, tags: null } as never)
-                .eq("id", r.id);
+                .eq("id", r.id)
+                .eq("user_id", user.id);
             }
           }
           return {
@@ -524,7 +530,8 @@ function NotesPage() {
           folder_id: vars.folder_id,
           updated_at: updatedAt,
         } as never)
-        .eq("id", n.id);
+        .eq("id", n.id)
+        .eq("user_id", user.id);
       if (error) throw error;
       return {
         ...n,
@@ -567,7 +574,11 @@ function NotesPage() {
           // ignore
         }
       }
-      const { error } = await supabase.from("notes").delete().eq("id", note.id);
+      const { error } = await supabase
+        .from("notes")
+        .delete()
+        .eq("id", note.id)
+        .eq("user_id", user.id);
       if (error) throw error;
       return note.id;
     },
@@ -1325,7 +1336,8 @@ function NoteImage({
         const bytes = await fetchStorageBytesWithOfflineCache(MEDIA_BUCKET, path, data?.signedUrl);
         if (!bytes || cancelled) return;
         const pt = await decryptBytes(cryptoKey, bytes, iv);
-        objectUrl = URL.createObjectURL(new Blob([pt], { type: mime || "image/jpeg" }));
+        const safeMime = mime && ALLOWED[mime] ? mime : "image/jpeg";
+        objectUrl = URL.createObjectURL(new Blob([pt], { type: safeMime }));
         if (!cancelled) setSrc(objectUrl);
       } catch {
         // unreadable image

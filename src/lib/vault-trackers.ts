@@ -50,7 +50,9 @@ async function readLocalEncrypted(
     const parsed = JSON.parse(raw) as { ct?: string; iv?: string };
     if (!parsed?.ct || !parsed?.iv) return null;
     const plain = await decryptText(key, parsed.ct, parsed.iv);
-    return JSON.parse(plain) as VaultTrackersData;
+    const decoded = JSON.parse(plain) as VaultTrackersData & { uid?: string };
+    if (decoded.uid && decoded.uid !== userId) return null;
+    return decoded;
   } catch {
     return null;
   }
@@ -61,8 +63,9 @@ async function writeEncrypted(
   key: CryptoKey,
   data: VaultTrackersData,
 ): Promise<void> {
-  const payload: VaultTrackersData = {
+  const payload = {
     ...data,
+    uid: userId,
     updated_at: new Date().toISOString(),
   };
   const enc = await encryptText(key, JSON.stringify(payload));
@@ -96,7 +99,8 @@ async function fetchRemoteTrackers(
         const parsed = JSON.parse(text) as { ct?: string; iv?: string };
         if (parsed?.ct && parsed?.iv) {
           const plain = await decryptText(key, parsed.ct, parsed.iv);
-          const remote = JSON.parse(plain) as VaultTrackersData;
+          const remote = JSON.parse(plain) as VaultTrackersData & { uid?: string };
+          if (remote.uid && remote.uid !== userId) return null;
           if (
             !local ||
             new Date(remote.updated_at).getTime() >= new Date(local.updated_at).getTime()

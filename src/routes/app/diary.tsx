@@ -171,7 +171,11 @@ function DiaryPage() {
             const { plaintext, wasEncrypted } = await decryptField(key, f.name);
             if (!wasEncrypted && f.name) {
               const encName = await encryptField(key, f.name);
-              void supabase.from("diary_folders").update({ name: encName }).eq("id", f.id);
+              void supabase
+                .from("diary_folders")
+                .update({ name: encName })
+                .eq("id", f.id)
+                .eq("user_id", user.id);
             }
             return { id: f.id, name: plaintext, parent_id: f.parent_id };
           } catch {
@@ -248,7 +252,8 @@ function DiaryPage() {
                     word_count: 0,
                     ...NULL_MUSIC_COLUMNS,
                   } as never)
-                  .eq("id", row.id);
+                  .eq("id", row.id)
+                  .eq("user_id", user.id);
               }
             } catch {
               c = "[Could not decrypt this entry]";
@@ -273,7 +278,8 @@ function DiaryPage() {
                 word_count: 0,
                 ...NULL_MUSIC_COLUMNS,
               } as never)
-              .eq("id", row.id);
+              .eq("id", row.id)
+              .eq("user_id", user.id);
           }
 
           return {
@@ -504,7 +510,8 @@ function DiaryPage() {
             word_count: 0,
             ...NULL_MUSIC_COLUMNS,
           } as never)
-          .eq("id", vars.id);
+          .eq("id", vars.id)
+          .eq("user_id", user.id);
         if (error) throw error;
       } else {
         const { error } = await supabase
@@ -517,7 +524,8 @@ function DiaryPage() {
             word_count: countWords(vars.content),
             ...musicPatch,
           } as never)
-          .eq("id", vars.id);
+          .eq("id", vars.id)
+          .eq("user_id", user.id);
         if (error) throw error;
       }
       return {
@@ -541,7 +549,11 @@ function DiaryPage() {
 
   const remove = useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await supabase.from("diary_entries").delete().eq("id", id);
+      const { error } = await supabase
+        .from("diary_entries")
+        .delete()
+        .eq("id", id)
+        .eq("user_id", user.id);
       if (error) throw error;
       return id;
     },
@@ -952,6 +964,8 @@ function DiaryPage() {
   );
 }
 
+const SAFE_DIARY_MIMES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
+
 function DiaryImage({
   path,
   encrypted,
@@ -968,11 +982,12 @@ function DiaryImage({
     let objectUrl: string | null = null;
     (async () => {
       try {
+        if (encrypted && !cryptoKey) return;
         const { data: signed } = await supabase.storage
           .from("gallery")
           .createSignedUrl(path, 60 * 60);
         if (cancelled) return;
-        if (!encrypted || !cryptoKey) {
+        if (!encrypted) {
           const url = await fetchStorageUrlWithOfflineCache("gallery", path, signed?.signedUrl);
           if (!cancelled && url) setSrc(url);
           return;
@@ -983,15 +998,14 @@ function DiaryImage({
           .eq("storage_path", path)
           .maybeSingle();
         const row = meta as unknown as { iv: string | null; mime: string | null } | null;
-        if (!row?.iv) {
-          const url = await fetchStorageUrlWithOfflineCache("gallery", path, signed?.signedUrl);
-          if (!cancelled && url) setSrc(url);
+        if (!row?.iv || !cryptoKey) {
           return;
         }
         const ct = await fetchStorageBytesWithOfflineCache("gallery", path, signed?.signedUrl);
         if (!ct || cancelled) return;
         const pt = await decryptBytes(cryptoKey, ct, row.iv);
-        objectUrl = URL.createObjectURL(new Blob([pt], { type: row.mime || "image/jpeg" }));
+        const safeMime = row.mime && SAFE_DIARY_MIMES.has(row.mime) ? row.mime : "image/jpeg";
+        objectUrl = URL.createObjectURL(new Blob([pt], { type: safeMime }));
         if (!cancelled) setSrc(objectUrl);
       } catch {
         // unreadable image

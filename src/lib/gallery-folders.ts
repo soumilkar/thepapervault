@@ -24,7 +24,13 @@ async function readLocalEncrypted(
     const parsed = JSON.parse(raw) as { ct?: string; iv?: string };
     if (!parsed?.ct || !parsed?.iv) return null;
     const plain = await decryptText(key, parsed.ct, parsed.iv);
-    return JSON.parse(plain) as { folders: GalleryFolder[]; updated_at: string };
+    const decoded = JSON.parse(plain) as {
+      folders: GalleryFolder[];
+      updated_at: string;
+      uid?: string;
+    };
+    if (decoded.uid && decoded.uid !== userId) return null;
+    return decoded;
   } catch {
     return null;
   }
@@ -36,6 +42,7 @@ async function writeEncrypted(
   folders: GalleryFolder[],
 ): Promise<void> {
   const payload = {
+    uid: userId,
     folders,
     updated_at: new Date().toISOString(),
   };
@@ -70,7 +77,12 @@ async function fetchRemoteGalleryFolders(
         const parsed = JSON.parse(text) as { ct?: string; iv?: string };
         if (parsed?.ct && parsed?.iv) {
           const plain = await decryptText(key, parsed.ct, parsed.iv);
-          const remote = JSON.parse(plain) as { folders: GalleryFolder[]; updated_at: string };
+          const remote = JSON.parse(plain) as {
+            folders: GalleryFolder[];
+            updated_at: string;
+            uid?: string;
+          };
+          if (remote.uid && remote.uid !== userId) return null;
           if (
             !local ||
             new Date(remote.updated_at).getTime() >= new Date(local.updated_at).getTime()

@@ -11,6 +11,13 @@ function isSafeMarkdownUrl(url?: string): boolean {
   return /^(?:https?:|mailto:|tel:|\/|#)/i.test(trimmed);
 }
 
+function isSafeMarkdownImageSrc(url?: string): boolean {
+  if (!url) return false;
+  const trimmed = url.trim();
+  // Only allow HTTPS or same-origin relative images (never unencrypted http:// tracking pixels)
+  return /^(?:https:\/\/|\/[^/])/i.test(trimmed);
+}
+
 const MARKDOWN_COMPONENTS: Components = {
   h1: ({ node: _node, ...p }) => (
     <h1 className="font-serif text-3xl text-primary mt-5 mb-2.5" {...p} />
@@ -61,7 +68,7 @@ const MARKDOWN_COMPONENTS: Components = {
   },
   hr: () => <hr className="my-4 border-border" />,
   img: ({ node: _node, src, alt }) => {
-    const safeSrc = typeof src === "string" && isSafeMarkdownUrl(src) ? src : undefined;
+    const safeSrc = typeof src === "string" && isSafeMarkdownImageSrc(src) ? src : undefined;
     if (!safeSrc) return null;
     return (
       <span className="my-4 block rounded-2xl border border-border bg-secondary/35 p-2.5 sm:p-3.5">
