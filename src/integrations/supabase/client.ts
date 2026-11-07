@@ -236,6 +236,14 @@ function createSupabaseClient(): SupabaseClient<Database> {
       const origCreateSignedUrl = api.createSignedUrl.bind(api);
       const origCreateSignedUrls = api.createSignedUrls.bind(api);
 
+      const normalizeSignedStorageUrl = (rawUrl: string): string => {
+        const proxyIdx = rawUrl.indexOf("/api/storage-proxy?");
+        if (proxyIdx !== -1) {
+          return rawUrl.slice(proxyIdx);
+        }
+        return rawUrl;
+      };
+
       api.createSignedUrl = async (path, expiresIn, options) => {
         const isMutable =
           path.endsWith("vault-trackers.bin") || path.endsWith("gallery-folders.bin");
@@ -254,13 +262,14 @@ function createSupabaseClient(): SupabaseClient<Database> {
         try {
           const res = await origCreateSignedUrl(path, expiresIn, options);
           if (res.data?.signedUrl) {
+            const normalizedUrl = normalizeSignedStorageUrl(res.data.signedUrl);
             if (!isMutable) {
               signedUrlMemCache.set(cacheKey, {
-                signedUrl: res.data.signedUrl,
+                signedUrl: normalizedUrl,
                 expiresAt: now + SIGNED_URL_TTL_MS,
               });
             }
-            return res;
+            return { data: { signedUrl: normalizedUrl }, error: null };
           }
         } catch {
           // fallback below
@@ -308,8 +317,9 @@ function createSupabaseClient(): SupabaseClient<Database> {
           const res = await origCreateSignedUrls(uncachedPaths, expiresIn, options);
           if (res.data) {
             for (const item of res.data) {
-              const signed =
+              const rawSigned =
                 item.signedUrl || (item as unknown as { signedURL?: string }).signedURL || "";
+              const signed = normalizeSignedStorageUrl(rawSigned);
               if (item.path && signed) {
                 signedUrlMemCache.set(`${bucket}/${item.path}`, {
                   signedUrl: signed,

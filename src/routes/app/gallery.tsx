@@ -583,15 +583,15 @@ function GalleryPage() {
       toast.error("Only JPEG, PNG, WebP, or GIF images are allowed");
       return;
     }
-    if (file.size > 5 * 1024 * 1024) {
-      toast.error("Photo must be smaller than 5 MB");
+    if (file.size > 15 * 1024 * 1024) {
+      toast.error("Photo must be smaller than 15 MB");
       return;
     }
 
     setUploading(true);
     try {
       const path = `${user.id}/${crypto.randomUUID()}.bin`;
-      const { blob, iv } = await encryptBlob(key, file);
+      const { blob, iv, mime: optimizedMime } = await encryptBlob(key, file);
 
       // Determine target bucket and source
       let targetSource: "gallery" | "notes" | "diary" = "gallery";
@@ -633,7 +633,7 @@ function GalleryPage() {
         caption: enc.ct,
         iv,
         caption_iv: enc.iv,
-        mime: file.type,
+        mime: optimizedMime || file.type,
         created_at: getBrowserNow().iso,
       });
       if (dbErr) throw dbErr;

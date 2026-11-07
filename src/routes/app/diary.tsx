@@ -383,9 +383,9 @@ function DiaryPage() {
         };
         if (!ALLOWED[photo.type])
           throw new Error("Only JPEG, PNG, WebP, or GIF images are allowed");
-        if (photo.size > 5 * 1024 * 1024) throw new Error("Photo must be smaller than 5 MB");
+        if (photo.size > 15 * 1024 * 1024) throw new Error("Photo must be smaller than 15 MB");
         imagePath = `${user.id}/${crypto.randomUUID()}.bin`;
-        const { blob, iv: imgIv } = await encryptBlob(key, photo);
+        const { blob, iv: imgIv, mime: optimizedMime } = await encryptBlob(key, photo);
         const { error: upErr } = await supabase.storage
           .from("gallery")
           .upload(imagePath, blob, { contentType: "application/octet-stream" });
@@ -398,7 +398,7 @@ function DiaryPage() {
           caption: capCt,
           iv: imgIv,
           caption_iv: capIv,
-          mime: photo.type,
+          mime: optimizedMime || photo.type,
           created_at: browserNow.iso,
         });
       }

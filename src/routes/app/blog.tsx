@@ -25,6 +25,7 @@ import { Markdown } from "@/components/Markdown";
 import { downloadTextFile } from "@/lib/download";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { useBrowserDraft } from "@/lib/browser-drafts";
+import { optimizeImageBeforeEncryption } from "@/lib/crypto";
 import type { Database } from "@/integrations/supabase/types";
 
 export const Route = createFileRoute("/app/blog")({
@@ -43,13 +44,14 @@ async function uploadMedia(userId: string, file: File): Promise<string> {
     "image/webp": "webp",
     "image/gif": "gif",
   };
-  const ext = ALLOWED[file.type];
-  if (!ext) throw new Error("Only JPEG, PNG, WebP, or GIF images are allowed");
-  if (file.size > 5 * 1024 * 1024) throw new Error("Image must be smaller than 5 MB");
+  if (!ALLOWED[file.type]) throw new Error("Only JPEG, PNG, WebP, or GIF images are allowed");
+  if (file.size > 15 * 1024 * 1024) throw new Error("Image must be smaller than 15 MB");
+  const optimized = await optimizeImageBeforeEncryption(file);
+  const ext = ALLOWED[optimized.mime] || ALLOWED[file.type] || "webp";
   const path = `${userId}/${crypto.randomUUID()}.${ext}`;
   const { error } = await supabase.storage
     .from(MEDIA_BUCKET)
-    .upload(path, file, { contentType: file.type });
+    .upload(path, optimized.blob, { contentType: optimized.mime });
   if (error) throw error;
   return path;
 }
@@ -332,7 +334,7 @@ function BlogPage() {
                 onChange={(e) => {
                   const f = e.target.files?.[0];
                   if (f) {
-                    if (f.size > 5 * 1024 * 1024) toast.error("Image must be smaller than 5 MB");
+                    if (f.size > 15 * 1024 * 1024) toast.error("Image must be smaller than 15 MB");
                     else setImage(f);
                   }
                   e.currentTarget.value = "";
@@ -586,7 +588,7 @@ const BlogCard = memo(function BlogCard({
             onChange={(e) => {
               const f = e.target.files?.[0];
               if (f) {
-                if (f.size > 5 * 1024 * 1024) toast.error("Image must be smaller than 5 MB");
+                if (f.size > 15 * 1024 * 1024) toast.error("Image must be smaller than 15 MB");
                 else {
                   setEImage(f);
                   setEClearImage(false);

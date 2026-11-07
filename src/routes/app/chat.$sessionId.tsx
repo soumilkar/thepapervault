@@ -256,6 +256,11 @@ function SessionChat() {
         created_at: sentSnap.iso,
       });
       if (userMessageError) throw userMessageError;
+      void supabase
+        .from("chat_sessions")
+        .update({ last_message_at: sentSnap.iso })
+        .eq("id", sessionId)
+        .eq("user_id", user.id);
 
       const context = await buildContext(user.id, key, source, startDate, endDate);
       const emailPrefix = user.email?.split("@")[0]?.toLowerCase() ?? "";

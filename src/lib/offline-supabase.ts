@@ -392,19 +392,28 @@ export async function getStorageBlobUrl(bucket: string, path: string): Promise<s
 
 const activeBlobDownloads = new Map<string, Promise<ArrayBuffer | null>>();
 
+function normalizeSignedProxyUrl(rawUrl: string): string {
+  const proxyIdx = rawUrl.indexOf("/api/storage-proxy?");
+  if (proxyIdx !== -1) {
+    return rawUrl.slice(proxyIdx);
+  }
+  return rawUrl;
+}
+
 export async function cacheRemoteStorageUrl(
   bucket: string,
   path: string,
   signedUrl: string,
 ): Promise<ArrayBuffer | null> {
   if (!signedUrl || signedUrl.startsWith("blob:")) return null;
+  const normalizedUrl = normalizeSignedProxyUrl(signedUrl);
   const key = `${bucket}/${path}`;
   const inFlight = activeBlobDownloads.get(key);
   if (inFlight) return inFlight;
 
   const task = (async () => {
     try {
-      const res = await nativeFetch(signedUrl);
+      const res = await nativeFetch(normalizedUrl);
       if (!res.ok) return null;
       const blob = await res.blob();
       await saveStorageBlob(
@@ -1496,6 +1505,53 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
     const table = decodeURIComponent(restMatch[1]) as TableName;
     if ((TABLES as readonly string[]).includes(table)) {
       const pk = getPrimaryKey(table);
+      const isPublicDiaryFeed =
+        table === "diary_entries" && Boolean(url.searchParams.get("user_id")?.startsWith("neq."));
+      const isB2Table =
+        table === "diary_entries" ||
+        table === "diary_folders" ||
+        table === "notes" ||
+        table === "note_folders" ||
+        table === "gallery_images" ||
+        table === "chat_sessions" ||
+        table === "chat_messages" ||
+        table === "blog_posts" ||
+        table === "blog_comments" ||
+        table === "blog_likes" ||
+        table === "comment_votes";
+
+      const fetchRowsFromRemote = async (reqClone: Request, timeoutMs: number) => {
+        if (isB2Table) {
+          const authHeader =
+            reqClone.headers.get("authorization") || reqClone.headers.get("Authorization") || "";
+          const proxyQueryUrl = `/api/storage-proxy?action=db-query&table=${encodeURIComponent(table)}${
+            isPublicDiaryFeed ? "&publicFeed=1" : ""
+          }`;
+          const proxyRes = await quickFetch(
+            proxyQueryUrl,
+            {
+              method: "POST",
+              headers: {
+                authorization: authHeader,
+                "content-type": "application/json",
+              },
+            },
+            timeoutMs,
+          );
+          if (proxyRes.ok) {
+            const data = await proxyRes.json().catch(() => null);
+            if (Array.isArray(data)) {
+              return data as Record<string, unknown>[];
+            }
+          }
+        }
+        const res = await quickFetch(reqClone, undefined, timeoutMs);
+        if (!res.ok) return null;
+        const data = await res.json().catch(() => null);
+        if (Array.isArray(data)) return data as Record<string, unknown>[];
+        if (data && typeof data === "object") return [data as Record<string, unknown>];
+        return null;
+      };
 
       // SELECT / HEAD — Local-first Stale-While-Revalidate for <1ms page loads
       if (method === "GET" || method === "HEAD") {
@@ -1515,20 +1571,14 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
             if (nowMs - lastReval > 8000) {
               recentRevalidations.set(revalidateKey, nowMs);
               const reqClone = req.clone();
-              void quickFetch(reqClone, undefined, 6000)
-                .then(async (res) => {
-                  if (!res.ok) return;
+              void fetchRowsFromRemote(reqClone, 8000)
+                .then(async (freshList) => {
+                  if (!freshList) return;
                   markTableHydrated(table);
                   if (method !== "GET") return;
-                  const data = await res.json().catch(() => null);
-                  if (data === null) return;
-                  const freshList = Array.isArray(data)
-                    ? (data as Record<string, unknown>[])
-                    : typeof data === "object"
-                      ? [data as Record<string, unknown>]
-                      : [];
                   await idbPutMany(table, freshList);
-                  if (JSON.stringify(freshList) !== JSON.stringify(filtered)) {
+                  const freshFiltered = filterAndSortRows(freshList, url.searchParams);
+                  if (JSON.stringify(freshFiltered) !== JSON.stringify(filtered)) {
                     if (typeof window !== "undefined") {
                       window.dispatchEvent(
                         new CustomEvent(OFFLINE_DATA_UPDATED_EVENT, { detail: { table } }),
@@ -1547,6 +1597,16 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
           try {
             if (currentSyncState.pendingCount > 0) {
               void flushOfflineSyncQueue();
+            }
+
+            if (isB2Table && method === "GET") {
+              const freshList = await fetchRowsFromRemote(req.clone(), 8000);
+              if (freshList) {
+                markTableHydrated(table);
+                await idbPutMany(table, freshList);
+                const filtered = filterAndSortRows(freshList, url.searchParams);
+                return buildPostgrestResponse(filtered, method, req.headers, 200);
+              }
             }
 
             const res = await quickFetch(req.clone(), undefined, 4000);
@@ -1576,6 +1636,10 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
         return buildPostgrestResponse(filtered, method, req.headers, 200);
       }
 
+      const b2MutateUrl = isB2Table
+        ? `/api/storage-proxy?action=db-mutate&table=${encodeURIComponent(table)}&method=${method}&${url.searchParams.toString()}`
+        : null;
+
       // INSERT / UPSERT
       if (method === "POST") {
         const bodyText = await req.clone().text();
@@ -1592,26 +1656,53 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
         );
         if (navigator.onLine) {
           try {
-            const res = await quickFetch(
-              req.url,
-              {
-                method,
-                headers: req.headers,
-                body: forwardBody,
-              },
-              8000,
-            );
-            if (res.ok) {
-              const serverData = await res
-                .clone()
-                .json()
-                .catch(() => null);
-              if (Array.isArray(serverData)) {
-                await idbPutMany(table, serverData as Record<string, unknown>[]);
-              } else if (serverData && typeof serverData === "object") {
-                await idbPutMany(table, [serverData as Record<string, unknown>]);
+            if (b2MutateUrl) {
+              const authHeader =
+                req.headers.get("authorization") || req.headers.get("Authorization") || "";
+              const proxyRes = await quickFetch(
+                b2MutateUrl,
+                {
+                  method: "POST",
+                  headers: {
+                    authorization: authHeader,
+                    "content-type": "application/json",
+                  },
+                  body: forwardBody,
+                },
+                10000,
+              );
+              if (proxyRes.ok) {
+                const serverData = await proxyRes
+                  .clone()
+                  .json()
+                  .catch(() => null);
+                if (Array.isArray(serverData)) {
+                  await idbPutMany(table, serverData as Record<string, unknown>[]);
+                }
+                return buildPostgrestResponse(normalizedRows, method, req.headers, 201);
               }
-              return res;
+            } else {
+              const res = await quickFetch(
+                req.url,
+                {
+                  method,
+                  headers: req.headers,
+                  body: forwardBody,
+                },
+                8000,
+              );
+              if (res.ok) {
+                const serverData = await res
+                  .clone()
+                  .json()
+                  .catch(() => null);
+                if (Array.isArray(serverData)) {
+                  await idbPutMany(table, serverData as Record<string, unknown>[]);
+                } else if (serverData && typeof serverData === "object") {
+                  await idbPutMany(table, [serverData as Record<string, unknown>]);
+                }
+                return res;
+              }
             }
           } catch {
             // Enqueue for background sync below
@@ -1621,8 +1712,8 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
         await enqueueSyncItem({
           kind: "rest",
           table,
-          url: req.url,
-          method,
+          url: b2MutateUrl ?? req.url,
+          method: b2MutateUrl ? "POST" : method,
           headers: extractHeadersRecord(req.headers),
           body: forwardBody,
         });
@@ -1648,8 +1739,28 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
 
         if (navigator.onLine) {
           try {
-            const res = await quickFetch(req.clone(), undefined, 8000);
-            if (res.ok) return res;
+            if (b2MutateUrl) {
+              const authHeader =
+                req.headers.get("authorization") || req.headers.get("Authorization") || "";
+              const proxyRes = await quickFetch(
+                b2MutateUrl,
+                {
+                  method: "POST",
+                  headers: {
+                    authorization: authHeader,
+                    "content-type": "application/json",
+                  },
+                  body: bodyText,
+                },
+                10000,
+              );
+              if (proxyRes.ok) {
+                return buildPostgrestResponse(updatedRows, method, req.headers, 200);
+              }
+            } else {
+              const res = await quickFetch(req.clone(), undefined, 8000);
+              if (res.ok) return res;
+            }
           } catch {
             // Enqueue below
           }
@@ -1658,8 +1769,8 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
         await enqueueSyncItem({
           kind: "rest",
           table,
-          url: req.url,
-          method,
+          url: b2MutateUrl ?? req.url,
+          method: b2MutateUrl ? "POST" : method,
           headers: extractHeadersRecord(req.headers),
           body: bodyText,
         });
@@ -1676,10 +1787,41 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
           .filter((k): k is string | number => typeof k === "string" || typeof k === "number");
         await idbDeleteKeys(table, keysToDelete);
 
+        if (table === "chat_sessions" && keysToDelete.length > 0) {
+          const sessionSet = new Set(keysToDelete.map(String));
+          const allMessages = await idbGetAll<Record<string, unknown>>("chat_messages");
+          const msgKeysToDelete = allMessages
+            .filter((m) => typeof m.session_id === "string" && sessionSet.has(m.session_id))
+            .map((m) => m.id)
+            .filter((k): k is string | number => typeof k === "string" || typeof k === "number");
+          if (msgKeysToDelete.length > 0) {
+            await idbDeleteKeys("chat_messages", msgKeysToDelete);
+          }
+        }
+
         if (navigator.onLine) {
           try {
-            const res = await quickFetch(req.clone(), undefined, 8000);
-            if (res.ok) return res;
+            if (b2MutateUrl) {
+              const authHeader =
+                req.headers.get("authorization") || req.headers.get("Authorization") || "";
+              const proxyRes = await quickFetch(
+                b2MutateUrl,
+                {
+                  method: "POST",
+                  headers: {
+                    authorization: authHeader,
+                    "content-type": "application/json",
+                  },
+                },
+                10000,
+              );
+              if (proxyRes.ok) {
+                return buildPostgrestResponse(matched, method, req.headers, 200);
+              }
+            } else {
+              const res = await quickFetch(req.clone(), undefined, 8000);
+              if (res.ok) return res;
+            }
           } catch {
             // Enqueue below
           }
@@ -1688,8 +1830,8 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
         await enqueueSyncItem({
           kind: "rest",
           table,
-          url: req.url,
-          method,
+          url: b2MutateUrl ?? req.url,
+          method: b2MutateUrl ? "POST" : method,
           headers: extractHeadersRecord(req.headers),
           body: null,
         });
@@ -1701,6 +1843,37 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
 
   return nativeFetch(input, init);
 };
+
+export interface B2MigrateResult {
+  configured: boolean;
+  bucket?: string;
+  endpoint?: string;
+  syncedRowsCount?: number;
+  migratedFilesCount?: number;
+  message?: string;
+}
+
+export async function syncAllToBackblazeB2(): Promise<B2MigrateResult> {
+  const token = await getFreshAccessToken();
+  if (!token) {
+    return { configured: false, message: "Not signed in" };
+  }
+  const res = await quickFetch(
+    "/api/storage-proxy?action=b2-migrate",
+    {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+      },
+    },
+    45000,
+  );
+  if (!res.ok) {
+    throw new Error(`Backblaze B2 sync failed (${res.status})`);
+  }
+  return (await res.json()) as B2MigrateResult;
+}
 
 function startSyncWatchdog(): void {
   if (typeof window === "undefined" || watchdogInterval !== null) return;

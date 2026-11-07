@@ -14,6 +14,7 @@ export const Route = createFileRoute("/app/chat")({
 type SessionRow = { id: string; title: string; last_message_at: string };
 
 const MAX_SESSIONS = 7;
+const CHAT_INACTIVITY_TTL_MS = 30 * 24 * 60 * 60 * 1000; // Auto-delete threads inactive for 1 month (30 days)
 export const CHAT_SESSIONS_UPDATED = "chat-sessions-updated";
 
 function ChatLayout() {
@@ -37,9 +38,19 @@ function ChatLayout() {
       toast.error("Could not load conversations");
       setSessions([]);
     } else {
+      const nowMs = Date.now();
       const all = data ?? [];
-      const kept = all.slice(0, MAX_SESSIONS);
-      const excessIds = all.slice(MAX_SESSIONS).map((r) => r.id);
+      const expiredIds: string[] = [];
+      const active = all.filter((r) => {
+        const ts = Date.parse(r.last_message_at);
+        if (!Number.isNaN(ts) && nowMs - ts > CHAT_INACTIVITY_TTL_MS) {
+          expiredIds.push(r.id);
+          return false;
+        }
+        return true;
+      });
+      const kept = active.slice(0, MAX_SESSIONS);
+      const excessIds = [...expiredIds, ...active.slice(MAX_SESSIONS).map((r) => r.id)];
       if (excessIds.length > 0) {
         void supabase.from("chat_sessions").delete().in("id", excessIds).eq("user_id", user.id);
       }
@@ -151,7 +162,7 @@ function ChatLayout() {
             <div className="flex items-center justify-between gap-2 border-b border-primary/20 px-4 py-3">
               <p className="font-serif text-base text-primary">Conversations</p>
               <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                kept until you delete them
+                auto-deleted after 1 mo inactive
               </span>
             </div>
             <div className="flex max-h-[min(70vh,26rem)] flex-col p-3">

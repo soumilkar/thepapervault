@@ -70,14 +70,14 @@ const ALLOWED: Record<string, string> = {
 
 async function uploadEncrypted(userId: string, key: CryptoKey, file: File) {
   if (!ALLOWED[file.type]) throw new Error("Only JPEG, PNG, WebP, or GIF images are allowed");
-  if (file.size > 5 * 1024 * 1024) throw new Error("Image must be smaller than 5 MB");
+  if (file.size > 15 * 1024 * 1024) throw new Error("Image must be smaller than 15 MB");
   const path = `${userId}/${crypto.randomUUID()}.bin`;
-  const { blob, iv } = await encryptBlob(key, file);
+  const { blob, iv, mime } = await encryptBlob(key, file);
   const { error } = await supabase.storage
     .from(MEDIA_BUCKET)
     .upload(path, blob, { contentType: "application/octet-stream" });
   if (error) throw error;
-  return { path, iv, mime: file.type };
+  return { path, iv, mime: mime || file.type };
 }
 
 function formatSheetDate(iso?: string) {

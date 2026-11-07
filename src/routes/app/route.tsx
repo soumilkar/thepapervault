@@ -29,6 +29,7 @@ import {
   getCachedAuthSession,
   OFFLINE_DATA_UPDATED_EVENT,
   OFFLINE_SYNC_SUCCESS_EVENT,
+  syncAllToBackblazeB2,
   triggerAutoSync,
 } from "@/lib/offline-supabase";
 import {
@@ -318,7 +319,8 @@ function VaultOfflineWarmer({ userId }: { userId: string }) {
       scheduleWarm(async () => {
         await supabase.from("note_folders").select("id,name,parent_id").eq("user_id", userId);
         await supabase.from("diary_folders").select("id,name,parent_id").eq("user_id", userId);
-      }, 15000),
+        await syncAllToBackblazeB2().catch(() => {});
+      }, 6000),
     );
 
     return () => {
