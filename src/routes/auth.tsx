@@ -1,6 +1,7 @@
 import { createFileRoute, redirect, useRouter } from "@tanstack/react-router";
 import { useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { ThemeToggleButton } from "@/lib/theme";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/auth")({
@@ -56,7 +57,13 @@ function AuthPage() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center px-4">
+    <div className="relative flex min-h-screen items-center justify-center px-4">
+      <div className="fixed top-4 right-4 z-40">
+        <ThemeToggleButton
+          className="flex items-center gap-1.5 rounded-xl border border-border/70 bg-card/85 px-3 py-2 text-xs text-muted-foreground shadow-sm backdrop-blur transition-colors hover:bg-secondary hover:text-primary"
+          showLabel
+        />
+      </div>
       <div className="paper-card w-full max-w-md p-8">
         <p className="font-hand text-2xl text-sepia text-center">
           {mode === "signin" ? "welcome back" : "begin your story"}

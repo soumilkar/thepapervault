@@ -989,10 +989,10 @@ function NotesPage() {
         {browseOpen && (
           <>
             <div
-              className="fixed inset-0 z-30 bg-[oklch(0.28_0.04_50_/_0.08)] backdrop-blur-[1px]"
+              className="fixed inset-0 z-30 bg-[oklch(0.28_0.04_50_/_0.08)] dark:bg-black/45 backdrop-blur-[1px]"
               onClick={() => setBrowseOpen(false)}
             />
-            <div className="absolute inset-x-0 top-full z-40 mt-2.5 w-full space-y-2.5 rounded-2xl border border-border/85 bg-[oklch(0.94_0.032_76_/_0.86)] p-3 text-foreground shadow-xl backdrop-blur-2xl sm:left-auto sm:right-0 sm:w-[30rem] sm:space-y-3 sm:p-4">
+            <div className="absolute inset-x-0 top-full z-40 mt-2.5 w-full space-y-2.5 rounded-2xl border border-border/85 bg-[oklch(0.94_0.032_76_/_0.86)] dark:bg-card/95 p-3 text-foreground shadow-xl backdrop-blur-2xl sm:left-auto sm:right-0 sm:w-[30rem] sm:space-y-3 sm:p-4">
               <div className="flex items-center justify-between gap-2 px-1">
                 <div className="flex min-w-0 items-center gap-2">
                   <Folder className="size-4 shrink-0 text-sepia" />
@@ -1020,7 +1020,7 @@ function NotesPage() {
               </div>
 
               {/* Search Box (Translucent Warm-Tinted Box) */}
-              <label className="flex items-center gap-2 rounded-xl border border-border/75 bg-[oklch(0.89_0.038_74_/_0.52)] px-3.5 py-2 text-sm backdrop-blur-md transition focus-within:border-primary/40 focus-within:bg-card/80">
+              <label className="flex items-center gap-2 rounded-xl border border-border/75 bg-[oklch(0.89_0.038_74_/_0.52)] dark:bg-secondary/65 px-3.5 py-2 text-sm backdrop-blur-md transition focus-within:border-primary/40 focus-within:bg-card/80">
                 <Search className="size-4 shrink-0 text-sepia" />
                 <input
                   value={query}
@@ -1036,7 +1036,7 @@ function NotesPage() {
               </label>
 
               {/* Folder Filter & Sort Box (Translucent Warm-Tinted Box) */}
-              <div className="grid grid-cols-1 gap-2 rounded-xl border border-border/75 bg-[oklch(0.89_0.038_74_/_0.52)] p-2.5 text-xs backdrop-blur-md sm:flex sm:flex-wrap sm:items-center sm:justify-between sm:gap-2.5 sm:p-3 sm:text-sm">
+              <div className="grid grid-cols-1 gap-2 rounded-xl border border-border/75 bg-[oklch(0.89_0.038_74_/_0.52)] dark:bg-secondary/65 p-2.5 text-xs backdrop-blur-md sm:flex sm:flex-wrap sm:items-center sm:justify-between sm:gap-2.5 sm:p-3 sm:text-sm">
                 <div className="flex items-center justify-between gap-2 sm:justify-start">
                   <span className="flex items-center gap-1.5 text-muted-foreground sm:hidden">
                     <Folder className="size-3.5 text-sepia" />
@@ -1091,7 +1091,7 @@ function NotesPage() {
                   e.preventDefault();
                   if (newFolder.trim()) createFolder.mutate(newFolder.trim());
                 }}
-                className="flex flex-col gap-2 rounded-xl border border-border/75 bg-[oklch(0.89_0.038_74_/_0.52)] p-2.5 text-xs backdrop-blur-md sm:flex-row sm:flex-wrap sm:items-center sm:p-3 sm:text-sm"
+                className="flex flex-col gap-2 rounded-xl border border-border/75 bg-[oklch(0.89_0.038_74_/_0.52)] dark:bg-secondary/65 p-2.5 text-xs backdrop-blur-md sm:flex-row sm:flex-wrap sm:items-center sm:p-3 sm:text-sm"
               >
                 <input
                   value={newFolder}
@@ -1123,12 +1123,12 @@ function NotesPage() {
               {/* Saved Pages List (Each in a Translucent Warm-Tinted Box) */}
               <div className="max-h-64 space-y-2 overflow-y-auto pr-0.5 sm:max-h-72">
                 {notes.isLoading && (
-                  <div className="rounded-xl border border-border/75 bg-[oklch(0.89_0.038_74_/_0.52)] p-3 font-hand text-sepia backdrop-blur-md">
+                  <div className="rounded-xl border border-border/75 bg-[oklch(0.89_0.038_74_/_0.52)] dark:bg-secondary/65 p-3 font-hand text-sepia backdrop-blur-md">
                     gathering notes...
                   </div>
                 )}
                 {!notes.isLoading && filtered.length === 0 && (
-                  <div className="rounded-xl border border-border/75 bg-[oklch(0.89_0.038_74_/_0.52)] p-3 text-sm text-muted-foreground backdrop-blur-md">
+                  <div className="rounded-xl border border-border/75 bg-[oklch(0.89_0.038_74_/_0.52)] dark:bg-secondary/65 p-3 text-sm text-muted-foreground backdrop-blur-md">
                     {notes.data?.length === 0 ? "No notes yet." : "No notes match."}
                   </div>
                 )}
@@ -1143,7 +1143,7 @@ function NotesPage() {
                       className={`flex w-full items-start justify-between gap-3 rounded-xl border px-3 py-2.5 text-left backdrop-blur-md transition sm:px-3.5 ${
                         isSelected
                           ? "border-primary/45 bg-card/90 shadow-2xs"
-                          : "border-border/75 bg-[oklch(0.89_0.038_74_/_0.52)] hover:border-primary/30 hover:bg-card/80"
+                          : "border-border/75 bg-[oklch(0.89_0.038_74_/_0.52)] dark:bg-secondary/60 hover:border-primary/30 hover:bg-card/80"
                       }`}
                     >
                       <div className="min-w-0 flex-1">

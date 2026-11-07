@@ -146,10 +146,15 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
   errorComponent: ErrorComponent,
 });
 
+import { ThemeProvider, useTheme } from "@/lib/theme";
+
+const THEME_INIT_SCRIPT = `(function(){try{var t=localStorage.getItem("papervault:theme");if(t==="dark"||(!t&&window.matchMedia&&window.matchMedia("(prefers-color-scheme: dark)").matches&&t==="__auto__")){document.documentElement.classList.add("dark");document.documentElement.style.colorScheme="dark";}else{document.documentElement.classList.remove("dark");document.documentElement.style.colorScheme="light";}}catch(e){}})();`;
+
 function RootShell({ children }: { children: ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
+        <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
         <HeadContent />
       </head>
       <body suppressHydrationWarning>
@@ -158,6 +163,11 @@ function RootShell({ children }: { children: ReactNode }) {
       </body>
     </html>
   );
+}
+
+function ThemedToaster() {
+  const { theme } = useTheme();
+  return <Toaster theme={theme} richColors position="top-center" />;
 }
 
 function RootComponent() {
@@ -180,10 +190,12 @@ function RootComponent() {
   }, [router, queryClient]);
 
   return (
-    <QueryClientProvider client={queryClient}>
-      <Outlet />
-      <Toaster richColors position="top-center" />
-      <ScrollToTop />
-    </QueryClientProvider>
+    <ThemeProvider>
+      <QueryClientProvider client={queryClient}>
+        <Outlet />
+        <ThemedToaster />
+        <ScrollToTop />
+      </QueryClientProvider>
+    </ThemeProvider>
   );
 }

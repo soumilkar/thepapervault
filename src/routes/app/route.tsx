@@ -19,8 +19,11 @@ import {
   ChevronDown,
   Lock,
   StickyNote,
+  Moon,
+  Sun,
 } from "lucide-react";
 import { VaultProvider, useVault } from "@/lib/vault";
+import { ThemeToggleButton, useTheme } from "@/lib/theme";
 import { clearCryptoCache } from "@/lib/crypto";
 import { VaultGate } from "@/components/VaultGate";
 import { toast } from "sonner";
@@ -247,6 +250,7 @@ function AuthedLayout() {
                   label={n.label}
                 />
               ))}
+              <ThemeToggleButton />
               <VaultLockButton />
               <button
                 onClick={handleSignOut}
@@ -272,6 +276,7 @@ function AuthedLayout() {
                     </DropdownMenuItem>
                   ))}
                   <DropdownMenuSeparator />
+                  <ThemeMenuItem />
                   <VaultLockMenuItem />
                   <DropdownMenuItem onClick={handleSignOut} className="text-muted-foreground">
                     <LogOut className="size-4" /> Sign out
@@ -342,6 +347,16 @@ function VaultLockButton() {
     >
       <Lock className="size-4" /> Lock
     </button>
+  );
+}
+
+function ThemeMenuItem() {
+  const { isDark, toggleTheme } = useTheme();
+  return (
+    <DropdownMenuItem onClick={toggleTheme} className="text-muted-foreground">
+      {isDark ? <Sun className="size-4 text-accent" /> : <Moon className="size-4" />}
+      <span>{isDark ? "Day mode" : "Night mode"}</span>
+    </DropdownMenuItem>
   );
 }
 
