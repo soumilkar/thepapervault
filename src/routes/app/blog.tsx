@@ -26,6 +26,7 @@ import { downloadTextFile } from "@/lib/download";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { useBrowserDraft } from "@/lib/browser-drafts";
 import { optimizeImageBeforeEncryption } from "@/lib/crypto";
+import { peekDecryptedMediaUrl, setDecryptedMediaUrl } from "@/lib/offline-supabase";
 import type { Database } from "@/integrations/supabase/types";
 
 export const Route = createFileRoute("/app/blog")({
@@ -37,7 +38,7 @@ type BlogPostRow = Database["public"]["Tables"]["blog_posts"]["Row"];
 
 const MEDIA_BUCKET = "media";
 
-async function uploadMedia(userId: string, file: File): Promise<string> {
+async function uploadMedia(userId: string, file: File, preallocatedPath?: string): Promise<string> {
   const ALLOWED: Record<string, string> = {
     "image/jpeg": "jpg",
     "image/png": "png",
@@ -48,7 +49,7 @@ async function uploadMedia(userId: string, file: File): Promise<string> {
   if (file.size > 15 * 1024 * 1024) throw new Error("Image must be smaller than 15 MB");
   const optimized = await optimizeImageBeforeEncryption(file);
   const ext = ALLOWED[optimized.mime] || ALLOWED[file.type] || "webp";
-  const path = `${userId}/${crypto.randomUUID()}.${ext}`;
+  const path = preallocatedPath || `${userId}/${crypto.randomUUID()}.${ext}`;
   const { error } = await supabase.storage
     .from(MEDIA_BUCKET)
     .upload(path, optimized.blob, { contentType: optimized.mime });
@@ -58,8 +59,12 @@ async function uploadMedia(userId: string, file: File): Promise<string> {
 
 async function getMediaUrl(path: string | null): Promise<string | null> {
   if (!path) return null;
+  const cached = peekDecryptedMediaUrl(MEDIA_BUCKET, path, null);
+  if (cached) return cached;
   const { data } = await supabase.storage.from(MEDIA_BUCKET).createSignedUrl(path, 60 * 60);
-  return data?.signedUrl ?? null;
+  const url = data?.signedUrl ?? null;
+  if (url) setDecryptedMediaUrl(MEDIA_BUCKET, path, null, url);
+  return url;
 }
 
 function BlogPage() {
@@ -148,38 +153,109 @@ function BlogPage() {
   });
 
   const create = useMutation({
-    mutationFn: async () => {
-      const tagArr = tags
+    mutationFn: async (vars: {
+      id: string;
+      createdAt: string;
+      title: string;
+      content: string;
+      tags: string;
+      music: SelectedTrack | null;
+      notify: boolean;
+      image: File | null;
+      optimisticImagePath: string | null;
+    }) => {
+      const tagArr = vars.tags
         .split(",")
         .map((t) => t.trim())
         .filter(Boolean);
       let imagePath: string | null = null;
-      if (image) imagePath = await uploadMedia(user.id, image);
+      if (vars.image) {
+        imagePath = await uploadMedia(user.id, vars.image, vars.optimisticImagePath ?? undefined);
+      }
       const { error } = await supabase.from("blog_posts").insert({
+        id: vars.id,
         user_id: user.id,
-        title,
-        content,
+        title: vars.title,
+        content: vars.content,
         tags: tagArr.length ? tagArr : null,
-        notify_on_comment: notify,
+        notify_on_comment: vars.notify,
         image_url: imagePath,
-        music_track_id: music?.music_track_id ?? null,
-        music_track_name: music?.music_track_name ?? null,
-        music_artist: music?.music_artist ?? null,
-        music_preview_url: music?.music_preview_url ?? null,
-        music_artwork_url: music?.music_artwork_url ?? null,
+        music_track_id: vars.music?.music_track_id ?? null,
+        music_track_name: vars.music?.music_track_name ?? null,
+        music_artist: vars.music?.music_artist ?? null,
+        music_preview_url: vars.music?.music_preview_url ?? null,
+        music_artwork_url: vars.music?.music_artwork_url ?? null,
+        created_at: vars.createdAt,
+        updated_at: vars.createdAt,
       });
       if (error) throw error;
     },
-    onSuccess: () => {
+    onMutate: async (vars) => {
+      await qc.cancelQueries({ queryKey: ["blog", "mine", user.id] });
+      const prevMine = qc.getQueryData<BlogPostRow[]>(["blog", "mine", user.id]);
+      const prevDraft = draft;
+      const prevImage = vars.image;
+
+      if (vars.image && vars.optimisticImagePath) {
+        setDecryptedMediaUrl(
+          MEDIA_BUCKET,
+          vars.optimisticImagePath,
+          null,
+          URL.createObjectURL(vars.image),
+        );
+      }
+
+      const tagArr = vars.tags
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean);
+
+      const optimisticRow: BlogPostRow = {
+        id: vars.id,
+        user_id: user.id,
+        title: vars.title,
+        content: vars.content,
+        tags: tagArr.length ? tagArr : null,
+        notify_on_comment: vars.notify,
+        image_url: vars.optimisticImagePath,
+        music_track_id: vars.music?.music_track_id ?? null,
+        music_track_name: vars.music?.music_track_name ?? null,
+        music_artist: vars.music?.music_artist ?? null,
+        music_preview_url: vars.music?.music_preview_url ?? null,
+        music_artwork_url: vars.music?.music_artwork_url ?? null,
+        created_at: vars.createdAt,
+        updated_at: vars.createdAt,
+      };
+
+      qc.setQueryData<BlogPostRow[]>(["blog", "mine", user.id], (old) => [
+        optimisticRow,
+        ...(old ?? []),
+      ]);
       clearDraft();
       setImage(null);
       setOpen(false);
       toast.success("Blog published");
+
+      return { prevMine, prevDraft, prevImage };
+    },
+    onError: (e: Error, _vars, context) => {
+      if (context?.prevMine !== undefined) {
+        qc.setQueryData(["blog", "mine", user.id], context.prevMine);
+      }
+      if (context?.prevDraft) {
+        setDraft(context.prevDraft);
+      }
+      if (context?.prevImage) {
+        setImage(context.prevImage);
+      }
+      setOpen(true);
+      toast.error(e.message);
+    },
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: ["blog"] });
       qc.invalidateQueries({ queryKey: ["dashboard-counts"] });
       qc.invalidateQueries({ queryKey: ["heatmap-activity"] });
     },
-    onError: (e: Error) => toast.error(e.message),
   });
 
   const remove = useMutation({
@@ -190,7 +266,22 @@ function BlogPage() {
       const { error } = await supabase.from("blog_posts").delete().eq("id", post.id);
       if (error) throw error;
     },
-    onSuccess: () => {
+    onMutate: async (post) => {
+      await qc.cancelQueries({ queryKey: ["blog", "mine", user.id] });
+      const prevMine = qc.getQueryData<BlogPostRow[]>(["blog", "mine", user.id]);
+      qc.setQueryData<BlogPostRow[]>(["blog", "mine", user.id], (old) =>
+        (old ?? []).filter((p) => p.id !== post.id),
+      );
+      toast.success("Post deleted");
+      return { prevMine };
+    },
+    onError: (e: Error, _post, context) => {
+      if (context?.prevMine !== undefined) {
+        qc.setQueryData(["blog", "mine", user.id], context.prevMine);
+      }
+      toast.error(e.message);
+    },
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: ["blog"] });
       qc.invalidateQueries({ queryKey: ["dashboard-counts"] });
       qc.invalidateQueries({ queryKey: ["heatmap-activity"] });
@@ -206,6 +297,7 @@ function BlogPage() {
       tags: string;
       newImage?: File | null;
       clearImage?: boolean;
+      optimisticImagePath?: string | null;
     }) => {
       const tagArr = vars.tags
         .split(",")
@@ -220,7 +312,11 @@ function BlogPage() {
         if (vars.oldImageUrl) {
           await supabase.storage.from(MEDIA_BUCKET).remove([vars.oldImageUrl]);
         }
-        patch.image_url = await uploadMedia(user.id, vars.newImage);
+        patch.image_url = await uploadMedia(
+          user.id,
+          vars.newImage,
+          vars.optimisticImagePath ?? undefined,
+        );
       } else if (vars.clearImage) {
         if (vars.oldImageUrl) {
           await supabase.storage.from(MEDIA_BUCKET).remove([vars.oldImageUrl]);
@@ -233,11 +329,53 @@ function BlogPage() {
         .eq("id", vars.id);
       if (error) throw error;
     },
-    onSuccess: () => {
+    onMutate: async (vars) => {
+      await qc.cancelQueries({ queryKey: ["blog", "mine", user.id] });
+      const prevMine = qc.getQueryData<BlogPostRow[]>(["blog", "mine", user.id]);
+      const tagArr = vars.tags
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean);
+
+      if (vars.newImage && vars.optimisticImagePath) {
+        setDecryptedMediaUrl(
+          MEDIA_BUCKET,
+          vars.optimisticImagePath,
+          null,
+          URL.createObjectURL(vars.newImage),
+        );
+      }
+
+      qc.setQueryData<BlogPostRow[]>(["blog", "mine", user.id], (old) =>
+        (old ?? []).map((p) =>
+          p.id === vars.id
+            ? {
+                ...p,
+                title: vars.title,
+                content: vars.content,
+                tags: tagArr.length ? tagArr : null,
+                image_url: vars.newImage
+                  ? (vars.optimisticImagePath ?? p.image_url)
+                  : vars.clearImage
+                    ? null
+                    : p.image_url,
+                updated_at: new Date().toISOString(),
+              }
+            : p,
+        ),
+      );
       toast.success("Post updated");
+      return { prevMine };
+    },
+    onError: (e: Error, _vars, context) => {
+      if (context?.prevMine !== undefined) {
+        qc.setQueryData(["blog", "mine", user.id], context.prevMine);
+      }
+      toast.error(e.message);
+    },
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: ["blog"] });
     },
-    onError: (e: Error) => toast.error(e.message),
   });
 
   const exportMine = () => {
@@ -282,7 +420,20 @@ function BlogPage() {
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            if (title.trim() && content.trim()) create.mutate();
+            if (title.trim() && content.trim()) {
+              const ext = image?.type === "image/gif" ? "gif" : "webp";
+              create.mutate({
+                id: crypto.randomUUID(),
+                createdAt: new Date().toISOString(),
+                title,
+                content,
+                tags,
+                music,
+                notify,
+                image,
+                optimisticImagePath: image ? `${user.id}/${crypto.randomUUID()}.${ext}` : null,
+              });
+            }
           }}
           className="paper-card space-y-3 p-6"
         >
@@ -397,7 +548,17 @@ function BlogPage() {
               currentUserId={user.id}
               isOwner
               onDelete={() => remove.mutate({ id: p.id, image_url: p.image_url })}
-              onSave={(vals) => update.mutate({ id: p.id, oldImageUrl: p.image_url, ...vals })}
+              onSave={(vals) => {
+                const ext = vals.newImage?.type === "image/gif" ? "gif" : "webp";
+                update.mutate({
+                  id: p.id,
+                  oldImageUrl: p.image_url,
+                  ...vals,
+                  optimisticImagePath: vals.newImage
+                    ? `${user.id}/${crypto.randomUUID()}.${ext}`
+                    : null,
+                });
+              }}
             />
           ))}
         </div>
@@ -451,8 +612,15 @@ function TabBtn({
 }
 
 function BlogImage({ path }: { path: string }) {
-  const [src, setSrc] = useState<string | null>(null);
+  const [src, setSrc] = useState<string | null>(() =>
+    peekDecryptedMediaUrl(MEDIA_BUCKET, path, null),
+  );
   useEffect(() => {
+    const cached = peekDecryptedMediaUrl(MEDIA_BUCKET, path, null);
+    if (cached) {
+      setSrc(cached);
+      return;
+    }
     let cancelled = false;
     getMediaUrl(path).then((u) => {
       if (!cancelled) setSrc(u);
@@ -738,8 +906,8 @@ function LikeButton({ postId, currentUserId }: { postId: string; currentUserId: 
   });
 
   const toggle = useMutation({
-    mutationFn: async () => {
-      if (likes.data?.liked) {
+    mutationFn: async (currentlyLiked: boolean) => {
+      if (currentlyLiked) {
         const { error } = await supabase
           .from("blog_likes")
           .delete()
@@ -753,14 +921,29 @@ function LikeButton({ postId, currentUserId }: { postId: string; currentUserId: 
         if (error) throw error;
       }
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["likes", postId] }),
-    onError: (e: Error) => toast.error(e.message),
+    onMutate: async (currentlyLiked) => {
+      await qc.cancelQueries({ queryKey: ["likes", postId] });
+      const prev = qc.getQueryData<{ count: number; liked: boolean }>(["likes", postId]);
+      const prevCount = prev?.count ?? 0;
+      qc.setQueryData<{ count: number; liked: boolean }>(["likes", postId], {
+        count: currentlyLiked ? Math.max(0, prevCount - 1) : prevCount + 1,
+        liked: !currentlyLiked,
+      });
+      return { prev };
+    },
+    onError: (e: Error, _currentlyLiked, context) => {
+      if (context?.prev) {
+        qc.setQueryData(["likes", postId], context.prev);
+      }
+      toast.error(e.message);
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: ["likes", postId] }),
   });
 
-  const liked = likes.data?.liked;
+  const liked = Boolean(likes.data?.liked);
   return (
     <button
-      onClick={() => toggle.mutate()}
+      onClick={() => toggle.mutate(liked)}
       className={`flex items-center gap-1.5 text-sm transition ${
         liked ? "text-destructive" : "text-muted-foreground hover:text-destructive"
       }`}
@@ -770,6 +953,10 @@ function LikeButton({ postId, currentUserId }: { postId: string; currentUserId: 
     </button>
   );
 }
+
+type CommentRowWithAuthor = Database["public"]["Tables"]["blog_comments"]["Row"] & {
+  author: string;
+};
 
 type CommentNode = {
   id: string;
@@ -793,10 +980,15 @@ function Comments({
 }) {
   const qc = useQueryClient();
   const [text, setText] = useState("");
+  const currentUserProfile = qc.getQueryData<{ id: string; display_name?: string | null }>([
+    "user-profile",
+    currentUserId,
+  ]);
+  const myDisplayName = currentUserProfile?.display_name?.trim() || "you";
 
   const comments = useQuery({
     queryKey: ["comments", postId],
-    queryFn: async () => {
+    queryFn: async (): Promise<CommentRowWithAuthor[]> => {
       const { data, error } = await supabase
         .from("blog_comments")
         .select("*")
@@ -829,20 +1021,58 @@ function Comments({
   }, [comments.data]);
 
   const add = useMutation({
-    mutationFn: async (vars: { content: string; parent_id: string | null }) => {
+    mutationFn: async (vars: {
+      id: string;
+      createdAt: string;
+      content: string;
+      parent_id: string | null;
+    }) => {
       const { error } = await supabase.from("blog_comments").insert({
+        id: vars.id,
         post_id: postId,
         user_id: currentUserId,
         content: vars.content.trim(),
         parent_id: vars.parent_id,
+        created_at: vars.createdAt,
+        updated_at: vars.createdAt,
       });
       if (error) throw error;
     },
-    onSuccess: () => {
-      setText("");
+    onMutate: async (vars) => {
+      await qc.cancelQueries({ queryKey: ["comments", postId] });
+      const prev = qc.getQueryData<CommentRowWithAuthor[]>(["comments", postId]);
+      const prevText = text;
+      const optimisticComment: CommentRowWithAuthor = {
+        id: vars.id,
+        post_id: postId,
+        user_id: currentUserId,
+        content: vars.content.trim(),
+        parent_id: vars.parent_id,
+        created_at: vars.createdAt,
+        updated_at: vars.createdAt,
+        author: myDisplayName,
+      };
+      qc.setQueryData<CommentRowWithAuthor[]>(["comments", postId], (old) => [
+        ...(old ?? []),
+        optimisticComment,
+      ]);
+      if (vars.parent_id === null) {
+        setText("");
+      }
+      return { prev, prevText, isRoot: vars.parent_id === null };
+    },
+    onError: (e: Error, _vars, context) => {
+      if (context?.prev !== undefined) {
+        qc.setQueryData(["comments", postId], context.prev);
+      }
+      if (context?.isRoot && context.prevText) {
+        setText(context.prevText);
+      }
+      toast.error(e.message);
+    },
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: ["comments", postId] });
     },
-    onError: (e: Error) => toast.error(e.message),
   });
 
   const edit = useMutation({
@@ -853,8 +1083,24 @@ function Comments({
         .eq("id", vars.id);
       if (error) throw error;
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["comments", postId] }),
-    onError: (e: Error) => toast.error(e.message),
+    onMutate: async (vars) => {
+      await qc.cancelQueries({ queryKey: ["comments", postId] });
+      const prev = qc.getQueryData<CommentRowWithAuthor[]>(["comments", postId]);
+      const nowIso = new Date().toISOString();
+      qc.setQueryData<CommentRowWithAuthor[]>(["comments", postId], (old) =>
+        (old ?? []).map((c) =>
+          c.id === vars.id ? { ...c, content: vars.content.trim(), updated_at: nowIso } : c,
+        ),
+      );
+      return { prev };
+    },
+    onError: (e: Error, _vars, context) => {
+      if (context?.prev !== undefined) {
+        qc.setQueryData(["comments", postId], context.prev);
+      }
+      toast.error(e.message);
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: ["comments", postId] }),
   });
 
   const del = useMutation({
@@ -862,7 +1108,21 @@ function Comments({
       const { error } = await supabase.from("blog_comments").delete().eq("id", id);
       if (error) throw error;
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["comments", postId] }),
+    onMutate: async (id) => {
+      await qc.cancelQueries({ queryKey: ["comments", postId] });
+      const prev = qc.getQueryData<CommentRowWithAuthor[]>(["comments", postId]);
+      qc.setQueryData<CommentRowWithAuthor[]>(["comments", postId], (old) =>
+        (old ?? []).filter((c) => c.id !== id && c.parent_id !== id),
+      );
+      return { prev };
+    },
+    onError: (e: Error, _id, context) => {
+      if (context?.prev !== undefined) {
+        qc.setQueryData(["comments", postId], context.prev);
+      }
+      toast.error(e.message);
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: ["comments", postId] }),
   });
 
   return (
@@ -877,7 +1137,14 @@ function Comments({
           postAuthorId={postAuthorId}
           currentUserId={currentUserId}
           depth={0}
-          onReply={(parentId, content) => add.mutate({ content, parent_id: parentId })}
+          onReply={(parentId, content) =>
+            add.mutate({
+              id: crypto.randomUUID(),
+              createdAt: new Date().toISOString(),
+              content,
+              parent_id: parentId,
+            })
+          }
           onEdit={(id, content) => edit.mutate({ id, content })}
           onDelete={(id) => del.mutate(id)}
         />
@@ -885,7 +1152,14 @@ function Comments({
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          if (text.trim()) add.mutate({ content: text, parent_id: null });
+          if (text.trim()) {
+            add.mutate({
+              id: crypto.randomUUID(),
+              createdAt: new Date().toISOString(),
+              content: text,
+              parent_id: null,
+            });
+          }
         }}
         className="flex gap-2"
       >
@@ -897,7 +1171,7 @@ function Comments({
         />
         <button
           type="submit"
-          disabled={!text.trim() || add.isPending}
+          disabled={!text.trim()}
           className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground disabled:opacity-50"
         >
           Post
@@ -1089,16 +1363,15 @@ function CommentVotes({ commentId, currentUserId }: { commentId: string; current
   });
 
   const cast = useMutation({
-    mutationFn: async (v: 1 | -1) => {
-      const current = votes.data?.mine ?? 0;
-      if (current === v) {
+    mutationFn: async ({ v, previousMine }: { v: 1 | -1; previousMine: -1 | 0 | 1 }) => {
+      if (previousMine === v) {
         const { error } = await supabase
           .from("comment_votes")
           .delete()
           .eq("comment_id", commentId)
           .eq("user_id", currentUserId);
         if (error) throw error;
-      } else if (current === 0) {
+      } else if (previousMine === 0) {
         const { error } = await supabase
           .from("comment_votes")
           .insert({ comment_id: commentId, user_id: currentUserId, value: v });
@@ -1112,15 +1385,32 @@ function CommentVotes({ commentId, currentUserId }: { commentId: string; current
         if (error) throw error;
       }
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["cvotes", commentId] }),
-    onError: (e: Error) => toast.error(e.message),
+    onMutate: async ({ v, previousMine }) => {
+      await qc.cancelQueries({ queryKey: ["cvotes", commentId] });
+      const prev = qc.getQueryData<{ score: number; mine: -1 | 0 | 1 }>(["cvotes", commentId]);
+      const currentScore = prev?.score ?? 0;
+      const nextMine: -1 | 0 | 1 = previousMine === v ? 0 : v;
+      const nextScore = currentScore - previousMine + nextMine;
+      qc.setQueryData<{ score: number; mine: -1 | 0 | 1 }>(["cvotes", commentId], {
+        score: nextScore,
+        mine: nextMine,
+      });
+      return { prev };
+    },
+    onError: (e: Error, _vars, context) => {
+      if (context?.prev) {
+        qc.setQueryData(["cvotes", commentId], context.prev);
+      }
+      toast.error(e.message);
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: ["cvotes", commentId] }),
   });
 
-  const mine = votes.data?.mine ?? 0;
+  const mine = (votes.data?.mine ?? 0) as -1 | 0 | 1;
   return (
     <div className="flex items-center gap-0.5 text-xs">
       <button
-        onClick={() => cast.mutate(1)}
+        onClick={() => cast.mutate({ v: 1, previousMine: mine })}
         className={`rounded p-0.5 transition ${mine === 1 ? "text-accent" : "text-muted-foreground hover:text-accent"}`}
         aria-label="Upvote"
       >
@@ -1128,7 +1418,7 @@ function CommentVotes({ commentId, currentUserId }: { commentId: string; current
       </button>
       <span className="min-w-4 text-center tabular-nums">{votes.data?.score ?? 0}</span>
       <button
-        onClick={() => cast.mutate(-1)}
+        onClick={() => cast.mutate({ v: -1, previousMine: mine })}
         className={`rounded p-0.5 transition ${
           mine === -1 ? "text-destructive" : "text-muted-foreground hover:text-destructive"
         }`}

@@ -27,6 +27,8 @@ import { getBrowserNow } from "@/lib/browser-time";
 import {
   fetchStorageBytesWithOfflineCache,
   fetchStorageUrlWithOfflineCache,
+  peekDecryptedMediaUrl,
+  setDecryptedMediaUrl,
 } from "@/lib/offline-supabase";
 import {
   decryptBytes,
@@ -330,67 +332,74 @@ function DiaryPage() {
   }, [qc]);
 
   const create = useMutation({
-    mutationFn: async (): Promise<Entry> => {
-      const browserNow = getBrowserNow();
+    mutationFn: async (vars: {
+      id: string;
+      entryDate: string;
+      createdAt: string;
+      title: string;
+      content: string;
+      mood: string;
+      isPublic: boolean;
+      folderId: string | null;
+      music: SelectedTrack | null;
+      photo: File | null;
+      optimisticImagePath: string | null;
+    }): Promise<Entry> => {
       const musicPatch = {
-        music_track_id: music?.music_track_id ?? null,
-        music_track_name: music?.music_track_name ?? null,
-        music_artist: music?.music_artist ?? null,
-        music_preview_url: music?.music_preview_url ?? null,
-        music_artwork_url: music?.music_artwork_url ?? null,
+        music_track_id: vars.music?.music_track_id ?? null,
+        music_track_name: vars.music?.music_track_name ?? null,
+        music_artist: vars.music?.music_artist ?? null,
+        music_preview_url: vars.music?.music_preview_url ?? null,
+        music_artwork_url: vars.music?.music_artwork_url ?? null,
       };
-      if (isPublic) {
-        const { data: inserted, error } = await supabase
-          .from("diary_entries")
-          .insert({
-            user_id: user.id,
-            title: title || null,
-            content,
-            mood: mood || null,
-            is_public: true,
-            folder_id: folderId,
-            visibility: "public_anon",
-            word_count: countWords(content),
-            entry_date: browserNow.localDate,
-            created_at: browserNow.iso,
-            ...musicPatch,
-          } as never)
-          .select("id,created_at,entry_date")
-          .single();
+      if (vars.isPublic) {
+        const { error } = await supabase.from("diary_entries").insert({
+          id: vars.id,
+          user_id: user.id,
+          title: vars.title || null,
+          content: vars.content,
+          mood: vars.mood || null,
+          is_public: true,
+          folder_id: vars.folderId,
+          visibility: "public_anon",
+          word_count: countWords(vars.content),
+          entry_date: vars.entryDate,
+          created_at: vars.createdAt,
+          ...musicPatch,
+        } as never);
         if (error) throw error;
-        const row = inserted as { id: string; created_at: string; entry_date: string };
         return {
-          id: row.id,
-          title: title || "",
-          content,
-          mood: mood || "",
-          entry_date: row.entry_date || browserNow.localDate,
+          id: vars.id,
+          title: vars.title || "",
+          content: vars.content,
+          mood: vars.mood || "",
+          entry_date: vars.entryDate,
           image_path: null,
           is_public: true,
-          folder_id: folderId,
-          music,
-          created_at: row.created_at || browserNow.iso,
+          folder_id: vars.folderId,
+          music: vars.music,
+          created_at: vars.createdAt,
         };
       }
       if (!key) throw new Error("Vault is locked");
       let imagePath: string | null = null;
-      if (photo) {
+      if (vars.photo) {
         const ALLOWED: Record<string, string> = {
           "image/jpeg": "jpg",
           "image/png": "png",
           "image/webp": "webp",
           "image/gif": "gif",
         };
-        if (!ALLOWED[photo.type])
+        if (!ALLOWED[vars.photo.type])
           throw new Error("Only JPEG, PNG, WebP, or GIF images are allowed");
-        if (photo.size > 15 * 1024 * 1024) throw new Error("Photo must be smaller than 15 MB");
-        imagePath = `${user.id}/${crypto.randomUUID()}.bin`;
-        const { blob, iv: imgIv, mime: optimizedMime } = await encryptBlob(key, photo);
+        if (vars.photo.size > 15 * 1024 * 1024) throw new Error("Photo must be smaller than 15 MB");
+        imagePath = vars.optimisticImagePath || `${user.id}/${crypto.randomUUID()}.bin`;
+        const { blob, iv: imgIv, mime: optimizedMime } = await encryptBlob(key, vars.photo);
         const { error: upErr } = await supabase.storage
           .from("gallery")
           .upload(imagePath, blob, { contentType: "application/octet-stream" });
         if (upErr) throw upErr;
-        const captionPlain = title || content.slice(0, 60) || "from my diary";
+        const captionPlain = vars.title || vars.content.slice(0, 60) || "from my diary";
         const { ct: capCt, iv: capIv } = await encryptText(key, captionPlain);
         await supabase.from("gallery_images").insert({
           user_id: user.id,
@@ -398,71 +407,117 @@ function DiaryPage() {
           caption: capCt,
           iv: imgIv,
           caption_iv: capIv,
-          mime: optimizedMime || photo.type,
-          created_at: browserNow.iso,
+          mime: optimizedMime || vars.photo.type,
+          created_at: vars.createdAt,
         });
       }
       const payload: DiaryEncryptedPayload = {
-        t: title,
-        c: content,
-        m: mood,
-        wc: countWords(content),
-        mu: music,
+        t: vars.title,
+        c: vars.content,
+        m: vars.mood,
+        wc: countWords(vars.content),
+        mu: vars.music,
       };
       const { ct, iv } = await encryptText(key, JSON.stringify(payload));
-      const { data: inserted, error } = await supabase
-        .from("diary_entries")
-        .insert({
-          user_id: user.id,
-          title: null,
-          content: ct,
-          mood: null,
-          image_path: imagePath,
-          visibility: "private",
-          is_public: false,
-          folder_id: folderId,
-          iv,
-          word_count: 0,
-          entry_date: browserNow.localDate,
-          created_at: browserNow.iso,
-          ...NULL_MUSIC_COLUMNS,
-        } as never)
-        .select("id,created_at,entry_date")
-        .single();
+      const { error } = await supabase.from("diary_entries").insert({
+        id: vars.id,
+        user_id: user.id,
+        title: null,
+        content: ct,
+        mood: null,
+        image_path: imagePath,
+        visibility: "private",
+        is_public: false,
+        folder_id: vars.folderId,
+        iv,
+        word_count: 0,
+        entry_date: vars.entryDate,
+        created_at: vars.createdAt,
+        ...NULL_MUSIC_COLUMNS,
+      } as never);
       if (error) throw error;
-      const row = inserted as { id: string; created_at: string; entry_date: string };
       return {
-        id: row.id,
-        title: title || "",
-        content,
-        mood: mood || "",
-        entry_date: row.entry_date || browserNow.localDate,
+        id: vars.id,
+        title: vars.title || "",
+        content: vars.content,
+        mood: vars.mood || "",
+        entry_date: vars.entryDate,
         image_path: imagePath,
         is_public: false,
-        folder_id: folderId,
-        music,
-        created_at: row.created_at || browserNow.iso,
+        folder_id: vars.folderId,
+        music: vars.music,
+        created_at: vars.createdAt,
       };
     },
-    onSuccess: (createdEntry) => {
+    onMutate: async (vars) => {
+      await Promise.all([
+        qc.cancelQueries({ queryKey: ["diary", user.id] }),
+        qc.cancelQueries({ queryKey: ["diary-metrics", user.id] }),
+      ]);
+      const prevEntries = qc.getQueryData<Entry[]>(["diary", user.id]);
+      const prevMetrics = qc.getQueryData<DiaryMetricRow[]>(["diary-metrics", user.id]);
+      const prevDraft = draft;
+      const prevPhoto = vars.photo;
+
+      if (vars.photo && vars.optimisticImagePath) {
+        setDecryptedMediaUrl(
+          "gallery",
+          vars.optimisticImagePath,
+          null,
+          URL.createObjectURL(vars.photo),
+        );
+      }
+
+      const optimisticEntry: Entry = {
+        id: vars.id,
+        title: vars.title || "",
+        content: vars.content,
+        mood: vars.mood || "",
+        entry_date: vars.entryDate,
+        image_path: vars.isPublic ? null : vars.optimisticImagePath,
+        is_public: vars.isPublic,
+        folder_id: vars.folderId,
+        music: vars.music,
+        created_at: vars.createdAt,
+      };
+
       qc.setQueryData<Entry[]>(["diary", user.id], (old) => [
-        createdEntry,
-        ...(old ?? []).filter((e) => e.id !== createdEntry.id),
+        optimisticEntry,
+        ...(old ?? []).filter((e) => e.id !== optimisticEntry.id),
       ]);
       qc.setQueryData<DiaryMetricRow[]>(["diary-metrics", user.id], (old) => [
         ...(old ?? []),
         {
-          entry_date: createdEntry.entry_date,
-          word_count: countWords(createdEntry.content),
+          entry_date: optimisticEntry.entry_date,
+          word_count: countWords(optimisticEntry.content),
         },
       ]);
+
       clearDraft();
       setPhoto(null);
       toast.success("Entry saved");
+
+      return { prevEntries, prevMetrics, prevDraft, prevPhoto };
+    },
+    onError: (e: Error, _vars, context) => {
+      if (context?.prevEntries !== undefined) {
+        qc.setQueryData(["diary", user.id], context.prevEntries);
+      }
+      if (context?.prevMetrics !== undefined) {
+        qc.setQueryData(["diary-metrics", user.id], context.prevMetrics);
+      }
+      if (context?.prevDraft) {
+        setDraft(context.prevDraft);
+      }
+      if (context?.prevPhoto) {
+        setPhoto(context.prevPhoto);
+      }
+      toast.error(e.message);
+    },
+    onSettled: () => {
       invalidateDiaryQueries();
       qc.invalidateQueries({ queryKey: ["gallery"] });
     },
-    onError: (e: Error) => toast.error(e.message),
   });
 
   const update = useMutation({
@@ -537,14 +592,35 @@ function DiaryPage() {
         music: vars.music,
       };
     },
-    onSuccess: (updated) => {
+    onMutate: async (vars) => {
+      await qc.cancelQueries({ queryKey: ["diary", user.id] });
+      const prevEntries = qc.getQueryData<Entry[]>(["diary", user.id]);
       qc.setQueryData<Entry[]>(["diary", user.id], (old) =>
-        (old ?? []).map((e) => (e.id === updated.id ? { ...e, ...updated } : e)),
+        (old ?? []).map((e) =>
+          e.id === vars.id
+            ? {
+                ...e,
+                title: vars.title,
+                content: vars.content,
+                mood: vars.mood,
+                folder_id: vars.folder_id,
+                music: vars.music,
+              }
+            : e,
+        ),
       );
       toast.success("Entry updated");
+      return { prevEntries };
+    },
+    onError: (e: Error, _vars, context) => {
+      if (context?.prevEntries !== undefined) {
+        qc.setQueryData(["diary", user.id], context.prevEntries);
+      }
+      toast.error(e.message);
+    },
+    onSettled: () => {
       invalidateDiaryQueries();
     },
-    onError: (e: Error) => toast.error(e.message),
   });
 
   const remove = useMutation({
@@ -557,40 +633,65 @@ function DiaryPage() {
       if (error) throw error;
       return id;
     },
-    onSuccess: (deletedId) => {
-      qc.setQueryData<Entry[]>(["diary", user.id], (old) =>
-        (old ?? []).filter((e) => e.id !== deletedId),
-      );
+    onMutate: async (id) => {
+      await qc.cancelQueries({ queryKey: ["diary", user.id] });
+      const prevEntries = qc.getQueryData<Entry[]>(["diary", user.id]);
+      qc.setQueryData<Entry[]>(["diary", user.id], (old) => (old ?? []).filter((e) => e.id !== id));
       toast.success("Entry deleted");
+      return { prevEntries };
+    },
+    onError: (e: Error, _id, context) => {
+      if (context?.prevEntries !== undefined) {
+        qc.setQueryData(["diary", user.id], context.prevEntries);
+      }
+      toast.error(e.message);
+    },
+    onSettled: () => {
       invalidateDiaryQueries();
     },
-    onError: (e: Error) => toast.error(e.message),
   });
 
   const createFolder = useMutation({
-    mutationFn: async (name: string): Promise<FolderRow> => {
+    mutationFn: async (vars: {
+      id: string;
+      name: string;
+      parent_id: string | null;
+    }): Promise<FolderRow> => {
       if (!key) throw new Error("Vault is locked");
-      const encName = await encryptField(key, name);
-      const parentId = newFolderParent === NONE ? null : newFolderParent;
-      const { data: inserted, error } = await supabase
-        .from("diary_folders")
-        .insert({
-          user_id: user.id,
-          name: encName,
-          parent_id: parentId,
-        } as never)
-        .select("id")
-        .single();
+      const encName = await encryptField(key, vars.name);
+      const { error } = await supabase.from("diary_folders").insert({
+        id: vars.id,
+        user_id: user.id,
+        name: encName,
+        parent_id: vars.parent_id,
+      } as never);
       if (error) throw error;
-      const row = inserted as { id: string };
-      return { id: row.id, name, parent_id: parentId };
+      return { id: vars.id, name: vars.name, parent_id: vars.parent_id };
     },
-    onSuccess: (newF) => {
-      qc.setQueryData<FolderRow[]>(["diary-folders", user.id], (old) => [...(old ?? []), newF]);
+    onMutate: async (vars) => {
+      await qc.cancelQueries({ queryKey: ["diary-folders", user.id] });
+      const prevFolders = qc.getQueryData<FolderRow[]>(["diary-folders", user.id]);
+      const prevNewFolder = newFolder;
+      qc.setQueryData<FolderRow[]>(["diary-folders", user.id], (old) =>
+        [...(old ?? []), { id: vars.id, name: vars.name, parent_id: vars.parent_id }].sort((a, b) =>
+          a.name.localeCompare(b.name),
+        ),
+      );
       setNewFolder("");
+      return { prevFolders, prevNewFolder };
+    },
+    onError: (e: Error, _vars, context) => {
+      if (context?.prevFolders !== undefined) {
+        qc.setQueryData(["diary-folders", user.id], context.prevFolders);
+      }
+      if (context?.prevNewFolder) {
+        setNewFolder(context.prevNewFolder);
+      }
+      toast.error(e.message);
+    },
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: ["diary-folders"] });
     },
-    onError: (e: Error) => toast.error(e.message),
   });
 
   const deleteFolder = useMutation({
@@ -603,16 +704,30 @@ function DiaryPage() {
       if (error) throw error;
       return targetFolderId;
     },
-    onSuccess: (deletedFolderId) => {
+    onMutate: async (targetFolderId) => {
+      await qc.cancelQueries({ queryKey: ["diary-folders", user.id] });
+      const prevFolders = qc.getQueryData<FolderRow[]>(["diary-folders", user.id]);
+      const prevFilter = filterFolder;
       qc.setQueryData<FolderRow[]>(["diary-folders", user.id], (old) =>
-        (old ?? []).filter((f) => f.id !== deletedFolderId),
+        (old ?? []).filter((f) => f.id !== targetFolderId),
       );
       setFilterFolder("all");
       toast.success("Folder deleted");
+      return { prevFolders, prevFilter };
+    },
+    onError: (e: Error, _id, context) => {
+      if (context?.prevFolders !== undefined) {
+        qc.setQueryData(["diary-folders", user.id], context.prevFolders);
+      }
+      if (context?.prevFilter) {
+        setFilterFolder(context.prevFilter);
+      }
+      toast.error(e.message);
+    },
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: ["diary-folders"] });
       qc.invalidateQueries({ queryKey: ["diary"] });
     },
-    onError: (e: Error) => toast.error(e.message),
   });
 
   const handleDeleteEntry = useCallback((id: string) => remove.mutate(id), [remove]);
@@ -718,7 +833,23 @@ function DiaryPage() {
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          if (content.trim()) create.mutate();
+          if (content.trim()) {
+            const browserNow = getBrowserNow();
+            create.mutate({
+              id: crypto.randomUUID(),
+              entryDate: browserNow.localDate,
+              createdAt: browserNow.iso,
+              title,
+              content,
+              mood,
+              isPublic,
+              folderId,
+              music,
+              photo,
+              optimisticImagePath:
+                photo && !isPublic ? `${user.id}/${crypto.randomUUID()}.bin` : null,
+            });
+          }
         }}
         className="paper-card overflow-hidden"
       >
@@ -730,7 +861,7 @@ function DiaryPage() {
           onChange={(e) => {
             const f = e.target.files?.[0];
             if (f) {
-              if (f.size >= 5 * 1024 * 1024) toast.error("Photo must be smaller than 5 MB");
+              if (f.size >= 15 * 1024 * 1024) toast.error("Photo must be smaller than 15 MB");
               else setPhoto(f);
             }
             e.currentTarget.value = "";
@@ -854,10 +985,10 @@ function DiaryPage() {
                 </div>
                 <button
                   type="submit"
-                  disabled={!content.trim() || create.isPending}
+                  disabled={!content.trim()}
                   className="rounded-md bg-primary px-5 py-2 text-sm text-primary-foreground disabled:opacity-50"
                 >
-                  {create.isPending ? "Saving..." : "Save entry"}
+                  Save entry
                 </button>
               </div>
             </div>
@@ -917,7 +1048,13 @@ function DiaryPage() {
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            if (newFolder.trim()) createFolder.mutate(newFolder.trim());
+            if (newFolder.trim()) {
+              createFolder.mutate({
+                id: crypto.randomUUID(),
+                name: newFolder.trim(),
+                parent_id: newFolderParent === NONE ? null : newFolderParent,
+              });
+            }
           }}
           className="flex flex-wrap items-center gap-1 sm:ml-auto"
         >
@@ -975,11 +1112,15 @@ function DiaryImage({
   encrypted: boolean;
   cryptoKey: CryptoKey | null;
 }) {
-  const [src, setSrc] = useState<string | null>(null);
+  const [src, setSrc] = useState<string | null>(() => peekDecryptedMediaUrl("gallery", path, null));
 
   useEffect(() => {
+    const cached = peekDecryptedMediaUrl("gallery", path, null);
+    if (cached) {
+      setSrc(cached);
+      return;
+    }
     let cancelled = false;
-    let objectUrl: string | null = null;
     (async () => {
       try {
         if (encrypted && !cryptoKey) return;
@@ -989,7 +1130,10 @@ function DiaryImage({
         if (cancelled) return;
         if (!encrypted) {
           const url = await fetchStorageUrlWithOfflineCache("gallery", path, signed?.signedUrl);
-          if (!cancelled && url) setSrc(url);
+          if (!cancelled && url) {
+            setDecryptedMediaUrl("gallery", path, null, url);
+            setSrc(url);
+          }
           return;
         }
         const { data: meta } = await supabase
@@ -1005,7 +1149,8 @@ function DiaryImage({
         if (!ct || cancelled) return;
         const pt = await decryptBytes(cryptoKey, ct, row.iv);
         const safeMime = row.mime && SAFE_DIARY_MIMES.has(row.mime) ? row.mime : "image/jpeg";
-        objectUrl = URL.createObjectURL(new Blob([pt], { type: safeMime }));
+        const objectUrl = URL.createObjectURL(new Blob([pt], { type: safeMime }));
+        setDecryptedMediaUrl("gallery", path, null, objectUrl);
         if (!cancelled) setSrc(objectUrl);
       } catch {
         // unreadable image
@@ -1013,7 +1158,6 @@ function DiaryImage({
     })();
     return () => {
       cancelled = true;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
   }, [path, encrypted, cryptoKey]);
 

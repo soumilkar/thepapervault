@@ -173,9 +173,23 @@ export function useVaultTrackers(userId: string) {
         ...updater(current),
         updated_at: new Date().toISOString(),
       };
-      qc.setQueryData(queryKey, next);
       await writeEncrypted(userId, key, next);
       return next;
+    },
+    onMutate: async (updater) => {
+      await qc.cancelQueries({ queryKey });
+      const prev = qc.getQueryData<VaultTrackersData>(queryKey) ?? query.data ?? EMPTY_TRACKERS;
+      const optimisticNext: VaultTrackersData = {
+        ...updater(prev),
+        updated_at: new Date().toISOString(),
+      };
+      qc.setQueryData<VaultTrackersData>(queryKey, optimisticNext);
+      return { prev };
+    },
+    onError: (_err, _updater, context) => {
+      if (context?.prev) {
+        qc.setQueryData<VaultTrackersData>(queryKey, context.prev);
+      }
     },
   });
 

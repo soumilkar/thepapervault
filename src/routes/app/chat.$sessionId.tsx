@@ -245,24 +245,42 @@ function SessionChat() {
     scrollToBottom("smooth");
     try {
       if (!key) throw new Error("Unlock your vault to continue");
-      // Persist user message with browser timestamp, encrypted
-      const encQ = await encryptText(key, question);
-      const { error: userMessageError } = await supabase.from("chat_messages").insert({
-        session_id: sessionId,
-        user_id: user.id,
-        role: "user",
-        content: encQ.ct,
-        iv: encQ.iv,
-        created_at: sentSnap.iso,
-      });
-      if (userMessageError) throw userMessageError;
-      void supabase
-        .from("chat_sessions")
-        .update({ last_message_at: sentSnap.iso })
-        .eq("id", sessionId)
-        .eq("user_id", user.id);
+      // Persist user message and session timestamp in background while building context
+      const persistUserMsgPromise = (async () => {
+        const encQ = await encryptText(key, question);
+        const sessionPatch: { last_message_at: string; title?: string; title_iv?: string } = {
+          last_message_at: sentSnap.iso,
+        };
+        if (priorHistory.length === 0) {
+          const encT = await encryptText(key, question.slice(0, 60));
+          sessionPatch.title = encT.ct;
+          sessionPatch.title_iv = encT.iv;
+        }
+        const [{ error: userMessageError }] = await Promise.all([
+          supabase.from("chat_messages").insert({
+            session_id: sessionId,
+            user_id: user.id,
+            role: "user",
+            content: encQ.ct,
+            iv: encQ.iv,
+            created_at: sentSnap.iso,
+          }),
+          supabase
+            .from("chat_sessions")
+            .update(sessionPatch)
+            .eq("id", sessionId)
+            .eq("user_id", user.id),
+        ]);
+        if (userMessageError) throw userMessageError;
+        if (priorHistory.length === 0) {
+          window.dispatchEvent(new Event(CHAT_SESSIONS_UPDATED));
+        }
+      })();
 
-      const context = await buildContext(user.id, key, source, startDate, endDate);
+      const [context] = await Promise.all([
+        buildContext(user.id, key, source, startDate, endDate),
+        persistUserMsgPromise,
+      ]);
       const emailPrefix = user.email?.split("@")[0]?.toLowerCase() ?? "";
       const rawName =
         profileDisplayName ||

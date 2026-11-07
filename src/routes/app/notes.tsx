@@ -26,6 +26,8 @@ import { useVault } from "@/lib/vault";
 import {
   fetchStorageBytesWithOfflineCache,
   fetchStorageUrlWithOfflineCache,
+  peekDecryptedMediaUrl,
+  setDecryptedMediaUrl,
 } from "@/lib/offline-supabase";
 import {
   decryptBytes,
@@ -68,10 +70,15 @@ const ALLOWED: Record<string, string> = {
   "image/gif": "gif",
 };
 
-async function uploadEncrypted(userId: string, key: CryptoKey, file: File) {
+async function uploadEncrypted(
+  userId: string,
+  key: CryptoKey,
+  file: File,
+  preallocatedPath?: string,
+) {
   if (!ALLOWED[file.type]) throw new Error("Only JPEG, PNG, WebP, or GIF images are allowed");
   if (file.size > 15 * 1024 * 1024) throw new Error("Image must be smaller than 15 MB");
-  const path = `${userId}/${crypto.randomUUID()}.bin`;
+  const path = preallocatedPath ?? `${userId}/${crypto.randomUUID()}.bin`;
   const { blob, iv, mime } = await encryptBlob(key, file);
   const { error } = await supabase.storage
     .from(MEDIA_BUCKET)
@@ -371,18 +378,39 @@ function NotesPage() {
     setTimeout(() => textareaRef.current?.focus(), 30);
   }, [setDraft]);
 
+  type CreateNoteVars = {
+    id: string;
+    title: string;
+    content: string;
+    tags: string;
+    folderId: string | null;
+    image: File | null;
+    optimisticImagePath: string | null;
+  };
+
   const create = useMutation({
-    mutationFn: async (): Promise<Note> => {
+    mutationFn: async (vars: CreateNoteVars): Promise<Note> => {
       if (!key) throw new Error("Vault is locked");
       let img: { path: string; iv: string; mime: string } | null = null;
-      if (image) img = await uploadEncrypted(user.id, key, image);
-      const tagArr = tags
+      if (vars.image) {
+        img = await uploadEncrypted(
+          user.id,
+          key,
+          vars.image,
+          vars.optimisticImagePath ?? undefined,
+        );
+        const existingPreview = peekDecryptedMediaUrl(MEDIA_BUCKET, img.path, null);
+        if (existingPreview) {
+          setDecryptedMediaUrl(MEDIA_BUCKET, img.path, img.iv, existingPreview);
+        }
+      }
+      const tagArr = vars.tags
         .split(",")
         .map((t) => t.trim())
         .filter(Boolean);
       const payload: Payload = {
-        t: title,
-        c: content,
+        t: vars.title,
+        c: vars.content,
         g: tagArr,
         ...(img ? { ii: img.iv, im: img.mime } : {}),
       };
@@ -390,20 +418,21 @@ function NotesPage() {
       const { data: inserted, error } = await supabase
         .from("notes")
         .insert({
+          id: vars.id,
           user_id: user.id,
           title: null,
           content: ct,
           iv,
           tags: null,
           image_url: img?.path ?? null,
-          folder_id: folderId,
+          folder_id: vars.folderId,
         } as never)
         .select("id,created_at,updated_at")
         .single();
       if (error) throw error;
       if (img) {
         try {
-          const captionPlain = title || "Note attachment";
+          const captionPlain = vars.title || "Note attachment";
           const { ct: capCt, iv: capIv } = await encryptText(key, captionPlain);
           await supabase.from("gallery_images").insert({
             user_id: user.id,
@@ -420,15 +449,77 @@ function NotesPage() {
       const row = inserted as { id: string; created_at: string; updated_at: string };
       return {
         id: row.id,
-        title,
-        content,
+        title: vars.title,
+        content: vars.content,
         tags: tagArr,
         image_url: img?.path ?? null,
         image_iv: img?.iv ?? null,
         image_mime: img?.mime ?? null,
-        folder_id: folderId,
+        folder_id: vars.folderId,
         created_at: row.created_at,
         updated_at: row.updated_at,
+      };
+    },
+    onMutate: async (vars) => {
+      await qc.cancelQueries({ queryKey: ["notes", user.id] });
+      const prevNotes = qc.getQueryData<Note[]>(["notes", user.id]) ?? [];
+      const prevDraft = { ...draft };
+      const prevImage = image;
+      const prevSelectedNoteId = selectedNoteId;
+      const prevIsCreatingNew = isCreatingNew;
+      const prevSheetEditing = sheetEditing;
+
+      if (vars.image && vars.optimisticImagePath) {
+        const previewUrl = URL.createObjectURL(vars.image);
+        setDecryptedMediaUrl(MEDIA_BUCKET, vars.optimisticImagePath, null, previewUrl);
+      }
+
+      const nowIso = new Date().toISOString();
+      const tagArr = vars.tags
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean);
+      const optimisticNote: Note = {
+        id: vars.id,
+        title: vars.title,
+        content: vars.content,
+        tags: tagArr,
+        image_url: vars.optimisticImagePath,
+        image_iv: null,
+        image_mime: vars.image?.type ?? null,
+        folder_id: vars.folderId,
+        created_at: nowIso,
+        updated_at: nowIso,
+      };
+
+      qc.setQueryData<Note[]>(["notes", user.id], (old) => [
+        optimisticNote,
+        ...(old ?? []).filter((n) => n.id !== optimisticNote.id),
+      ]);
+      setIsCreatingNew(false);
+      setSelectedNoteId(optimisticNote.id);
+      setSTitle(optimisticNote.title);
+      setSContent(optimisticNote.content);
+      setSTags(optimisticNote.tags.join(", "));
+      setSFolderId(optimisticNote.folder_id);
+      setSheetEditing(false);
+      setDraft({
+        title: "",
+        content: "",
+        tags: "",
+        folderId: null,
+        activeNoteId: optimisticNote.id,
+      });
+      setImage(null);
+      setDraftPreview(false);
+
+      return {
+        prevNotes,
+        prevDraft,
+        prevImage,
+        prevSelectedNoteId,
+        prevIsCreatingNew,
+        prevSheetEditing,
       };
     },
     onSuccess: (createdNote) => {
@@ -436,27 +527,24 @@ function NotesPage() {
         createdNote,
         ...(old ?? []).filter((n) => n.id !== createdNote.id),
       ]);
-      setIsCreatingNew(false);
-      setSelectedNoteId(createdNote.id);
-      setSTitle(createdNote.title);
-      setSContent(createdNote.content);
-      setSTags(createdNote.tags.join(", "));
-      setSFolderId(createdNote.folder_id);
-      setSheetEditing(false);
-      setDraft({
-        title: "",
-        content: "",
-        tags: "",
-        folderId: null,
-        activeNoteId: createdNote.id,
-      });
-      setImage(null);
-      setDraftPreview(false);
       toast.success("Note saved");
+    },
+    onError: (e: Error, _vars, ctx) => {
+      if (ctx) {
+        qc.setQueryData(["notes", user.id], ctx.prevNotes);
+        setDraft(ctx.prevDraft);
+        setImage(ctx.prevImage);
+        setSelectedNoteId(ctx.prevSelectedNoteId);
+        setIsCreatingNew(ctx.prevIsCreatingNew);
+        setSheetEditing(ctx.prevSheetEditing);
+      }
+      toast.error(e.message);
+    },
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: ["notes"] });
+      qc.invalidateQueries({ queryKey: ["gallery"] });
       qc.invalidateQueries({ queryKey: ["heatmap-activity"] });
     },
-    onError: (e: Error) => toast.error(e.message),
   });
 
   const update = useMutation({
@@ -467,6 +555,7 @@ function NotesPage() {
       tags: string;
       folder_id: string | null;
       newImage?: File | null;
+      optimisticImagePath?: string | null;
     }): Promise<Note> => {
       if (!key) throw new Error("Vault is locked");
       const tagArr = vars.tags
@@ -492,10 +581,19 @@ function NotesPage() {
             // ignore
           }
         }
-        const up = await uploadEncrypted(user.id, key, vars.newImage);
+        const up = await uploadEncrypted(
+          user.id,
+          key,
+          vars.newImage,
+          vars.optimisticImagePath ?? undefined,
+        );
         imgUrl = up.path;
         imgIv = up.iv;
         imgMime = up.mime;
+        const existingPreview = peekDecryptedMediaUrl(MEDIA_BUCKET, up.path, null);
+        if (existingPreview) {
+          setDecryptedMediaUrl(MEDIA_BUCKET, up.path, up.iv, existingPreview);
+        }
         try {
           const captionPlain = vars.title || "Note attachment";
           const { ct: capCt, iv: capIv } = await encryptText(key, captionPlain);
@@ -545,17 +643,65 @@ function NotesPage() {
         updated_at: updatedAt,
       };
     },
+    onMutate: async (vars) => {
+      await qc.cancelQueries({ queryKey: ["notes", user.id] });
+      const prevNotes = qc.getQueryData<Note[]>(["notes", user.id]) ?? [];
+      const prevSImage = sImage;
+      const prevSheetEditing = sheetEditing;
+
+      if (vars.newImage && vars.optimisticImagePath) {
+        const previewUrl = URL.createObjectURL(vars.newImage);
+        setDecryptedMediaUrl(MEDIA_BUCKET, vars.optimisticImagePath, null, previewUrl);
+      }
+
+      const tagArr = vars.tags
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean);
+      const optimisticNote: Note = {
+        ...vars.note,
+        title: vars.title,
+        content: vars.content,
+        tags: tagArr,
+        folder_id: vars.folder_id,
+        image_url: vars.newImage
+          ? (vars.optimisticImagePath ?? vars.note.image_url)
+          : vars.note.image_url,
+        image_iv: vars.newImage ? null : vars.note.image_iv,
+        image_mime: vars.newImage ? vars.newImage.type : vars.note.image_mime,
+        updated_at: new Date().toISOString(),
+      };
+
+      qc.setQueryData<Note[]>(["notes", user.id], (old) =>
+        (old ?? []).map((n) => (n.id === vars.note.id ? optimisticNote : n)),
+      );
+      setSImage(null);
+      setSheetEditing(false);
+
+      return { prevNotes, prevSImage, prevSheetEditing };
+    },
     onSuccess: (updatedNote) => {
       qc.setQueryData<Note[]>(["notes", user.id], (old) =>
         (old ?? []).map((n) => (n.id === updatedNote.id ? updatedNote : n)),
       );
-      setSImage(null);
-      setSheetEditing(false);
       toast.success("Note updated");
+    },
+    onError: (e: Error, vars, ctx) => {
+      if (ctx) {
+        qc.setQueryData(["notes", user.id], ctx.prevNotes);
+        setSTitle(vars.note.title);
+        setSContent(vars.note.content);
+        setSTags(vars.note.tags.join(", "));
+        setSFolderId(vars.note.folder_id);
+        setSImage(ctx.prevSImage);
+        setSheetEditing(ctx.prevSheetEditing);
+      }
+      toast.error(e.message);
+    },
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: ["notes"] });
       qc.invalidateQueries({ queryKey: ["gallery"] });
     },
-    onError: (e: Error) => toast.error(e.message),
   });
 
   const remove = useMutation({
@@ -582,18 +728,34 @@ function NotesPage() {
       if (error) throw error;
       return note.id;
     },
-    onSuccess: (deletedId) => {
-      qc.invalidateQueries({ queryKey: ["gallery"] });
-      const remaining = (qc.getQueryData<Note[]>(["notes", user.id]) ?? []).filter(
-        (n) => n.id !== deletedId,
-      );
+    onMutate: async (note) => {
+      await qc.cancelQueries({ queryKey: ["notes", user.id] });
+      const prevNotes = qc.getQueryData<Note[]>(["notes", user.id]) ?? [];
+      const prevSelectedNoteId = selectedNoteId;
+      const prevSheetEditing = sheetEditing;
+
+      const remaining = prevNotes.filter((n) => n.id !== note.id);
       qc.setQueryData<Note[]>(["notes", user.id], remaining);
-      if (selectedNoteId === deletedId) {
+      if (selectedNoteId === note.id) {
         const nextNote = remaining[0] ?? null;
         setSelectedNoteId(nextNote?.id ?? null);
         setDraft((c) => ({ ...c, activeNoteId: nextNote?.id ?? null }));
         setSheetEditing(false);
       }
+
+      return { prevNotes, prevSelectedNoteId, prevSheetEditing };
+    },
+    onError: (e: Error, _note, ctx) => {
+      if (ctx) {
+        qc.setQueryData(["notes", user.id], ctx.prevNotes);
+        setSelectedNoteId(ctx.prevSelectedNoteId);
+        setDraft((c) => ({ ...c, activeNoteId: ctx.prevSelectedNoteId }));
+        setSheetEditing(ctx.prevSheetEditing);
+      }
+      toast.error(e.message);
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ["gallery"] });
       qc.invalidateQueries({ queryKey: ["notes"] });
       qc.invalidateQueries({ queryKey: ["heatmap-activity"] });
     },
@@ -617,12 +779,35 @@ function NotesPage() {
       const row = inserted as { id: string };
       return { id: row.id, name, parent_id: parentId };
     },
-    onSuccess: (newF) => {
-      qc.setQueryData<FolderRow[]>(["note-folders", user.id], (old) => [...(old ?? []), newF]);
+    onMutate: async (name) => {
+      await qc.cancelQueries({ queryKey: ["note-folders", user.id] });
+      const prevFolders = qc.getQueryData<FolderRow[]>(["note-folders", user.id]) ?? [];
+      const tempId = `temp-${crypto.randomUUID()}`;
+      const parentId = newFolderParent === NONE ? null : newFolderParent;
+      const optimisticFolder: FolderRow = { id: tempId, name, parent_id: parentId };
+      qc.setQueryData<FolderRow[]>(["note-folders", user.id], (old) =>
+        [...(old ?? []), optimisticFolder].sort((a, b) => a.name.localeCompare(b.name)),
+      );
       setNewFolder("");
+      return { prevFolders, tempId, name };
+    },
+    onSuccess: (newF, _name, ctx) => {
+      qc.setQueryData<FolderRow[]>(["note-folders", user.id], (old) =>
+        [...(old ?? []).filter((f) => f.id !== ctx?.tempId && f.id !== newF.id), newF].sort(
+          (a, b) => a.name.localeCompare(b.name),
+        ),
+      );
+    },
+    onError: (e: Error, name, ctx) => {
+      if (ctx) {
+        qc.setQueryData(["note-folders", user.id], ctx.prevFolders);
+        setNewFolder(name);
+      }
+      toast.error(e.message);
+    },
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: ["note-folders"] });
     },
-    onError: (e: Error) => toast.error(e.message),
   });
 
   const deleteFolder = useMutation({
@@ -635,16 +820,30 @@ function NotesPage() {
       if (error) throw error;
       return targetFolderId;
     },
-    onSuccess: (deletedFolderId) => {
+    onMutate: async (targetFolderId) => {
+      await qc.cancelQueries({ queryKey: ["note-folders", user.id] });
+      const prevFolders = qc.getQueryData<FolderRow[]>(["note-folders", user.id]) ?? [];
+      const prevFilterFolder = filterFolder;
       qc.setQueryData<FolderRow[]>(["note-folders", user.id], (old) =>
-        (old ?? []).filter((f) => f.id !== deletedFolderId),
+        (old ?? []).filter((f) => f.id !== targetFolderId),
       );
       setFilterFolder("all");
+      return { prevFolders, prevFilterFolder };
+    },
+    onSuccess: () => {
       toast.success("Folder deleted");
+    },
+    onError: (e: Error, _targetFolderId, ctx) => {
+      if (ctx) {
+        qc.setQueryData(["note-folders", user.id], ctx.prevFolders);
+        setFilterFolder(ctx.prevFilterFolder);
+      }
+      toast.error(e.message);
+    },
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: ["note-folders"] });
       qc.invalidateQueries({ queryKey: ["notes"] });
     },
-    onError: (e: Error) => toast.error(e.message),
   });
 
   const currentTitle = activeNote ? sTitle : title;
@@ -1117,21 +1316,25 @@ function NotesPage() {
           onSubmit={(e) => {
             e.preventDefault();
             if (activeNote) {
-              update.mutate(
-                {
-                  note: activeNote,
-                  title: sTitle,
-                  content: sContent,
-                  tags: sTags,
-                  folder_id: sFolderId,
-                  newImage: sImage,
-                },
-                {
-                  onSuccess: () => setSheetEditing(false),
-                },
-              );
+              update.mutate({
+                note: activeNote,
+                title: sTitle,
+                content: sContent,
+                tags: sTags,
+                folder_id: sFolderId,
+                newImage: sImage,
+                optimisticImagePath: sImage ? `${user.id}/${crypto.randomUUID()}.bin` : null,
+              });
             } else if (content.trim() || title.trim() || image) {
-              create.mutate();
+              create.mutate({
+                id: crypto.randomUUID(),
+                title,
+                content,
+                tags,
+                folderId,
+                image,
+                optimisticImagePath: image ? `${user.id}/${crypto.randomUUID()}.bin` : null,
+              });
             }
           }}
           className="rounded-2xl border border-border bg-card shadow-sm"
@@ -1144,8 +1347,8 @@ function NotesPage() {
             onChange={(e) => {
               const f = e.target.files?.[0];
               if (f) {
-                if (f.size > 5 * 1024 * 1024) {
-                  toast.error("Image must be smaller than 5 MB");
+                if (f.size > 15 * 1024 * 1024) {
+                  toast.error("Image must be smaller than 15 MB");
                 } else if (activeNote) {
                   setSImage(f);
                   setSheetEditing(true);
@@ -1319,17 +1522,30 @@ function NoteImage({
   cryptoKey: CryptoKey | null;
   framed?: boolean;
 }) {
-  const [src, setSrc] = useState<string | null>(null);
+  const [src, setSrc] = useState<string | null>(
+    () =>
+      peekDecryptedMediaUrl(MEDIA_BUCKET, path, iv) ??
+      peekDecryptedMediaUrl(MEDIA_BUCKET, path, null),
+  );
   useEffect(() => {
+    const cached =
+      peekDecryptedMediaUrl(MEDIA_BUCKET, path, iv) ??
+      peekDecryptedMediaUrl(MEDIA_BUCKET, path, null);
+    if (cached) {
+      setSrc(cached);
+      return;
+    }
     let cancelled = false;
-    let objectUrl: string | null = null;
     (async () => {
       try {
         const { data } = await supabase.storage.from(MEDIA_BUCKET).createSignedUrl(path, 60 * 60);
         if (cancelled) return;
         if (!iv) {
           const url = await fetchStorageUrlWithOfflineCache(MEDIA_BUCKET, path, data?.signedUrl);
-          if (!cancelled && url) setSrc(url);
+          if (!cancelled && url) {
+            setDecryptedMediaUrl(MEDIA_BUCKET, path, null, url);
+            setSrc(url);
+          }
           return;
         }
         if (!cryptoKey) return;
@@ -1337,7 +1553,8 @@ function NoteImage({
         if (!bytes || cancelled) return;
         const pt = await decryptBytes(cryptoKey, bytes, iv);
         const safeMime = mime && ALLOWED[mime] ? mime : "image/jpeg";
-        objectUrl = URL.createObjectURL(new Blob([pt], { type: safeMime }));
+        const objectUrl = URL.createObjectURL(new Blob([pt], { type: safeMime }));
+        setDecryptedMediaUrl(MEDIA_BUCKET, path, iv, objectUrl);
         if (!cancelled) setSrc(objectUrl);
       } catch {
         // unreadable image
@@ -1345,7 +1562,6 @@ function NoteImage({
     })();
     return () => {
       cancelled = true;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
   }, [path, iv, mime, cryptoKey]);
   if (!src) return null;

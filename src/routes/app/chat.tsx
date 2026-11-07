@@ -102,32 +102,40 @@ function ChatLayout() {
       return;
     }
     const defaultTitle = "New conversation";
-    const enc = await encryptText(key, defaultTitle);
-    const { data, error } = await supabase
-      .from("chat_sessions")
-      .insert({ user_id: user.id, title: enc.ct, title_iv: enc.iv })
-      .select("id,last_message_at")
-      .single();
-    if (error || !data) {
-      toast.error("Could not start a new chat");
-      return;
-    }
-    const next = [
-      { id: data.id, title: defaultTitle, last_message_at: data.last_message_at },
-      ...sessions,
-    ];
+    const optimisticId = crypto.randomUUID();
+    const nowIso = new Date().toISOString();
+    const prevSessions = sessions;
+
+    const next = [{ id: optimisticId, title: defaultTitle, last_message_at: nowIso }, ...sessions];
     const excess = next.slice(MAX_SESSIONS).map((s) => s.id);
-    if (excess.length > 0) {
-      void supabase.from("chat_sessions").delete().in("id", excess).eq("user_id", user.id);
-    }
     setSessions(next.slice(0, MAX_SESSIONS));
     setMenuOpen(false);
-    navigate({ to: "/app/chat/$sessionId", params: { sessionId: data.id } });
+    navigate({ to: "/app/chat/$sessionId", params: { sessionId: optimisticId } });
+
+    try {
+      const enc = await encryptText(key, defaultTitle);
+      const { error } = await supabase.from("chat_sessions").insert({
+        id: optimisticId,
+        user_id: user.id,
+        title: enc.ct,
+        title_iv: enc.iv,
+        last_message_at: nowIso,
+      });
+      if (error) throw error;
+      if (excess.length > 0) {
+        void supabase.from("chat_sessions").delete().in("id", excess).eq("user_id", user.id);
+      }
+    } catch {
+      setSessions(prevSessions);
+      toast.error("Could not start a new chat");
+      navigate({ to: "/app/chat" });
+    }
   };
 
   const remove = async (id: string) => {
     const prev = sessions;
     setSessions((s) => s.filter((x) => x.id !== id));
+    if (activeId === id) navigate({ to: "/app/chat" });
     const { error } = await supabase
       .from("chat_sessions")
       .delete()
@@ -135,10 +143,11 @@ function ChatLayout() {
       .eq("user_id", user.id);
     if (error) {
       setSessions(prev);
-      toast.error("Could not delete");
-      return;
+      toast.error("Could not delete conversation");
+      if (activeId === id) {
+        navigate({ to: "/app/chat/$sessionId", params: { sessionId: id } });
+      }
     }
-    if (activeId === id) navigate({ to: "/app/chat" });
   };
 
   return (

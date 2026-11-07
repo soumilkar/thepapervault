@@ -573,6 +573,7 @@ function GalleryPage() {
   ]);
 
   // Upload handler: Photos uploaded from Gallery go into the Gallery folder (or selected subfolder)
+  // Optimistically adds the photo to the UI immediately and syncs in the background with rollback on failure.
   const upload = async (file: File) => {
     if (!key) {
       toast.error("Vault is locked");
@@ -588,30 +589,68 @@ function GalleryPage() {
       return;
     }
 
+    // Determine target bucket and source
+    let targetSource: "gallery" | "notes" | "diary" = "gallery";
+    let targetBucket: "gallery" | "media" = "gallery";
+    let targetFolderId: string | null = null;
+
+    if (activeTab === "notes") {
+      targetSource = "notes";
+      targetBucket = "media";
+      targetFolderId = uploadTargetFolder || selectedNoteFolderId;
+    } else if (activeTab === "diary") {
+      targetSource = "diary";
+      targetBucket = "gallery";
+      targetFolderId = null;
+    } else {
+      // Default "gallery" tab
+      targetSource = "gallery";
+      targetBucket = "gallery";
+      targetFolderId = uploadTargetFolder || selectedGalleryFolderId;
+    }
+
+    const optimisticId = crypto.randomUUID();
+    const path = `${user.id}/${crypto.randomUUID()}.bin`;
+    const createdAt = getBrowserNow().iso;
+    const cleanCaption = caption.trim();
+
+    // Snapshot previous state for rollback
+    await qc.cancelQueries({ queryKey: ["gallery", user.id] });
+    const prevItems = qc.getQueryData<DecodedItem[]>(["gallery", user.id]) ?? [];
+    const prevCaption = caption;
+
+    // Cache local preview URL immediately so photo renders in 0ms
+    const previewUrl = URL.createObjectURL(file);
+    setDecryptedMediaUrl(targetBucket, path, null, previewUrl);
+
+    const optimisticItem: DecodedItem = {
+      id: optimisticId,
+      storage_path: path,
+      bucket: targetBucket,
+      caption: cleanCaption,
+      created_at: createdAt,
+      signedUrl: "",
+      iv: null,
+      mime: file.type,
+      source: targetSource,
+      galleryFolderId: targetSource === "gallery" ? targetFolderId : null,
+      noteFolderId: targetSource === "notes" ? targetFolderId : null,
+      originTitle: null,
+    };
+
+    // Optimistic UI transition
+    qc.setQueryData<DecodedItem[]>(["gallery", user.id], (old) => [
+      optimisticItem,
+      ...(old ?? []).filter((i) => i.id !== optimisticId),
+    ]);
+    clearCaptionDraft();
+    setPendingFile(null);
+    setUploadMenuOpen(false);
+
     setUploading(true);
     try {
-      const path = `${user.id}/${crypto.randomUUID()}.bin`;
       const { blob, iv, mime: optimizedMime } = await encryptBlob(key, file);
-
-      // Determine target bucket and source
-      let targetSource: "gallery" | "notes" | "diary" = "gallery";
-      let targetBucket: "gallery" | "media" = "gallery";
-      let targetFolderId: string | null = null;
-
-      if (activeTab === "notes") {
-        targetSource = "notes";
-        targetBucket = "media";
-        targetFolderId = uploadTargetFolder || selectedNoteFolderId;
-      } else if (activeTab === "diary") {
-        targetSource = "diary";
-        targetBucket = "gallery";
-        targetFolderId = null;
-      } else {
-        // Default "gallery" tab
-        targetSource = "gallery";
-        targetBucket = "gallery";
-        targetFolderId = uploadTargetFolder || selectedGalleryFolderId;
-      }
+      setDecryptedMediaUrl(targetBucket, path, iv, previewUrl);
 
       // Upload to appropriate Supabase storage bucket
       const { error: upErr } = await supabase.storage
@@ -621,26 +660,30 @@ function GalleryPage() {
 
       // Encrypt caption and metadata
       const payload = {
-        text: caption.trim(),
+        text: cleanCaption,
         source: targetSource,
         folderId: targetFolderId,
       };
       const enc = await encryptText(key, JSON.stringify(payload));
 
       const { error: dbErr } = await supabase.from("gallery_images").insert({
+        id: optimisticId,
         user_id: user.id,
         storage_path: path,
         caption: enc.ct,
         iv,
         caption_iv: enc.iv,
         mime: optimizedMime || file.type,
-        created_at: getBrowserNow().iso,
-      });
+        created_at: createdAt,
+      } as never);
       if (dbErr) throw dbErr;
 
-      clearCaptionDraft();
-      setPendingFile(null);
-      setUploadMenuOpen(false);
+      qc.setQueryData<DecodedItem[]>(["gallery", user.id], (old) =>
+        (old ?? []).map((i) =>
+          i.id === optimisticId ? { ...i, iv, mime: optimizedMime || file.type } : i,
+        ),
+      );
+
       toast.success(
         targetSource === "gallery"
           ? "Photo uploaded to Gallery"
@@ -652,6 +695,11 @@ function GalleryPage() {
       qc.invalidateQueries({ queryKey: ["gallery"] });
       qc.invalidateQueries({ queryKey: ["dashboard-counts"] });
     } catch (e: unknown) {
+      // Roll back optimistic state on failure
+      qc.setQueryData(["gallery", user.id], prevItems);
+      setCaption(prevCaption);
+      setPendingFile(file);
+      setUploadMenuOpen(true);
       toast.error(e instanceof Error ? e.message : "Upload failed");
     } finally {
       setUploading(false);
@@ -682,9 +730,31 @@ function GalleryPage() {
         if (error) throw error;
       }
     },
+    onMutate: async (img) => {
+      await qc.cancelQueries({ queryKey: ["gallery", user.id] });
+      const prevItems = qc.getQueryData<DecodedItem[]>(["gallery", user.id]) ?? [];
+      const prevLightbox = lightboxItem;
+
+      qc.setQueryData<DecodedItem[]>(["gallery", user.id], (old) =>
+        (old ?? []).filter((i) => i.id !== img.id && i.storage_path !== img.storage_path),
+      );
+      if (lightboxItem?.id === img.id) {
+        setLightboxItem(null);
+      }
+
+      return { prevItems, prevLightbox };
+    },
     onSuccess: () => {
-      setLightboxItem(null);
       toast.success("Photo removed");
+    },
+    onError: (e: Error, _img, ctx) => {
+      if (ctx) {
+        qc.setQueryData(["gallery", user.id], ctx.prevItems);
+        setLightboxItem(ctx.prevLightbox);
+      }
+      toast.error(e.message || "Failed to remove photo");
+    },
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: ["gallery"] });
       qc.invalidateQueries({ queryKey: ["diary"] });
       qc.invalidateQueries({ queryKey: ["notes"] });
@@ -724,12 +794,39 @@ function GalleryPage() {
         if (error) throw error;
       }
     },
-    onSuccess: () => {
+    onMutate: async ({ item, newCaption }) => {
+      await qc.cancelQueries({ queryKey: ["gallery", user.id] });
+      const prevItems = qc.getQueryData<DecodedItem[]>(["gallery", user.id]) ?? [];
+      const prevEditingId = editingId;
+      const prevDraftCaption = draftCaption;
+      const prevLightbox = lightboxItem;
+
+      const clean = newCaption.trim();
+      qc.setQueryData<DecodedItem[]>(["gallery", user.id], (old) =>
+        (old ?? []).map((i) => (i.id === item.id ? { ...i, caption: clean } : i)),
+      );
+      if (lightboxItem?.id === item.id) {
+        setLightboxItem({ ...lightboxItem, caption: clean });
+      }
       setEditingId(null);
+
+      return { prevItems, prevEditingId, prevDraftCaption, prevLightbox };
+    },
+    onSuccess: () => {
       toast.success("Caption updated");
+    },
+    onError: (e: Error, _vars, ctx) => {
+      if (ctx) {
+        qc.setQueryData(["gallery", user.id], ctx.prevItems);
+        setEditingId(ctx.prevEditingId);
+        setDraftCaption(ctx.prevDraftCaption);
+        setLightboxItem(ctx.prevLightbox);
+      }
+      toast.error(e.message);
+    },
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: ["gallery"] });
     },
-    onError: (e: Error) => toast.error(e.message),
   });
 
   // Handle creating a new Gallery folder or subfolder
@@ -1566,12 +1663,16 @@ const DecryptedGalleryPhoto = memo(function DecryptedGalleryPhoto({
   cryptoKey: CryptoKey | null;
   fullscreen?: boolean;
 }) {
-  const [src, setSrc] = useState<string | null>(() =>
-    peekDecryptedMediaUrl(bucket, storagePath, iv),
+  const [src, setSrc] = useState<string | null>(
+    () =>
+      peekDecryptedMediaUrl(bucket, storagePath, iv) ??
+      peekDecryptedMediaUrl(bucket, storagePath, null),
   );
 
   useEffect(() => {
-    const cachedUrl = peekDecryptedMediaUrl(bucket, storagePath, iv);
+    const cachedUrl =
+      peekDecryptedMediaUrl(bucket, storagePath, iv) ??
+      peekDecryptedMediaUrl(bucket, storagePath, null);
     if (cachedUrl) {
       setSrc(cachedUrl);
       return;
