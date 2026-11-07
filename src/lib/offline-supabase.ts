@@ -309,6 +309,8 @@ export function peekDecryptedMediaUrl(
   return decryptedMediaUrlCache.get(`${bucket}/${path}:${iv ?? "plain"}`) ?? null;
 }
 
+const MAX_DECRYPTED_MEDIA_URLS = 300;
+
 export function setDecryptedMediaUrl(
   bucket: string,
   path: string,
@@ -318,10 +320,25 @@ export function setDecryptedMediaUrl(
   const key = `${bucket}/${path}:${iv ?? "plain"}`;
   const prev = decryptedMediaUrlCache.get(key);
   if (prev && prev !== blobUrl) {
-    try {
-      URL.revokeObjectURL(prev);
-    } catch {
-      // ignore
+    let stillReferenced = false;
+    for (const [k, u] of decryptedMediaUrlCache.entries()) {
+      if (k !== key && u === prev) {
+        stillReferenced = true;
+        break;
+      }
+    }
+    if (!stillReferenced) {
+      try {
+        URL.revokeObjectURL(prev);
+      } catch {
+        // ignore
+      }
+    }
+  }
+  if (!decryptedMediaUrlCache.has(key) && decryptedMediaUrlCache.size >= MAX_DECRYPTED_MEDIA_URLS) {
+    const oldestKey = decryptedMediaUrlCache.keys().next().value;
+    if (oldestKey !== undefined) {
+      decryptedMediaUrlCache.delete(oldestKey);
     }
   }
   decryptedMediaUrlCache.set(key, blobUrl);

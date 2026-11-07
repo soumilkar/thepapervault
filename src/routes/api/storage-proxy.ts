@@ -111,10 +111,11 @@ function isAllowedStoragePath(
 
   if (bucket === "media") {
     if (isRead) {
-      if (path.endsWith(".bin")) {
-        return path.startsWith(userPrefix);
+      if (path.startsWith(userPrefix)) {
+        return true;
       }
-      return true;
+      // Only allow cross-user reads in "media" for public unencrypted community images
+      return /\.(jpg|jpeg|png|webp|gif)$/i.test(path);
     }
     return path.startsWith(userPrefix);
   }
@@ -294,9 +295,9 @@ async function syncPublicDiaryEntriesToCommunityStore(
       const nowIso = new Date().toISOString();
       const deletedIds: Record<string, string> = {
         ...(existingDoc?.deletedIds ?? {}),
-        ...deletedDiaryIds,
       };
       const rowsById = new Map<string, Record<string, unknown>>();
+      const otherUserOwnedIds = new Set<string>();
 
       for (const r of existingDoc?.rows ?? []) {
         const id = typeof r.id === "string" ? r.id : "";
@@ -304,15 +305,23 @@ async function syncPublicDiaryEntriesToCommunityStore(
         // Keep other users' public entries; we will refresh current user's public entries below
         if (r.user_id !== userId && r.is_public === true && !r.iv) {
           rowsById.set(id, r);
+          otherUserOwnedIds.add(id);
         } else if (r.user_id === userId) {
           // Tentatively mark removed unless re-added as public below
           deletedIds[id] = nowIso;
         }
       }
 
+      // Only apply current user's deletions to IDs not owned by another user
+      for (const [delId, delTs] of Object.entries(deletedDiaryIds)) {
+        if (!otherUserOwnedIds.has(delId)) {
+          deletedIds[delId] = delTs;
+        }
+      }
+
       for (const r of userDiaryRows) {
         const id = typeof r.id === "string" ? r.id : "";
-        if (!id) continue;
+        if (!id || otherUserOwnedIds.has(id)) continue;
         if (r.is_public === true && !r.iv) {
           delete deletedIds[id];
           rowsById.set(id, { ...r, user_id: userId });
@@ -673,8 +682,6 @@ export const Route = createFileRoute("/api/storage-proxy")({
             return new Response(
               JSON.stringify({
                 configured: true,
-                bucket: b2Config.bucket,
-                endpoint: b2Config.endpointHost,
                 syncedRowsCount,
                 migratedFilesCount,
               }),
@@ -846,6 +853,12 @@ export const Route = createFileRoute("/api/storage-proxy")({
             }
 
             const rawBodyText = await request.text();
+            if (rawBodyText.length > 5 * 1024 * 1024) {
+              return new Response(JSON.stringify({ error: "Payload too large" }), {
+                status: 413,
+                headers: JSON_SECURITY_HEADERS,
+              });
+            }
             const parsedBody = rawBodyText ? (JSON.parse(rawBodyText) as unknown) : null;
             const storeScope = isB2CommunityTable(table) ? B2_COMMUNITY_SCOPE : user.id;
 
@@ -895,6 +908,15 @@ export const Route = createFileRoute("/api/storage-proxy")({
 
                   const rowId =
                     typeof item.id === "string" && item.id ? item.id : crypto.randomUUID();
+                  const existingRow = rowsById.get(rowId);
+                  if (
+                    existingRow &&
+                    typeof existingRow.user_id === "string" &&
+                    existingRow.user_id !== user.id
+                  ) {
+                    // Prevent cross-user ID collision or overwrite in shared community tables
+                    continue;
+                  }
                   const normalized: Record<string, unknown> = {
                     ...item,
                     id: rowId,
@@ -1077,6 +1099,13 @@ export const Route = createFileRoute("/api/storage-proxy")({
               fileBuffer = await foundBlob.arrayBuffer();
             } else {
               fileBuffer = await request.arrayBuffer();
+            }
+
+            if (fileBuffer.byteLength > 20 * 1024 * 1024) {
+              return new Response(JSON.stringify({ error: "Uploaded file exceeds 20 MB limit" }), {
+                status: 413,
+                headers: JSON_SECURITY_HEADERS,
+              });
             }
 
             const safeUploadPath = normalizeStoragePath(path);

@@ -101,6 +101,8 @@ async function compressPlaintextBytes(rawBytes: Uint8Array): Promise<Uint8Array>
   return rawBytes;
 }
 
+const MAX_DECOMPRESSED_BYTES = 10 * 1024 * 1024; // 10 MB cap against decompression bombs
+
 async function decompressPlaintextBytes(ptBuffer: ArrayBuffer): Promise<string> {
   const ptBytes = new Uint8Array(ptBuffer);
   if (
@@ -114,8 +116,29 @@ async function decompressPlaintextBytes(ptBuffer: ArrayBuffer): Promise<string> 
       const writer = ds.writable.getWriter();
       void writer.write(buf(ptBytes.subarray(2)));
       void writer.close();
-      const decompressedBuffer = await new Response(ds.readable).arrayBuffer();
-      return dec.decode(decompressedBuffer);
+
+      const reader = ds.readable.getReader();
+      const chunks: Uint8Array[] = [];
+      let totalLength = 0;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value) {
+          totalLength += value.byteLength;
+          if (totalLength > MAX_DECOMPRESSED_BYTES) {
+            void reader.cancel();
+            throw new Error("Decompressed payload exceeds safety limit");
+          }
+          chunks.push(value);
+        }
+      }
+      const combined = new Uint8Array(totalLength);
+      let offset = 0;
+      for (const chunk of chunks) {
+        combined.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      return dec.decode(combined);
     } catch {
       // Fallback to raw UTF-8 decode if decompression fails
     }
