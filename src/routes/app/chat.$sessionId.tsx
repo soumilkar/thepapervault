@@ -16,6 +16,7 @@ import {
   getChatGapSeparatorLabel,
   toBrowserLocalDate,
 } from "@/lib/browser-time";
+import { buildSmartVectorDiaryContext, type DecodedDiaryEntry } from "@/lib/diary-vectors";
 
 export const Route = createFileRoute("/app/chat/$sessionId")({
   component: SessionChat,
@@ -41,6 +42,8 @@ async function buildContext(
   source: Source,
   startDate: string,
   endDate: string,
+  userQuery: string,
+  recentConversationText: string,
 ): Promise<string> {
   if (!key) return "";
   type DiaryRow = { content: string; iv: string | null; entry_date: string };
@@ -77,21 +80,23 @@ async function buildContext(
   const diaryRows = (diary.data ?? []) as unknown as DiaryRow[];
   const blogRows = (blog.data ?? []) as unknown as BlogRow[];
 
-  // Keep the total context within the model's limits: newest entries first,
-  // each entry trimmed, and a hard overall budget so large diaries still work.
-  const DIARY_ENTRY_MAX = 1500;
-  const BLOG_POST_MAX = 800;
-  const CONTEXT_BUDGET = 90_000;
+  const BLOG_POST_MAX = 1500;
+  const CONTEXT_BUDGET = 60_000;
   const trim = (s: string, max: number) => (s.length > max ? `${s.slice(0, max)}…` : s);
 
   const diaryDecoded = (
     await Promise.all(
-      diaryRows.map(async (row) => {
+      diaryRows.map(async (row): Promise<DecodedDiaryEntry | null> => {
         if (row.iv && key) {
           try {
             const plain = await decryptText(key, row.content, row.iv);
             const obj = JSON.parse(plain) as { t?: string; c?: string; m?: string };
-            return `[${row.entry_date}${obj.m ? ` · ${obj.m}` : ""}] ${obj.t || "Untitled"}\n${trim(obj.c ?? "", DIARY_ENTRY_MAX)}`;
+            return {
+              entryDate: row.entry_date,
+              title: obj.t || "Untitled",
+              content: obj.c ?? "",
+              mood: obj.m,
+            };
           } catch {
             return null;
           }
@@ -99,10 +104,18 @@ async function buildContext(
         return null;
       }),
     )
-  ).filter((item): item is string => item !== null);
-  const diaryText = wantsDiary
-    ? diaryDecoded.join("\n\n---\n\n") || "(no diary entries in this range)"
+  ).filter((item): item is DecodedDiaryEntry => item !== null);
+
+  const diarySection = wantsDiary
+    ? buildSmartVectorDiaryContext(
+        diaryDecoded,
+        userQuery,
+        recentConversationText,
+        startDate,
+        endDate,
+      ).formattedText
     : "";
+
   const blogText = wantsBlog
     ? blogRows
         .map(
@@ -113,7 +126,7 @@ async function buildContext(
     : "";
 
   const parts: string[] = [];
-  if (wantsDiary) parts.push(`=== DIARY ENTRIES (${startDate} → ${endDate}) ===\n${diaryText}`);
+  if (wantsDiary) parts.push(diarySection);
   if (wantsBlog) parts.push(`=== BLOG POSTS (${startDate} → ${endDate}) ===\n${blogText}`);
   let combined = parts.join("\n\n");
   if (combined.length > CONTEXT_BUDGET) {
@@ -486,8 +499,14 @@ function SessionChat() {
         }
       })();
 
+      const recentUserTurnsText = priorHistory
+        .filter((m) => m.role === "user")
+        .slice(-2)
+        .map((m) => m.content)
+        .join(" ");
+
       const [context] = await Promise.all([
-        buildContext(user.id, key, source, startDate, endDate),
+        buildContext(user.id, key, source, startDate, endDate, question, recentUserTurnsText),
         persistUserMsgPromise,
       ]);
       const emailPrefix = user.email?.split("@")[0]?.toLowerCase() ?? "";
@@ -506,18 +525,38 @@ function SessionChat() {
       const accessToken = sessionData.session?.access_token;
       if (!accessToken) throw new Error("Please sign in again to continue");
 
+      // Keep only the last 4 messages (2 immediate exchanges) verbatim and digest all earlier turns
+      // to minimize Groq API Free Plan token usage (TPM/TPD) while preserving conversational flow.
+      const MAX_RECENT_HISTORY = 4;
+      const recentHistory =
+        priorHistory.length > MAX_RECENT_HISTORY
+          ? priorHistory.slice(-MAX_RECENT_HISTORY)
+          : priorHistory;
+
+      let finalContext = context;
+      if (priorHistory.length > MAX_RECENT_HISTORY) {
+        const olderMessages = priorHistory.slice(0, -MAX_RECENT_HISTORY);
+        const olderDigestLines = olderMessages.slice(-56).map((m) => {
+          const speaker = m.role === "user" ? name : "Companion";
+          const snippet = m.content.replace(/\s+/g, " ").trim().slice(0, 140);
+          return `- ${speaker}: ${snippet}${m.content.length > 140 ? "…" : ""}`;
+        });
+        const olderSummaryBlock = `=== DIGEST OF EARLIER CONVERSATION (${olderMessages.length} earlier messages) ===\n${olderDigestLines.join("\n")}`;
+        finalContext = `${olderSummaryBlock}\n\n${context}`.slice(0, 90_000);
+      }
+
       const { response, transportKey, envelope } = await postEncryptedCompanionRequest(
         "/api/companion-stream",
         accessToken,
         {
-          question,
+          question: question.slice(0, 4000),
           sentAt: sentSnap.localDateTime,
           browserTime: sentSnap.localDateTime,
-          context,
+          context: finalContext,
           name,
-          history: priorHistory.map((m) => ({
+          history: recentHistory.map((m) => ({
             role: m.role,
-            content: m.content,
+            content: m.content.slice(0, 1200),
             sentAt: m.createdAt ? formatBrowserFullDateTime(m.createdAt) : undefined,
           })),
         },

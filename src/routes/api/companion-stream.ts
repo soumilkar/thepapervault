@@ -12,17 +12,23 @@ import {
 
 const MessageSchema = z.object({
   role: z.enum(["user", "assistant"]),
-  content: z.string().max(20_000),
+  content: z.string().transform((s) => (s.length > 20_000 ? s.slice(0, 20_000) : s)),
   sentAt: z.string().max(200).optional(),
 });
 
 const InputSchema = z.object({
-  question: z.string().min(1).max(4000),
+  question: z
+    .string()
+    .min(1)
+    .transform((s) => (s.length > 4000 ? s.slice(0, 4000) : s)),
   sentAt: z.string().max(200).optional(),
   browserTime: z.string().max(200).optional(),
-  context: z.string().max(120_000).default(""),
+  context: z
+    .string()
+    .default("")
+    .transform((s) => (s.length > 120_000 ? s.slice(0, 120_000) : s)),
   name: z.string().max(120).default("the writer"),
-  history: z.array(MessageSchema).max(60).default([]),
+  history: z.array(MessageSchema).max(500).default([]),
 });
 
 const EnvelopeSchema = z.object({
@@ -32,7 +38,7 @@ const EnvelopeSchema = z.object({
   ts: z.number(),
   salt: z.string().min(8).max(128),
   iv: z.string().min(8).max(64),
-  ct: z.string().min(16).max(300_000),
+  ct: z.string().min(16).max(600_000),
 });
 
 type GroqStreamPart = {
@@ -405,6 +411,27 @@ export const Route = createFileRoute("/api/companion-stream")({
 
           const data = parsed.data;
           const activeTime = data.sentAt || data.browserTime || "";
+          const MAX_HISTORY_TURNS = 60;
+          const recentHistory =
+            data.history.length > MAX_HISTORY_TURNS
+              ? data.history.slice(-MAX_HISTORY_TURNS)
+              : data.history;
+
+          let effectiveContext = data.context;
+          if (data.history.length > MAX_HISTORY_TURNS) {
+            const olderTurns = data.history.slice(0, -MAX_HISTORY_TURNS);
+            const summaryLines = olderTurns.slice(-60).map((m) => {
+              const speaker = m.role === "user" ? data.name : "Companion";
+              const snippet = m.content.replace(/\s+/g, " ").trim().slice(0, 180);
+              return `- ${speaker}: ${snippet}${m.content.length > 180 ? "…" : ""}`;
+            });
+            effectiveContext =
+              `=== SUMMARY OF EARLIER MESSAGES (${olderTurns.length} earlier messages) ===\n${summaryLines.join("\n")}\n\n${effectiveContext}`.slice(
+                0,
+                120_000,
+              );
+          }
+
           let lastStamp = "";
           const formatHistoryMessage = (content: string, sentAt?: string) => {
             if (!sentAt || content.startsWith("[Sent:")) return content;
@@ -419,9 +446,9 @@ export const Route = createFileRoute("/api/companion-stream")({
           const messages: { role: "system" | "user" | "assistant"; content: string }[] = [
             {
               role: "system",
-              content: companionInstructions(data.name, data.context, activeTime),
+              content: companionInstructions(data.name, effectiveContext, activeTime),
             },
-            ...data.history.map((m) => ({
+            ...recentHistory.map((m) => ({
               role: m.role,
               content: m.role === "user" ? formatHistoryMessage(m.content, m.sentAt) : m.content,
             })),
