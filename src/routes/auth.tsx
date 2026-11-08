@@ -2,6 +2,7 @@ import { createFileRoute, redirect, useRouter } from "@tanstack/react-router";
 import { useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { ThemeToggleButton } from "@/lib/theme";
+import { markFirstTimeSignup } from "@/components/WelcomeTour";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/auth")({
@@ -40,6 +41,9 @@ function AuthPage() {
           },
         });
         if (error) throw error;
+        if (data.user) {
+          markFirstTimeSignup(data.user.id);
+        }
         if (data.user && data.session) {
           await supabase.from("profiles").upsert({ id: data.user.id, display_name: trimmedName });
         }

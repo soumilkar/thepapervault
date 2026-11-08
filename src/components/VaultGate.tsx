@@ -3,6 +3,7 @@ import { Lock, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 import { useVault } from "@/lib/vault";
 import { runVaultMigration } from "@/lib/vault-migrate";
+import { markFirstTimeSignup } from "@/components/WelcomeTour";
 
 export function VaultGate({ userId, children }: { userId: string; children: React.ReactNode }) {
   const { status, setup, unlock } = useVault();
@@ -28,6 +29,7 @@ export function VaultGate({ userId, children }: { userId: string; children: Reac
       if (status === "needs_setup") {
         if (passphrase !== confirm) throw new Error("Passphrases don't match");
         dataKey = await setup(passphrase);
+        markFirstTimeSignup(userId);
         toast.success("Welcome in");
       } else {
         dataKey = await unlock(passphrase);
