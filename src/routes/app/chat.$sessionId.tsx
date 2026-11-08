@@ -206,6 +206,24 @@ function SessionChat() {
   const [hydrating, setHydrating] = useState(true);
   const inputRef = useRef<HTMLInputElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const latestAssistantRef = useRef<HTMLDivElement>(null);
+  const incomingReplySlotRef = useRef<HTMLParagraphElement>(null);
+
+  const scrollAssistantStartToMiddle = useCallback((behavior: ScrollBehavior = "smooth") => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const el = incomingReplySlotRef.current ?? latestAssistantRef.current;
+        if (!el) return;
+        const rect = el.getBoundingClientRect();
+        const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+        const targetY = viewportHeight / 2;
+        const desiredScrollTop = Math.max(0, window.scrollY + rect.top - targetY);
+        if (desiredScrollTop > window.scrollY) {
+          window.scrollTo({ top: desiredScrollTop, behavior });
+        }
+      });
+    });
+  }, []);
 
   const focusCompanionInputIfHardwareKeyboard = useCallback(() => {
     if (!shouldKeepCompanionInputFocused()) return;
@@ -397,7 +415,13 @@ function SessionChat() {
       if (loadingRef.current) return;
       void fetchSessionMessages().then((fresh) => {
         if (active && fresh) {
-          setMessages((prev) => (JSON.stringify(prev) === JSON.stringify(fresh) ? prev : fresh));
+          setMessages((prev) => {
+            if (JSON.stringify(prev) === JSON.stringify(fresh)) return prev;
+            if (fresh.length > prev.length && fresh.at(-1)?.role === "assistant") {
+              scrollAssistantStartToMiddle("smooth");
+            }
+            return fresh;
+          });
         }
       });
     };
@@ -406,7 +430,7 @@ function SessionChat() {
       active = false;
       window.removeEventListener(CHAT_MESSAGES_UPDATED, handleRemoteMessagesUpdate);
     };
-  }, [fetchSessionMessages]);
+  }, [fetchSessionMessages, scrollAssistantStartToMiddle]);
 
   const send = async (rawQuestion: string) => {
     const question = rawQuestion.trim();
@@ -426,7 +450,7 @@ function SessionChat() {
     const userMsg: Msg = { role: "user", content: question, createdAt: sentSnap.iso };
     setMessages((m) => [...m, userMsg]);
     setLoading(true);
-    scrollToBottom("smooth");
+    scrollAssistantStartToMiddle("smooth");
     try {
       if (!key) throw new Error("Unlock your vault to continue");
       // Persist parent session first (guarantees FK exists on server) and then insert user message
@@ -522,11 +546,13 @@ function SessionChat() {
       let answer = "";
       let frameBuffer = "";
       let expectedSeq = 0;
+      let didScrollReplyStartToMiddle = false;
       const streamStartSnap = getBrowserNow();
       setMessages((current) => [
         ...current,
         { role: "assistant", content: "", createdAt: streamStartSnap.iso },
       ]);
+      scrollAssistantStartToMiddle("smooth");
 
       const processEncryptedLines = async (lines: string[]) => {
         for (const rawLine of lines) {
@@ -562,6 +588,10 @@ function SessionChat() {
           ...current.slice(0, -1),
           { role: "assistant", content: answer, createdAt: streamStartSnap.iso },
         ]);
+        if (!didScrollReplyStartToMiddle && answer.trim().length > 0) {
+          didScrollReplyStartToMiddle = true;
+          scrollAssistantStartToMiddle("smooth");
+        }
       }
 
       const tail = decoder.decode();
@@ -583,6 +613,9 @@ function SessionChat() {
         ...current.slice(0, -1),
         { role: "assistant", content: answer, createdAt: replySnap.iso },
       ]);
+      if (!didScrollReplyStartToMiddle) {
+        scrollAssistantStartToMiddle("smooth");
+      }
 
       const encA = await encryptText(key, answer);
       await supabase.from("chat_messages").insert({
@@ -629,6 +662,14 @@ function SessionChat() {
       focusCompanionInputIfHardwareKeyboard();
     }, 0);
   };
+
+  let lastAssistantIdx = -1;
+  for (let idx = messages.length - 1; idx >= 0; idx--) {
+    if (messages[idx]?.role === "assistant") {
+      lastAssistantIdx = idx;
+      break;
+    }
+  }
 
   return (
     <div className="space-y-4">
@@ -721,7 +762,10 @@ function SessionChat() {
                     <Markdown>{m.content}</Markdown>
                   </div>
                 ) : (
-                  <div className="paper-card max-w-[90%] p-4">
+                  <div
+                    ref={i === lastAssistantIdx ? latestAssistantRef : undefined}
+                    className="paper-card max-w-[90%] p-4"
+                  >
                     <p className="mb-2 font-hand text-lg leading-none text-sepia">companion</p>
                     <Markdown>{m.content}</Markdown>
                   </div>
@@ -731,11 +775,14 @@ function SessionChat() {
           );
         })}
         {loading && messages.at(-1)?.role !== "assistant" && (
-          <p className="font-hand text-sepia">thinking...</p>
+          <p ref={incomingReplySlotRef} className="font-hand text-sepia">
+            thinking...
+          </p>
         )}
       </div>
 
-      <div ref={bottomRef} className="h-32" aria-hidden />
+      <div ref={bottomRef} className="scroll-mb-24" aria-hidden />
+      <div className={messages.length > 0 ? "h-[55vh]" : "h-32"} aria-hidden />
       <form
         onSubmit={(e) => {
           e.preventDefault();
