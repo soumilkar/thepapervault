@@ -147,6 +147,27 @@ function AuthedLayout() {
   });
 
   useEffect(() => {
+    const refreshAllDeviceQueries = () => {
+      qc.invalidateQueries({ queryKey: ["notes"] });
+      qc.invalidateQueries({ queryKey: ["note-folders"] });
+      qc.invalidateQueries({ queryKey: ["diary"] });
+      qc.invalidateQueries({ queryKey: ["diary-folders"] });
+      qc.invalidateQueries({ queryKey: ["diary-metrics"] });
+      qc.invalidateQueries({ queryKey: ["public-diary-feed"] });
+      qc.invalidateQueries({ queryKey: ["blog"] });
+      qc.invalidateQueries({ queryKey: ["gallery"] });
+      qc.invalidateQueries({ queryKey: ["gallery-folders"] });
+      qc.invalidateQueries({ queryKey: ["vault-trackers"] });
+      qc.invalidateQueries({ queryKey: ["dashboard-counts"] });
+      qc.invalidateQueries({ queryKey: ["heatmap-activity"] });
+      qc.invalidateQueries({ queryKey: ["user-profile"] });
+
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new Event("chat-sessions-updated"));
+        window.dispatchEvent(new Event("chat-messages-updated"));
+      }
+    };
+
     const handleSyncSuccess = (e: Event) => {
       const detail = (e as CustomEvent).detail as
         | {
@@ -156,19 +177,7 @@ function AuthedLayout() {
           }
         | undefined;
 
-      qc.invalidateQueries({ queryKey: ["notes"] });
-      qc.invalidateQueries({ queryKey: ["diary"] });
-      qc.invalidateQueries({ queryKey: ["diary-metrics"] });
-      qc.invalidateQueries({ queryKey: ["public-diary-feed"] });
-      qc.invalidateQueries({ queryKey: ["blog"] });
-      qc.invalidateQueries({ queryKey: ["gallery"] });
-      qc.invalidateQueries({ queryKey: ["dashboard-counts"] });
-      qc.invalidateQueries({ queryKey: ["heatmap-activity"] });
-      qc.invalidateQueries({ queryKey: ["user-profile"] });
-
-      if (typeof window !== "undefined") {
-        window.dispatchEvent(new Event("chat-sessions-updated"));
-      }
+      refreshAllDeviceQueries();
 
       if (detail && detail.syncedCount > 0) {
         toast.success(
@@ -187,34 +196,60 @@ function AuthedLayout() {
       if (t === "notes") {
         qc.invalidateQueries({ queryKey: ["notes"] });
         qc.invalidateQueries({ queryKey: ["gallery"] });
+        qc.invalidateQueries({ queryKey: ["dashboard-counts"] });
       } else if (t === "note_folders") {
         qc.invalidateQueries({ queryKey: ["note-folders"] });
+        qc.invalidateQueries({ queryKey: ["gallery"] });
       } else if (t === "diary_entries") {
         qc.invalidateQueries({ queryKey: ["diary"] });
         qc.invalidateQueries({ queryKey: ["diary-metrics"] });
         qc.invalidateQueries({ queryKey: ["public-diary-feed"] });
         qc.invalidateQueries({ queryKey: ["gallery"] });
+        qc.invalidateQueries({ queryKey: ["dashboard-counts"] });
+        qc.invalidateQueries({ queryKey: ["heatmap-activity"] });
       } else if (t === "diary_folders") {
         qc.invalidateQueries({ queryKey: ["diary-folders"] });
       } else if (t === "gallery_images") {
         qc.invalidateQueries({ queryKey: ["gallery"] });
-      } else if (t === "blog_posts" || t === "blog_comments" || t === "blog_likes") {
+        qc.invalidateQueries({ queryKey: ["dashboard-counts"] });
+      } else if (
+        t === "blog_posts" ||
+        t === "blog_comments" ||
+        t === "blog_likes" ||
+        t === "comment_votes"
+      ) {
         qc.invalidateQueries({ queryKey: ["blog"] });
+        qc.invalidateQueries({ queryKey: ["dashboard-counts"] });
       } else if (t === "profiles") {
         qc.invalidateQueries({ queryKey: ["user-profile"] });
       } else if (t === "chat_sessions") {
         window.dispatchEvent(new Event("chat-sessions-updated"));
+      } else if (t === "chat_messages") {
+        window.dispatchEvent(new Event("chat-messages-updated"));
+        window.dispatchEvent(new Event("chat-sessions-updated"));
+      }
+    };
+
+    const handleFocusOrVisible = () => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      if (typeof navigator !== "undefined" && navigator.onLine) {
+        triggerAutoSync(0);
+        refreshAllDeviceQueries();
       }
     };
 
     if (typeof window !== "undefined") {
       window.addEventListener(OFFLINE_SYNC_SUCCESS_EVENT, handleSyncSuccess);
       window.addEventListener(OFFLINE_DATA_UPDATED_EVENT, handleDataUpdated);
+      window.addEventListener("focus", handleFocusOrVisible);
+      document.addEventListener("visibilitychange", handleFocusOrVisible);
     }
     return () => {
       if (typeof window !== "undefined") {
         window.removeEventListener(OFFLINE_SYNC_SUCCESS_EVENT, handleSyncSuccess);
         window.removeEventListener(OFFLINE_DATA_UPDATED_EVENT, handleDataUpdated);
+        window.removeEventListener("focus", handleFocusOrVisible);
+        document.removeEventListener("visibilitychange", handleFocusOrVisible);
       }
     };
   }, [qc]);

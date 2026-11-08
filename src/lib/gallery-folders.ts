@@ -71,7 +71,7 @@ async function fetchRemoteGalleryFolders(
       .from(BUCKET)
       .createSignedUrl(storagePath(userId), 60 * 10);
     if (signed?.signedUrl) {
-      const res = await fetch(signed.signedUrl);
+      const res = await fetch(signed.signedUrl, { cache: "no-store" });
       if (res.ok) {
         const text = await res.text();
         const parsed = JSON.parse(text) as { ct?: string; iv?: string };

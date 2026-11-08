@@ -722,7 +722,9 @@ function withTableDefaults(table: string, raw: Record<string, unknown>): Record<
   if (table === "diary_entries") {
     if (!row.entry_date) row.entry_date = browserNow.localDate;
     if (row.is_public === undefined) row.is_public = false;
-    if (!row.visibility) row.visibility = row.is_public ? "public" : "private";
+    if (!row.visibility || row.visibility === "public") {
+      row.visibility = row.is_public ? "public_anon" : "private";
+    }
     if (row.word_count === undefined) row.word_count = 0;
     for (const col of [
       "folder_id",
@@ -875,13 +877,17 @@ export function clearAllOfflineUserData() {
   }
 }
 
+let memActiveSession: Record<string, unknown> | null = null;
+
 export function cacheAuthSession(session: unknown) {
   if (typeof window === "undefined") return;
   try {
     if (!session || typeof session !== "object") {
+      memActiveSession = null;
       clearAllOfflineUserData();
     } else {
       const s = session as Record<string, unknown>;
+      memActiveSession = s;
       const userObj = s.user as
         { id?: string; email?: string; user_metadata?: unknown } | undefined;
       const newUserId = userObj?.id;
@@ -892,6 +898,7 @@ export function cacheAuthSession(session: unknown) {
           const prevUserId = prevParsed?.user?.id;
           if (prevUserId && newUserId && prevUserId !== newUserId) {
             clearAllOfflineUserData();
+            memActiveSession = s;
           }
         }
       } catch {
@@ -917,7 +924,30 @@ export function cacheAuthSession(session: unknown) {
 
 export function getCachedAuthSession(): Record<string, unknown> | null {
   if (typeof window === "undefined") return null;
+  if (memActiveSession && memActiveSession.user && memActiveSession.access_token) {
+    return memActiveSession;
+  }
   try {
+    // 1. Check standard Supabase sb-*-auth-token in localStorage first (contains live access_token)
+    for (let i = 0; i < window.localStorage.length; i++) {
+      const k = window.localStorage.key(i);
+      if (k && k.startsWith("sb-") && k.endsWith("-auth-token")) {
+        const val = window.localStorage.getItem(k);
+        if (val) {
+          const parsed = JSON.parse(val) as Record<string, unknown>;
+          if (parsed && typeof parsed === "object" && parsed.user) {
+            memActiveSession = parsed;
+            return {
+              ...parsed,
+              expires_in: (parsed.expires_in as number | undefined) ?? 86400,
+              expires_at:
+                (parsed.expires_at as number | undefined) ?? Math.floor(Date.now() / 1000) + 86400,
+            };
+          }
+        }
+      }
+    }
+    // 2. Offline fallback: minimal identity metadata when offline
     const raw = window.localStorage.getItem(OFFLINE_AUTH_SESSION_KEY);
     if (raw) {
       const parsed = JSON.parse(raw) as Record<string, unknown>;
@@ -927,23 +957,6 @@ export function getCachedAuthSession(): Record<string, unknown> | null {
           expires_in: 86400,
           expires_at: Math.floor(Date.now() / 1000) + 86400,
         };
-      }
-    }
-    // Also check standard Supabase sb-*-auth-token in localStorage
-    for (let i = 0; i < window.localStorage.length; i++) {
-      const k = window.localStorage.key(i);
-      if (k && k.startsWith("sb-") && k.endsWith("-auth-token")) {
-        const val = window.localStorage.getItem(k);
-        if (val) {
-          const parsed = JSON.parse(val) as Record<string, unknown>;
-          if (parsed && typeof parsed === "object" && parsed.user) {
-            return {
-              ...parsed,
-              expires_in: 86400,
-              expires_at: Math.floor(Date.now() / 1000) + 86400,
-            };
-          }
-        }
       }
     }
   } catch {
@@ -1122,33 +1135,113 @@ export async function flushOfflineSyncQueue(): Promise<void> {
           }
         } else {
           let activeHeaders = buildSanitizedHeaders(token, false);
-          let res = await quickFetch(
-            item.url,
-            {
-              method: item.method,
-              headers: activeHeaders,
-              body: item.body ?? undefined,
-            },
-            12000,
-          );
+          let res: Response | null = null;
 
-          if (res.status === 401) {
+          // If this is a B2-backed table and item.url is direct PostgREST, try storage-proxy first so B2 is updated too
+          if (item.table && !item.url.includes("/api/storage-proxy")) {
             try {
-              token = await getFreshAccessToken(true);
-            } catch {
-              token = null;
-            }
-            if (token) {
-              activeHeaders = buildSanitizedHeaders(token, false);
-              res = await quickFetch(
-                item.url,
+              const parsedItemUrl = new URL(item.url, window.location.origin);
+              const proxyMutateUrl = `/api/storage-proxy?action=db-mutate&table=${encodeURIComponent(
+                item.table,
+              )}&method=${encodeURIComponent(item.method)}&${parsedItemUrl.searchParams.toString()}`;
+              const proxyRes = await quickFetch(
+                proxyMutateUrl,
                 {
-                  method: item.method,
-                  headers: activeHeaders,
+                  method: "POST",
+                  headers: {
+                    authorization: token ? `Bearer ${token}` : activeHeaders["authorization"] || "",
+                    "content-type": "application/json",
+                  },
                   body: item.body ?? undefined,
                 },
                 12000,
               );
+              if (proxyRes.ok) {
+                res = proxyRes;
+              }
+            } catch {
+              // Fall back to item.url below
+            }
+          }
+
+          if (!res) {
+            res = await quickFetch(
+              item.url,
+              {
+                method: item.method,
+                headers: activeHeaders,
+                body: item.body ?? undefined,
+              },
+              12000,
+            );
+
+            if (res.status === 401) {
+              try {
+                token = await getFreshAccessToken(true);
+              } catch {
+                token = null;
+              }
+              if (token) {
+                activeHeaders = buildSanitizedHeaders(token, false);
+                res = await quickFetch(
+                  item.url,
+                  {
+                    method: item.method,
+                    headers: activeHeaders,
+                    body: item.body ?? undefined,
+                  },
+                  12000,
+                );
+              }
+            }
+          }
+
+          // If a legacy queued /api/storage-proxy?action=db-mutate item failed, fallback to direct Supabase REST
+          if (
+            !res.ok &&
+            res.status !== 409 &&
+            item.table &&
+            item.url.includes("/api/storage-proxy")
+          ) {
+            const sbBase = (import.meta.env.VITE_SUPABASE_URL || "").replace(/\/+$/, "");
+            const sbKey =
+              import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY ||
+              import.meta.env.VITE_SUPABASE_ANON_KEY ||
+              "";
+            if (sbBase && sbKey) {
+              try {
+                const proxyUrlObj = new URL(item.url, window.location.origin);
+                const origMethod = (proxyUrlObj.searchParams.get("method") || "POST").toUpperCase();
+                const forwardParams = new URLSearchParams(proxyUrlObj.searchParams);
+                forwardParams.delete("action");
+                forwardParams.delete("table");
+                forwardParams.delete("method");
+                const qs = forwardParams.toString();
+                const directUrl = `${sbBase}/rest/v1/${encodeURIComponent(item.table)}${
+                  qs ? `?${qs}` : ""
+                }`;
+                const directHeaders: Record<string, string> = {
+                  ...activeHeaders,
+                  apikey: sbKey,
+                };
+                if (origMethod === "POST") {
+                  directHeaders["Prefer"] = "resolution=merge-duplicates,return=representation";
+                }
+                const directRes = await quickFetch(
+                  directUrl,
+                  {
+                    method: origMethod,
+                    headers: directHeaders,
+                    body: item.body ?? undefined,
+                  },
+                  10000,
+                );
+                if (directRes.ok || directRes.status === 409) {
+                  res = directRes;
+                }
+              } catch {
+                // ignore fallback error
+              }
             }
           }
 
@@ -1537,47 +1630,109 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
         table === "blog_likes" ||
         table === "comment_votes";
 
-      const fetchRowsFromRemote = async (reqClone: Request, timeoutMs: number) => {
-        if (isB2Table) {
-          const authHeader =
-            reqClone.headers.get("authorization") || reqClone.headers.get("Authorization") || "";
-          const proxyQueryUrl = `/api/storage-proxy?action=db-query&table=${encodeURIComponent(table)}${
-            isPublicDiaryFeed ? "&publicFeed=1" : ""
-          }`;
-          const proxyRes = await quickFetch(
-            proxyQueryUrl,
-            {
-              method: "POST",
-              headers: {
-                authorization: authHeader,
-                "content-type": "application/json",
-              },
-            },
-            timeoutMs,
+      const reconcileRemoteTableRows = async (
+        freshList: Record<string, unknown>[],
+        isFullTable: boolean,
+        sessionFilterId?: string | null,
+      ) => {
+        const queueItems = await idbGetAll<SyncQueueItem>("sync_queue");
+        const hasPendingForTable = queueItems.some((q) => q.table === table);
+        if (!hasPendingForTable) {
+          const currentLocal = await idbGetAll<Record<string, unknown>>(table);
+          const freshIds = new Set(
+            freshList
+              .map((r) => r[pk])
+              .filter((k): k is string | number => typeof k === "string" || typeof k === "number"),
           );
-          if (proxyRes.ok) {
-            const data = await proxyRes.json().catch(() => null);
-            if (Array.isArray(data)) {
-              return data as Record<string, unknown>[];
+          if (isFullTable && !isPublicDiaryFeed) {
+            const staleKeys = currentLocal
+              .map((r) => r[pk])
+              .filter(
+                (k): k is string | number =>
+                  (typeof k === "string" || typeof k === "number") && !freshIds.has(k),
+              );
+            if (staleKeys.length > 0) {
+              await idbDeleteKeys(table, staleKeys);
             }
+          } else if (table === "chat_messages" && sessionFilterId) {
+            const staleMsgKeys = currentLocal
+              .filter((r) => String(r.session_id ?? "") === sessionFilterId)
+              .map((r) => r[pk])
+              .filter(
+                (k): k is string | number =>
+                  (typeof k === "string" || typeof k === "number") && !freshIds.has(k),
+              );
+            if (staleMsgKeys.length > 0) {
+              await idbDeleteKeys(table, staleMsgKeys);
+            }
+          }
+        }
+        await idbPutMany(table, freshList);
+      };
+
+      const fetchRowsFromRemote = async (
+        reqClone: Request,
+        timeoutMs: number,
+      ): Promise<{ rows: Record<string, unknown>[]; isFullTable: boolean } | null> => {
+        if (isB2Table) {
+          try {
+            const authHeader =
+              reqClone.headers.get("authorization") || reqClone.headers.get("Authorization") || "";
+            const proxyQueryUrl = `/api/storage-proxy?action=db-query&table=${encodeURIComponent(table)}${
+              isPublicDiaryFeed ? "&publicFeed=1" : ""
+            }`;
+            const proxyRes = await quickFetch(
+              proxyQueryUrl,
+              {
+                method: "POST",
+                headers: {
+                  authorization: authHeader,
+                  "content-type": "application/json",
+                },
+              },
+              timeoutMs,
+            );
+            if (proxyRes.ok) {
+              const data = await proxyRes.json().catch(() => null);
+              if (Array.isArray(data)) {
+                return {
+                  rows: data as Record<string, unknown>[],
+                  isFullTable: !isPublicDiaryFeed,
+                };
+              }
+            }
+          } catch {
+            // Fall through to direct Supabase PostgREST fetch
           }
         }
         const res = await quickFetch(reqClone, undefined, timeoutMs);
         if (!res.ok) return null;
         const data = await res.json().catch(() => null);
-        if (Array.isArray(data)) return data as Record<string, unknown>[];
-        if (data && typeof data === "object") return [data as Record<string, unknown>];
+        const filterKeys = Array.from(url.searchParams.keys()).filter(
+          (k) => k !== "select" && k !== "order" && k !== "user_id",
+        );
+        const isFullTable = filterKeys.length === 0 && !isPublicDiaryFeed;
+        if (Array.isArray(data)) {
+          return { rows: data as Record<string, unknown>[], isFullTable };
+        }
+        if (data && typeof data === "object") {
+          return { rows: [data as Record<string, unknown>], isFullTable: false };
+        }
         return null;
       };
 
-      // SELECT / HEAD — Local-first Stale-While-Revalidate for <1ms page loads
+      const eqSessionParam = url.searchParams.get("session_id");
+      const sessionFilterId =
+        eqSessionParam && eqSessionParam.startsWith("eq.") ? eqSessionParam.slice(3) : null;
+
+      // SELECT / HEAD — Local-first Stale-While-Revalidate when cached rows exist,
+      // but always fetch remote first if local filtered result is empty while online.
       if (method === "GET" || method === "HEAD") {
         const allLocal = await idbGetAll<Record<string, unknown>>(table);
-        const hasLocalCache = allLocal.length > 0 || isTableHydrated(table);
+        const filtered = filterAndSortRows(allLocal, url.searchParams);
+        const hasFilteredLocalRows = filtered.length > 0;
 
-        if (hasLocalCache) {
-          const filtered = filterAndSortRows(allLocal, url.searchParams);
-
+        if (hasFilteredLocalRows) {
           if (navigator.onLine) {
             if (currentSyncState.pendingCount > 0) {
               void flushOfflineSyncQueue();
@@ -1585,16 +1740,23 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
             const revalidateKey = `${method}:${req.url}`;
             const nowMs = Date.now();
             const lastReval = recentRevalidations.get(revalidateKey) ?? 0;
-            if (nowMs - lastReval > 8000) {
+            const revalIntervalMs =
+              table === "chat_sessions" || table === "chat_messages" ? 1000 : 2000;
+            if (nowMs - lastReval > revalIntervalMs) {
               recentRevalidations.set(revalidateKey, nowMs);
               const reqClone = req.clone();
               void fetchRowsFromRemote(reqClone, 8000)
-                .then(async (freshList) => {
-                  if (!freshList) return;
+                .then(async (remoteRes) => {
+                  if (!remoteRes) return;
                   markTableHydrated(table);
                   if (method !== "GET") return;
-                  await idbPutMany(table, freshList);
-                  const freshFiltered = filterAndSortRows(freshList, url.searchParams);
+                  await reconcileRemoteTableRows(
+                    remoteRes.rows,
+                    remoteRes.isFullTable,
+                    sessionFilterId,
+                  );
+                  const updatedAllLocal = await idbGetAll<Record<string, unknown>>(table);
+                  const freshFiltered = filterAndSortRows(updatedAllLocal, url.searchParams);
                   if (JSON.stringify(freshFiltered) !== JSON.stringify(filtered)) {
                     if (typeof window !== "undefined") {
                       window.dispatchEvent(
@@ -1613,20 +1775,25 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
         if (navigator.onLine) {
           try {
             if (currentSyncState.pendingCount > 0) {
-              void flushOfflineSyncQueue();
+              await flushOfflineSyncQueue();
             }
 
-            if (isB2Table && method === "GET") {
-              const freshList = await fetchRowsFromRemote(req.clone(), 8000);
-              if (freshList) {
+            if (method === "GET") {
+              const remoteRes = await fetchRowsFromRemote(req.clone(), 8000);
+              if (remoteRes) {
                 markTableHydrated(table);
-                await idbPutMany(table, freshList);
-                const filtered = filterAndSortRows(freshList, url.searchParams);
-                return buildPostgrestResponse(filtered, method, req.headers, 200);
+                await reconcileRemoteTableRows(
+                  remoteRes.rows,
+                  remoteRes.isFullTable,
+                  sessionFilterId,
+                );
+                const updatedAllLocal = await idbGetAll<Record<string, unknown>>(table);
+                const freshFiltered = filterAndSortRows(updatedAllLocal, url.searchParams);
+                return buildPostgrestResponse(freshFiltered, method, req.headers, 200);
               }
             }
 
-            const res = await quickFetch(req.clone(), undefined, 4000);
+            const res = await quickFetch(req.clone(), undefined, 5000);
             if (res.ok) {
               markTableHydrated(table);
               if (method === "GET") {
@@ -1649,7 +1816,6 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
           }
         }
 
-        const filtered = filterAndSortRows(allLocal, url.searchParams);
         return buildPostgrestResponse(filtered, method, req.headers, 200);
       }
 
@@ -1672,8 +1838,8 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
           Array.isArray(parsed) ? normalizedRows : normalizedRows[0],
         );
         if (navigator.onLine) {
-          try {
-            if (b2MutateUrl) {
+          if (b2MutateUrl) {
+            try {
               const authHeader =
                 req.headers.get("authorization") || req.headers.get("Authorization") || "";
               const proxyRes = await quickFetch(
@@ -1698,28 +1864,33 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
                 }
                 return buildPostgrestResponse(normalizedRows, method, req.headers, 201);
               }
-            } else {
-              const res = await quickFetch(
-                req.url,
-                {
-                  method,
-                  headers: req.headers,
-                  body: forwardBody,
-                },
-                8000,
-              );
-              if (res.ok) {
-                const serverData = await res
-                  .clone()
-                  .json()
-                  .catch(() => null);
-                if (Array.isArray(serverData)) {
-                  await idbPutMany(table, serverData as Record<string, unknown>[]);
-                } else if (serverData && typeof serverData === "object") {
-                  await idbPutMany(table, [serverData as Record<string, unknown>]);
-                }
-                return res;
+            } catch {
+              // Fall through to direct Supabase PostgREST below
+            }
+          }
+
+          // Direct Supabase PostgREST fallback (or primary when not a B2 table)
+          try {
+            const res = await quickFetch(
+              req.url,
+              {
+                method,
+                headers: req.headers,
+                body: forwardBody,
+              },
+              8000,
+            );
+            if (res.ok) {
+              const serverData = await res
+                .clone()
+                .json()
+                .catch(() => null);
+              if (Array.isArray(serverData)) {
+                await idbPutMany(table, serverData as Record<string, unknown>[]);
+              } else if (serverData && typeof serverData === "object") {
+                await idbPutMany(table, [serverData as Record<string, unknown>]);
               }
+              return buildPostgrestResponse(normalizedRows, method, req.headers, 201);
             }
           } catch {
             // Enqueue for background sync below
@@ -1729,8 +1900,8 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
         await enqueueSyncItem({
           kind: "rest",
           table,
-          url: b2MutateUrl ?? req.url,
-          method: b2MutateUrl ? "POST" : method,
+          url: req.url,
+          method,
           headers: extractHeadersRecord(req.headers),
           body: forwardBody,
         });
@@ -1742,6 +1913,10 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
       if (method === "PATCH") {
         const bodyText = await req.clone().text();
         const patchObj = bodyText ? (JSON.parse(bodyText) as Record<string, unknown>) : {};
+        if (table === "diary_entries" && patchObj.is_public !== undefined && !patchObj.visibility) {
+          patchObj.visibility = patchObj.is_public ? "public_anon" : "private";
+        }
+        const normalizedPatchText = JSON.stringify(patchObj);
         const allLocal = await idbGetAll<Record<string, unknown>>(table);
         const matched = filterAndSortRows(allLocal, url.searchParams);
         const now = new Date().toISOString();
@@ -1755,8 +1930,8 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
         await idbPutMany(table, updatedRows);
 
         if (navigator.onLine) {
-          try {
-            if (b2MutateUrl) {
+          if (b2MutateUrl) {
+            try {
               const authHeader =
                 req.headers.get("authorization") || req.headers.get("Authorization") || "";
               const proxyRes = await quickFetch(
@@ -1767,16 +1942,30 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
                     authorization: authHeader,
                     "content-type": "application/json",
                   },
-                  body: bodyText,
+                  body: normalizedPatchText,
                 },
                 10000,
               );
               if (proxyRes.ok) {
                 return buildPostgrestResponse(updatedRows, method, req.headers, 200);
               }
-            } else {
-              const res = await quickFetch(req.clone(), undefined, 8000);
-              if (res.ok) return res;
+            } catch {
+              // Fall through to direct Supabase PostgREST below
+            }
+          }
+
+          try {
+            const res = await quickFetch(
+              req.url,
+              {
+                method,
+                headers: req.headers,
+                body: normalizedPatchText,
+              },
+              8000,
+            );
+            if (res.ok) {
+              return buildPostgrestResponse(updatedRows, method, req.headers, 200);
             }
           } catch {
             // Enqueue below
@@ -1786,10 +1975,10 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
         await enqueueSyncItem({
           kind: "rest",
           table,
-          url: b2MutateUrl ?? req.url,
-          method: b2MutateUrl ? "POST" : method,
+          url: req.url,
+          method,
           headers: extractHeadersRecord(req.headers),
-          body: bodyText,
+          body: normalizedPatchText,
         });
 
         return buildPostgrestResponse(updatedRows, method, req.headers, 200);
@@ -1817,8 +2006,8 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
         }
 
         if (navigator.onLine) {
-          try {
-            if (b2MutateUrl) {
+          if (b2MutateUrl) {
+            try {
               const authHeader =
                 req.headers.get("authorization") || req.headers.get("Authorization") || "";
               const proxyRes = await quickFetch(
@@ -1835,9 +2024,15 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
               if (proxyRes.ok) {
                 return buildPostgrestResponse(matched, method, req.headers, 200);
               }
-            } else {
-              const res = await quickFetch(req.clone(), undefined, 8000);
-              if (res.ok) return res;
+            } catch {
+              // Fall through to direct Supabase PostgREST below
+            }
+          }
+
+          try {
+            const res = await quickFetch(req.clone(), undefined, 8000);
+            if (res.ok) {
+              return buildPostgrestResponse(matched, method, req.headers, 200);
             }
           } catch {
             // Enqueue below
@@ -1847,8 +2042,8 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
         await enqueueSyncItem({
           kind: "rest",
           table,
-          url: b2MutateUrl ?? req.url,
-          method: b2MutateUrl ? "POST" : method,
+          url: req.url,
+          method,
           headers: extractHeadersRecord(req.headers),
           body: null,
         });

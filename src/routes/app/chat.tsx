@@ -16,6 +16,7 @@ type SessionRow = { id: string; title: string; last_message_at: string };
 const MAX_SESSIONS = 7;
 const CHAT_INACTIVITY_TTL_MS = 30 * 24 * 60 * 60 * 1000; // Auto-delete threads inactive for 1 month (30 days)
 export const CHAT_SESSIONS_UPDATED = "chat-sessions-updated";
+export const CHAT_MESSAGES_UPDATED = "chat-messages-updated";
 
 function ChatLayout() {
   const { user } = Route.useRouteContext();
@@ -110,11 +111,10 @@ function ChatLayout() {
     const excess = next.slice(MAX_SESSIONS).map((s) => s.id);
     setSessions(next.slice(0, MAX_SESSIONS));
     setMenuOpen(false);
-    navigate({ to: "/app/chat/$sessionId", params: { sessionId: optimisticId } });
 
     try {
       const enc = await encryptText(key, defaultTitle);
-      const { error } = await supabase.from("chat_sessions").insert({
+      const { error } = await supabase.from("chat_sessions").upsert({
         id: optimisticId,
         user_id: user.id,
         title: enc.ct,
@@ -122,6 +122,7 @@ function ChatLayout() {
         last_message_at: nowIso,
       });
       if (error) throw error;
+      navigate({ to: "/app/chat/$sessionId", params: { sessionId: optimisticId } });
       if (excess.length > 0) {
         void supabase.from("chat_sessions").delete().in("id", excess).eq("user_id", user.id);
       }
@@ -166,6 +167,7 @@ function ChatLayout() {
             side="bottom"
             align="start"
             sideOffset={10}
+            onCloseAutoFocus={(e) => e.preventDefault()}
             className="w-[min(20rem,calc(100vw-1.5rem))] rounded-2xl border border-primary/25 bg-primary/15 p-0 text-foreground shadow-xl backdrop-blur-xl backdrop-saturate-150 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=open]:fade-in-0 data-[state=closed]:fade-out-0 data-[state=open]:zoom-in-95 data-[state=closed]:zoom-out-95 data-[state=open]:slide-in-from-top-2 data-[state=closed]:slide-out-to-top-2 data-[state=open]:duration-200 data-[state=closed]:duration-150"
           >
             <div className="flex items-center justify-between gap-2 border-b border-primary/20 px-4 py-3">

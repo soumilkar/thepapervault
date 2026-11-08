@@ -14,6 +14,10 @@ function suppressUseClientDirectiveWarnings(): Plugin {
   let resolvedSupabasePublishableKey = "";
   let resolvedSupabaseAnonKey = "";
   let resolvedSupabaseServiceRoleKey = "";
+  let resolvedB2Bucket = "";
+  let resolvedB2Endpoint = "";
+  let resolvedB2KeyId = "";
+  let resolvedB2AppKey = "";
 
   return {
     name: "suppress-use-client-directives",
@@ -35,6 +39,27 @@ function suppressUseClientDirectiveWarnings(): Plugin {
       resolvedSupabaseServiceRoleKey =
         env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || "";
       resolvedGroqKey = env.GROQ_API_KEY || env.VITE_GROQ_API_KEY || "";
+      resolvedB2Bucket =
+        env.B2_BUCKET_NAME ||
+        env.BACKBLAZE_BUCKET_NAME ||
+        env.VITE_B2_BUCKET_NAME ||
+        env.R2_BUCKET_NAME ||
+        "";
+      resolvedB2Endpoint = env.B2_ENDPOINT || env.BACKBLAZE_ENDPOINT || env.VITE_B2_ENDPOINT || "";
+      resolvedB2KeyId =
+        env.B2_KEY_ID ||
+        env.B2_ACCESS_KEY_ID ||
+        env.BACKBLAZE_KEY_ID ||
+        env.VITE_B2_KEY_ID ||
+        env.R2_ACCESS_KEY_ID ||
+        "";
+      resolvedB2AppKey =
+        env.B2_APPLICATION_KEY ||
+        env.B2_SECRET_ACCESS_KEY ||
+        env.BACKBLAZE_APPLICATION_KEY ||
+        env.VITE_B2_APPLICATION_KEY ||
+        env.R2_SECRET_ACCESS_KEY ||
+        "";
 
       if (resolvedGroqKey && !process.env.GROQ_API_KEY) {
         process.env.GROQ_API_KEY = resolvedGroqKey;
@@ -50,6 +75,18 @@ function suppressUseClientDirectiveWarnings(): Plugin {
       }
       if (resolvedSupabaseServiceRoleKey && !process.env.SUPABASE_SERVICE_ROLE_KEY) {
         process.env.SUPABASE_SERVICE_ROLE_KEY = resolvedSupabaseServiceRoleKey;
+      }
+      if (resolvedB2Bucket && !process.env.B2_BUCKET_NAME) {
+        process.env.B2_BUCKET_NAME = resolvedB2Bucket;
+      }
+      if (resolvedB2Endpoint && !process.env.B2_ENDPOINT) {
+        process.env.B2_ENDPOINT = resolvedB2Endpoint;
+      }
+      if (resolvedB2KeyId && !process.env.B2_KEY_ID) {
+        process.env.B2_KEY_ID = resolvedB2KeyId;
+      }
+      if (resolvedB2AppKey && !process.env.B2_APPLICATION_KEY) {
+        process.env.B2_APPLICATION_KEY = resolvedB2AppKey;
       }
 
       return {
@@ -84,6 +121,18 @@ function suppressUseClientDirectiveWarnings(): Plugin {
           serverDefines["process.env.SUPABASE_SERVICE_ROLE_KEY"] = JSON.stringify(
             resolvedSupabaseServiceRoleKey,
           );
+        }
+        if (resolvedB2Bucket) {
+          serverDefines["process.env.B2_BUCKET_NAME"] = JSON.stringify(resolvedB2Bucket);
+        }
+        if (resolvedB2Endpoint) {
+          serverDefines["process.env.B2_ENDPOINT"] = JSON.stringify(resolvedB2Endpoint);
+        }
+        if (resolvedB2KeyId) {
+          serverDefines["process.env.B2_KEY_ID"] = JSON.stringify(resolvedB2KeyId);
+        }
+        if (resolvedB2AppKey) {
+          serverDefines["process.env.B2_APPLICATION_KEY"] = JSON.stringify(resolvedB2AppKey);
         }
       }
 

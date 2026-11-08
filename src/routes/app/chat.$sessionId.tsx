@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Send } from "lucide-react";
 import { toast } from "sonner";
 import { Markdown } from "@/components/Markdown";
@@ -8,7 +8,7 @@ import { useVault } from "@/lib/vault";
 import { decryptText, encryptText } from "@/lib/crypto";
 import { decryptStreamChunk, postEncryptedCompanionRequest } from "@/lib/companion-transport";
 import { AppSelect } from "@/components/AppSelect";
-import { CHAT_SESSIONS_UPDATED } from "./chat";
+import { CHAT_MESSAGES_UPDATED, CHAT_SESSIONS_UPDATED } from "./chat";
 import { useBrowserDraft } from "@/lib/browser-drafts";
 import {
   formatBrowserFullDateTime,
@@ -133,6 +133,66 @@ function isCorruptedWarmupMessage(content: string): boolean {
   );
 }
 
+const EXTERNAL_KB_STORAGE_KEY = "papervault:external-keyboard-attached";
+
+function isDesktopComputer(): boolean {
+  if (typeof window === "undefined" || typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent || "";
+  const isMobileOrTabletUA =
+    /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini|Mobile|Tablet/i.test(ua);
+  // iPadOS 13+ reports MacIntel with multi-touch points
+  const isIPadOS = navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1;
+  if (isMobileOrTabletUA || isIPadOS) return false;
+  return window.matchMedia("(hover: hover) and (pointer: fine)").matches;
+}
+
+function isExternalKeyboardDetected(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return sessionStorage.getItem(EXTERNAL_KB_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function setExternalKeyboardDetected(attached: boolean) {
+  if (typeof window === "undefined") return;
+  try {
+    if (attached) {
+      sessionStorage.setItem(EXTERNAL_KB_STORAGE_KEY, "1");
+    } else {
+      sessionStorage.removeItem(EXTERNAL_KB_STORAGE_KEY);
+    }
+  } catch {
+    // ignore storage errors
+  }
+}
+
+function shouldKeepCompanionInputFocused(): boolean {
+  return isDesktopComputer() || isExternalKeyboardDetected();
+}
+
+function isOtherInteractiveField(
+  el: Element | null,
+  companionInput: HTMLInputElement | null,
+): boolean {
+  if (!el || el === document.body || el === document.documentElement) return false;
+  if (el === companionInput) return false;
+  const tag = el.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
+  if ((el as HTMLElement).isContentEditable) return true;
+  // Keep focus inside open Radix Select / Popover / Dialog menus while user interacts with them
+  if (
+    el.closest('[role="listbox"]') ||
+    el.closest('[role="dialog"]') ||
+    el.closest('[role="menu"]') ||
+    el.closest("[data-radix-popper-content-wrapper]")
+  ) {
+    return true;
+  }
+  return false;
+}
+
 function SessionChat() {
   const { user, profileDisplayName } = Route.useRouteContext();
   const { sessionId } = Route.useParams();
@@ -146,6 +206,95 @@ function SessionChat() {
   const [hydrating, setHydrating] = useState(true);
   const inputRef = useRef<HTMLInputElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  const focusCompanionInputIfHardwareKeyboard = useCallback(() => {
+    if (!shouldKeepCompanionInputFocused()) return;
+    const inputEl = inputRef.current;
+    if (!inputEl) return;
+    if (isOtherInteractiveField(document.activeElement, inputEl)) return;
+    const selection = window.getSelection();
+    if (selection && selection.toString().trim().length > 0) return;
+    inputEl.focus({ preventScroll: true });
+  }, []);
+
+  // Detect external physical keyboard on mobile/tablet and keep input focused on computer / external keyboard
+  useEffect(() => {
+    focusCompanionInputIfHardwareKeyboard();
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const inputEl = inputRef.current;
+      if (!inputEl) return;
+
+      const active = document.activeElement;
+      const inOtherField = isOtherInteractiveField(active, inputEl);
+
+      // Physical key pressed when no input is focused -> definitely a hardware/external keyboard
+      if (active !== inputEl && !inOtherField && e.key !== "Unidentified" && e.keyCode !== 229) {
+        setExternalKeyboardDetected(true);
+      } else if (
+        active === inputEl &&
+        Boolean(e.code) &&
+        e.keyCode !== 229 &&
+        (!window.visualViewport || window.visualViewport.height >= window.innerHeight * 0.82)
+      ) {
+        // Hardware key code while visualViewport is full height (no on-screen soft keyboard covering screen)
+        setExternalKeyboardDetected(true);
+      }
+
+      if (inOtherField) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+      // Redirect typing keys or Backspace directly into the Companion input box
+      const isPrintableKey = e.key.length === 1;
+      const isBackspace = e.key === "Backspace";
+      if ((isPrintableKey || isBackspace) && document.activeElement !== inputEl) {
+        inputEl.focus({ preventScroll: true });
+      }
+    };
+
+    const handleVisualViewportResize = () => {
+      if (isDesktopComputer() || !window.visualViewport) return;
+      // If the visual viewport shrinks significantly while the input is focused, the on-screen virtual keyboard opened
+      if (
+        document.activeElement === inputRef.current &&
+        window.visualViewport.height < window.innerHeight * 0.78
+      ) {
+        setExternalKeyboardDetected(false);
+      }
+    };
+
+    const handleWindowFocus = () => {
+      focusCompanionInputIfHardwareKeyboard();
+    };
+
+    const handleDocumentClick = (e: MouseEvent) => {
+      if (!shouldKeepCompanionInputFocused()) return;
+      const target = e.target as HTMLElement | null;
+      if (!target) return;
+      if (
+        target.closest(
+          'input, textarea, select, button, a, label, [role="button"], [role="combobox"], [role="listbox"], [role="dialog"], [data-radix-popper-content-wrapper]',
+        )
+      ) {
+        return;
+      }
+      requestAnimationFrame(() => {
+        focusCompanionInputIfHardwareKeyboard();
+      });
+    };
+
+    window.addEventListener("keydown", handleKeyDown, true);
+    window.addEventListener("focus", handleWindowFocus);
+    document.addEventListener("click", handleDocumentClick);
+    window.visualViewport?.addEventListener("resize", handleVisualViewportResize);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown, true);
+      window.removeEventListener("focus", handleWindowFocus);
+      document.removeEventListener("click", handleDocumentClick);
+      window.visualViewport?.removeEventListener("resize", handleVisualViewportResize);
+    };
+  }, [focusCompanionInputIfHardwareKeyboard, sessionId]);
 
   const scrollToBottom = (behavior: ScrollBehavior = "smooth") => {
     requestAnimationFrame(() => {
@@ -173,69 +322,104 @@ function SessionChat() {
     }
   }, [hydrating, messages.length]);
 
+  const loadingRef = useRef(false);
+  useEffect(() => {
+    loadingRef.current = loading;
+  }, [loading]);
+
+  const fetchSessionMessages = useCallback(async (): Promise<Msg[] | null> => {
+    const { data, error } = await supabase
+      .from("chat_messages")
+      .select("id,role,content,iv,created_at")
+      .eq("session_id", sessionId)
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: true });
+    if (error) return null;
+    const decoded = await Promise.all(
+      (data ?? []).map(async (r) => {
+        let content = r.content;
+        if (r.iv) {
+          if (!key) return null;
+          try {
+            content = await decryptText(key, r.content, r.iv);
+          } catch {
+            return null;
+          }
+        } else if (key) {
+          const enc = await encryptText(key, r.content);
+          void supabase
+            .from("chat_messages")
+            .update({ content: enc.ct, iv: enc.iv })
+            .eq("id", r.id)
+            .eq("user_id", user.id);
+        }
+        if (r.role === "assistant" && isCorruptedWarmupMessage(content)) {
+          void supabase.from("chat_messages").delete().eq("id", r.id).eq("user_id", user.id);
+          return null;
+        }
+        return {
+          role: r.role as "user" | "assistant",
+          content,
+          createdAt: r.created_at,
+        };
+      }),
+    );
+    return decoded.filter((m): m is Msg => m !== null);
+  }, [sessionId, user.id, key]);
+
   // Load prior messages for this session
   useEffect(() => {
     let cancelled = false;
     setHydrating(true);
     setMessages([]);
     (async () => {
-      const { data, error } = await supabase
-        .from("chat_messages")
-        .select("id,role,content,iv,created_at")
-        .eq("session_id", sessionId)
-        .eq("user_id", user.id)
-        .order("created_at", { ascending: true });
+      const decoded = await fetchSessionMessages();
       if (cancelled) return;
-      if (error) {
+      if (decoded === null) {
         toast.error("Could not load this conversation");
       } else {
-        const decoded = await Promise.all(
-          (data ?? []).map(async (r) => {
-            let content = r.content;
-            if (r.iv) {
-              if (!key) return null;
-              try {
-                content = await decryptText(key, r.content, r.iv);
-              } catch {
-                return null;
-              }
-            } else if (key) {
-              const enc = await encryptText(key, r.content);
-              void supabase
-                .from("chat_messages")
-                .update({ content: enc.ct, iv: enc.iv })
-                .eq("id", r.id)
-                .eq("user_id", user.id);
-            }
-            if (r.role === "assistant" && isCorruptedWarmupMessage(content)) {
-              void supabase.from("chat_messages").delete().eq("id", r.id).eq("user_id", user.id);
-              return null;
-            }
-            return {
-              role: r.role as "user" | "assistant",
-              content,
-              createdAt: r.created_at,
-            };
-          }),
-        );
-        if (cancelled) return;
-        setMessages(decoded.filter((m): m is Msg => m !== null));
+        setMessages(decoded);
       }
       setHydrating(false);
-      setTimeout(() => inputRef.current?.focus({ preventScroll: true }), 0);
+      setTimeout(() => {
+        focusCompanionInputIfHardwareKeyboard();
+      }, 0);
     })();
     return () => {
       cancelled = true;
     };
-  }, [sessionId, user.id, key]);
+  }, [fetchSessionMessages, focusCompanionInputIfHardwareKeyboard]);
+
+  // Re-sync messages when background revalidation or cross-device sync updates chat_messages
+  useEffect(() => {
+    let active = true;
+    const handleRemoteMessagesUpdate = () => {
+      if (loadingRef.current) return;
+      void fetchSessionMessages().then((fresh) => {
+        if (active && fresh) {
+          setMessages((prev) => (JSON.stringify(prev) === JSON.stringify(fresh) ? prev : fresh));
+        }
+      });
+    };
+    window.addEventListener(CHAT_MESSAGES_UPDATED, handleRemoteMessagesUpdate);
+    return () => {
+      active = false;
+      window.removeEventListener(CHAT_MESSAGES_UPDATED, handleRemoteMessagesUpdate);
+    };
+  }, [fetchSessionMessages]);
 
   const send = async (rawQuestion: string) => {
     const question = rawQuestion.trim();
     if (!question || loading) return;
     clearDraft();
+    const keepFocused = shouldKeepCompanionInputFocused();
     if (inputRef.current) {
       inputRef.current.value = "";
-      inputRef.current.blur();
+      if (keepFocused) {
+        inputRef.current.focus({ preventScroll: true });
+      } else {
+        inputRef.current.blur();
+      }
     }
     const sentSnap = getBrowserNow();
     const priorHistory = messages.filter((m) => !isCorruptedWarmupMessage(m.content));
@@ -245,32 +429,33 @@ function SessionChat() {
     scrollToBottom("smooth");
     try {
       if (!key) throw new Error("Unlock your vault to continue");
-      // Persist user message and session timestamp in background while building context
+      // Persist parent session first (guarantees FK exists on server) and then insert user message
       const persistUserMsgPromise = (async () => {
         const encQ = await encryptText(key, question);
-        const sessionPatch: { last_message_at: string; title?: string; title_iv?: string } = {
-          last_message_at: sentSnap.iso,
-        };
         if (priorHistory.length === 0) {
           const encT = await encryptText(key, question.slice(0, 60));
-          sessionPatch.title = encT.ct;
-          sessionPatch.title_iv = encT.iv;
-        }
-        const [{ error: userMessageError }] = await Promise.all([
-          supabase.from("chat_messages").insert({
-            session_id: sessionId,
+          await supabase.from("chat_sessions").upsert({
+            id: sessionId,
             user_id: user.id,
-            role: "user",
-            content: encQ.ct,
-            iv: encQ.iv,
-            created_at: sentSnap.iso,
-          }),
-          supabase
+            title: encT.ct,
+            title_iv: encT.iv,
+            last_message_at: sentSnap.iso,
+          });
+        } else {
+          await supabase
             .from("chat_sessions")
-            .update(sessionPatch)
+            .update({ last_message_at: sentSnap.iso })
             .eq("id", sessionId)
-            .eq("user_id", user.id),
-        ]);
+            .eq("user_id", user.id);
+        }
+        const { error: userMessageError } = await supabase.from("chat_messages").insert({
+          session_id: sessionId,
+          user_id: user.id,
+          role: "user",
+          content: encQ.ct,
+          iv: encQ.iv,
+          created_at: sentSnap.iso,
+        });
         if (userMessageError) throw userMessageError;
         if (priorHistory.length === 0) {
           window.dispatchEvent(new Event(CHAT_SESSIONS_UPDATED));
@@ -430,6 +615,9 @@ function SessionChat() {
       toast.error(e instanceof Error ? e.message : "Could not reach the companion");
     } finally {
       setLoading(false);
+      setTimeout(() => {
+        focusCompanionInputIfHardwareKeyboard();
+      }, 0);
     }
   };
 
@@ -437,6 +625,9 @@ function SessionChat() {
     setSource("both");
     setStartDate(isoDay(monthAgo));
     setEndDate(isoDay(today));
+    setTimeout(() => {
+      focusCompanionInputIfHardwareKeyboard();
+    }, 0);
   };
 
   return (

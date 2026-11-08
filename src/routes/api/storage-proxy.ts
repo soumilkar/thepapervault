@@ -32,19 +32,44 @@ function getSupabaseUrl(request: Request): string {
   );
 }
 
-function getAdminClient(request: Request) {
+function getSupabaseAnonOrServiceKey(request: Request): string {
+  return (
+    readServerEnv("SUPABASE_ANON_KEY", request) ||
+    readServerEnv("VITE_SUPABASE_ANON_KEY", request) ||
+    readServerEnv("SUPABASE_PUBLISHABLE_KEY", request) ||
+    readServerEnv("VITE_SUPABASE_PUBLISHABLE_KEY", request) ||
+    readServerEnv("SUPABASE_SERVICE_ROLE_KEY", request) ||
+    (typeof process !== "undefined"
+      ? process.env.SUPABASE_ANON_KEY ||
+        process.env.VITE_SUPABASE_ANON_KEY ||
+        process.env.SUPABASE_PUBLISHABLE_KEY ||
+        process.env.VITE_SUPABASE_PUBLISHABLE_KEY ||
+        process.env.SUPABASE_SERVICE_ROLE_KEY ||
+        ""
+      : "")
+  );
+}
+
+function getAdminClient(request: Request, bearerToken?: string) {
   const url = getSupabaseUrl(request);
   const serviceKey =
     readServerEnv("SUPABASE_SERVICE_ROLE_KEY", request) ||
     (typeof process !== "undefined" ? process.env.SUPABASE_SERVICE_ROLE_KEY : "") ||
     "";
+  const key = serviceKey || getSupabaseAnonOrServiceKey(request);
 
-  if (!url || !serviceKey) {
-    throw new Error("Supabase service configuration missing on server");
+  if (!url || !key) {
+    throw new Error("Supabase configuration missing on server");
   }
 
-  return createClient<Database>(url, serviceKey, {
+  const headers: Record<string, string> = {};
+  if (!serviceKey && bearerToken) {
+    headers.Authorization = `Bearer ${bearerToken}`;
+  }
+
+  return createClient<Database>(url, key, {
     auth: { persistSession: false, autoRefreshToken: false },
+    ...(Object.keys(headers).length > 0 ? { global: { headers } } : {}),
   });
 }
 
@@ -453,7 +478,8 @@ export const Route = createFileRoute("/api/storage-proxy")({
             });
           }
 
-          const adminClient = getAdminClient(request);
+          const bearerToken = extractBearerToken(request);
+          const adminClient = getAdminClient(request, bearerToken);
           let authorized = false;
 
           if (exp && sig) {
@@ -546,7 +572,8 @@ export const Route = createFileRoute("/api/storage-proxy")({
           const bucket = url.searchParams.get("bucket") || "gallery";
           const path = url.searchParams.get("path") || "";
 
-          const adminClient = getAdminClient(request);
+          const bearerToken = extractBearerToken(request);
+          const adminClient = getAdminClient(request, bearerToken);
           const user = await authenticateUser(request, adminClient);
           if (!user) {
             return new Response(
@@ -556,7 +583,6 @@ export const Route = createFileRoute("/api/storage-proxy")({
           }
 
           const b2Config = await resolveB2Config(request);
-          const bearerToken = extractBearerToken(request);
 
           // ==================================================================
           // A. Backblaze B2 Status & Full Migration of Existing Supabase Data
@@ -922,56 +948,132 @@ export const Route = createFileRoute("/api/storage-proxy")({
                     id: rowId,
                     user_id: user.id,
                   };
+                  if (table === "diary_entries") {
+                    normalized.visibility = normalized.is_public ? "public_anon" : "private";
+                  }
                   delete mergedDoc.deletedIds[rowId];
                   rowsById.set(rowId, normalized);
                   affectedRows.push(normalized);
                 }
 
-                // Best-effort write to Supabase
+                // Write to Supabase (and ensure parent chat_sessions exist before inserting chat_messages)
+                let sbWriteErr: string | null = null;
                 try {
                   const userClient = getUserScopedClient(request, bearerToken);
-                  await (
-                    userClient.from(table as "notes") as ReturnType<typeof userClient.from>
-                  ).upsert(affectedRows as never);
-                } catch {
-                  // Ignore if Supabase hits 500 MB limit; B2 stores the data
+                  if (table === "chat_messages" && affectedRows.length > 0) {
+                    const sessionIds = Array.from(
+                      new Set(
+                        affectedRows
+                          .map((r) => (typeof r.session_id === "string" ? r.session_id : ""))
+                          .filter(Boolean),
+                      ),
+                    );
+                    if (sessionIds.length > 0) {
+                      const sessionPlaceholders = sessionIds.map((sid) => ({
+                        id: sid,
+                        user_id: user.id,
+                        title: "New conversation",
+                        last_message_at: nowIso,
+                      }));
+                      await userClient
+                        .from("chat_sessions")
+                        .upsert(sessionPlaceholders, { onConflict: "id", ignoreDuplicates: true });
+                    }
+                  }
+
+                  if (table === "blog_likes") {
+                    const { error } = await userClient
+                      .from("blog_likes")
+                      .insert(affectedRows as never);
+                    if (error && !error.message.toLowerCase().includes("duplicate")) {
+                      sbWriteErr = error.message;
+                    }
+                  } else {
+                    const { error: upsertErr } = await (
+                      userClient.from(table as "notes") as ReturnType<typeof userClient.from>
+                    ).upsert(affectedRows as never);
+                    if (upsertErr) {
+                      const { error: insertErr } = await (
+                        userClient.from(table as "notes") as ReturnType<typeof userClient.from>
+                      ).insert(affectedRows as never);
+                      if (insertErr && !insertErr.message.toLowerCase().includes("duplicate")) {
+                        sbWriteErr = insertErr.message;
+                      }
+                    }
+                  }
+                } catch (err) {
+                  sbWriteErr = err instanceof Error ? err.message : "Supabase write failed";
+                }
+                if (!b2Config && sbWriteErr) {
+                  throw new Error(sbWriteErr);
                 }
               } else if (mutateMethod === "PATCH") {
                 const patchObj =
                   parsedBody && typeof parsedBody === "object" && !Array.isArray(parsedBody)
                     ? (parsedBody as Record<string, unknown>)
                     : {};
-                const safePatch = { ...patchObj };
+                const safePatch: Record<string, unknown> = { ...patchObj };
                 delete safePatch.user_id;
                 delete safePatch.id;
+                if (table === "diary_entries" && safePatch.is_public !== undefined) {
+                  safePatch.visibility = safePatch.is_public ? "public_anon" : "private";
+                }
                 const matched = filterRowsByQueryParams(
                   Array.from(rowsById.values()),
                   url.searchParams,
                 ).filter((r) => String(r.user_id ?? "") === user.id);
 
-                for (const row of matched) {
-                  const rowId = String(row.id);
-                  const updated: Record<string, unknown> = {
-                    ...row,
-                    ...safePatch,
-                    id: rowId,
-                    user_id: user.id,
-                  };
-                  rowsById.set(rowId, updated);
-                  affectedRows.push(updated);
+                if (
+                  matched.length === 0 &&
+                  table === "chat_sessions" &&
+                  url.searchParams.get("id")?.startsWith("eq.")
+                ) {
+                  const targetSessionId = url.searchParams.get("id")!.slice(3);
+                  if (targetSessionId) {
+                    const synthesized: Record<string, unknown> = {
+                      id: targetSessionId,
+                      user_id: user.id,
+                      title: "New conversation",
+                      title_iv: null,
+                      created_at: nowIso,
+                      last_message_at: nowIso,
+                      ...safePatch,
+                    };
+                    delete mergedDoc.deletedIds[targetSessionId];
+                    rowsById.set(targetSessionId, synthesized);
+                    affectedRows.push(synthesized);
+                  }
+                } else {
+                  for (const row of matched) {
+                    const rowId = String(row.id);
+                    const updated: Record<string, unknown> = {
+                      ...row,
+                      ...safePatch,
+                      id: rowId,
+                      user_id: user.id,
+                    };
+                    rowsById.set(rowId, updated);
+                    affectedRows.push(updated);
+                  }
                 }
 
-                // Best-effort update in Supabase
+                // Update in Supabase
                 try {
                   const userClient = getUserScopedClient(request, bearerToken);
-                  for (const row of affectedRows) {
-                    await (userClient.from(table as "notes") as ReturnType<typeof userClient.from>)
-                      .update(safePatch as never)
-                      .eq("id" as never, String(row.id) as never)
-                      .eq("user_id" as never, user.id as never);
+                  if (table === "chat_sessions" && affectedRows.length > 0) {
+                    await userClient.from("chat_sessions").upsert(affectedRows as never);
+                  } else {
+                    for (const row of affectedRows) {
+                      await (
+                        userClient.from(table as "notes") as ReturnType<typeof userClient.from>
+                      )
+                        .update(safePatch as never)
+                        .eq("id" as never, String(row.id) as never)
+                        .eq("user_id" as never, user.id as never);
+                    }
                   }
                 } catch {
-                  // Ignore Supabase quota errors
+                  // Ignore Supabase quota errors when B2 is active
                 }
               } else if (mutateMethod === "DELETE") {
                 const matched = filterRowsByQueryParams(
@@ -986,13 +1088,20 @@ export const Route = createFileRoute("/api/storage-proxy")({
                   affectedRows.push(row);
                 }
 
-                // Best-effort delete in Supabase
+                // Delete in Supabase (both matched rows and any explicit id filter)
                 try {
                   const userClient = getUserScopedClient(request, bearerToken);
                   for (const row of affectedRows) {
                     await (userClient.from(table as "notes") as ReturnType<typeof userClient.from>)
                       .delete()
                       .eq("id" as never, String(row.id) as never)
+                      .eq("user_id" as never, user.id as never);
+                  }
+                  const eqId = url.searchParams.get("id");
+                  if (affectedRows.length === 0 && eqId?.startsWith("eq.")) {
+                    await (userClient.from(table as "notes") as ReturnType<typeof userClient.from>)
+                      .delete()
+                      .eq("id" as never, eqId.slice(3) as never)
                       .eq("user_id" as never, user.id as never);
                   }
                 } catch {
