@@ -9,6 +9,7 @@ import {
   getServerTransportPublicKey,
   type EncryptedCompanionEnvelope,
 } from "@/lib/companion-transport";
+import { getGroqChatModels, markGroqModelUnavailable } from "@/lib/groq-models";
 
 const MessageSchema = z.object({
   role: z.enum(["user", "assistant"]),
@@ -46,16 +47,6 @@ type GroqStreamPart = {
   error?: { message?: string };
 };
 
-const GROQ_MODELS = [
-  "qwen/qwen3.8-27b",
-  "openai/gpt-oss-120b",
-  "openai/gpt-oss-20b",
-  "llama-3.3-70b-versatile",
-  "qwen/qwen3-32b",
-  "meta-llama/llama-4-scout-17b-16e-instruct",
-  "llama-3.1-8b-instant",
-] as const;
-
 type RuntimeRequest = Request & {
   runtime?: {
     cloudflare?: {
@@ -88,6 +79,17 @@ function getGroqApiKey(request?: Request): string {
     readRuntimeEnv("VITE_GROQ_API_KEY", request) ||
     (typeof process !== "undefined" && process.env.GROQ_API_KEY
       ? process.env.GROQ_API_KEY.trim()
+      : "") ||
+    ""
+  );
+}
+
+function getGroqModelOverride(request?: Request): string {
+  return (
+    readRuntimeEnv("GROQ_MODEL", request) ||
+    readRuntimeEnv("VITE_GROQ_MODEL", request) ||
+    (typeof process !== "undefined" && process.env.GROQ_MODEL
+      ? process.env.GROQ_MODEL.trim()
       : "") ||
     ""
   );
@@ -295,9 +297,11 @@ async function fetchGroqStream(
   apiKey: string,
   messages: { role: "system" | "user" | "assistant"; content: string }[],
   signal: AbortSignal,
+  modelOverride?: string,
 ): Promise<Response> {
+  const candidateModels = await getGroqChatModels(apiKey, modelOverride);
   let lastResponse: Response | undefined;
-  for (const model of GROQ_MODELS) {
+  for (const model of candidateModels) {
     const body: Record<string, unknown> = {
       model,
       stream: true,
@@ -317,6 +321,9 @@ async function fetchGroqStream(
     });
     if (res.ok) return res;
     lastResponse = res;
+    if (res.status === 404 || res.status === 400) {
+      markGroqModelUnavailable(model);
+    }
     if (res.status === 401 || res.status === 403) break;
   }
   return lastResponse!;
@@ -329,6 +336,29 @@ const SECURITY_HEADERS = {
   "X-Frame-Options": "DENY",
   "Referrer-Policy": "no-referrer",
 };
+
+const COMPANION_RATE_WINDOW_MS = 60_000;
+const COMPANION_RATE_MAX_REQUESTS = 30;
+const companionRateBuckets = new Map<string, { count: number; resetAt: number }>();
+
+function checkCompanionRateLimit(tokenKey: string): boolean {
+  const now = Date.now();
+  if (companionRateBuckets.size > 1000) {
+    for (const [k, v] of companionRateBuckets) {
+      if (v.resetAt <= now) companionRateBuckets.delete(k);
+    }
+  }
+  const bucketKey = tokenKey.slice(-32);
+  const existing = companionRateBuckets.get(bucketKey);
+  if (!existing || existing.resetAt <= now) {
+    companionRateBuckets.set(bucketKey, { count: 1, resetAt: now + COMPANION_RATE_WINDOW_MS });
+    return true;
+  }
+  existing.count += 1;
+  return existing.count <= COMPANION_RATE_MAX_REQUESTS;
+}
+
+const MAX_COMPANION_BODY_BYTES = 512 * 1024;
 
 export const Route = createFileRoute("/api/companion-stream")({
   server: {
@@ -353,7 +383,24 @@ export const Route = createFileRoute("/api/companion-stream")({
             });
           }
 
-          const rawBody = await request.json();
+          if (!checkCompanionRateLimit(accessToken)) {
+            return new Response("Too many requests. Please wait a moment before sending again.", {
+              status: 429,
+              headers: {
+                ...SECURITY_HEADERS,
+                "Retry-After": "15",
+              },
+            });
+          }
+
+          const rawBodyText = await request.text();
+          if (rawBodyText.length > MAX_COMPANION_BODY_BYTES) {
+            return new Response("Companion request payload too large", {
+              status: 413,
+              headers: SECURITY_HEADERS,
+            });
+          }
+          const rawBody = JSON.parse(rawBodyText) as unknown;
           const envelopeCheck = EnvelopeSchema.safeParse(rawBody);
           if (!envelopeCheck.success) {
             return new Response("Encrypted Companion envelope required", {
@@ -458,10 +505,10 @@ export const Route = createFileRoute("/api/companion-stream")({
             },
           ];
 
-          const upstream = await fetchGroqStream(apiKey, messages, request.signal);
+          const modelOverride = getGroqModelOverride(request);
+          const upstream = await fetchGroqStream(apiKey, messages, request.signal, modelOverride);
           if (!upstream.ok) {
-            const errBody = (await upstream.text()).slice(0, 300);
-            console.error("Companion upstream error", upstream.status, errBody);
+            await upstream.body?.cancel().catch(() => {});
             return new Response("The Companion is temporarily unavailable. Please try again.", {
               status: 503,
               headers: SECURITY_HEADERS,
@@ -477,7 +524,6 @@ export const Route = createFileRoute("/api/companion-stream")({
             },
           });
         } catch (error) {
-          console.error("Companion stream failed", error);
           return new Response(
             error instanceof SyntaxError
               ? "The Companion request is invalid"

@@ -8,6 +8,7 @@ import {
   encryptStreamChunk,
   type EncryptedCompanionEnvelope,
 } from "@/lib/companion-transport";
+import { getGroqVisionModels, markGroqModelUnavailable } from "@/lib/groq-models";
 
 const ALLOWED_MIMES = ["image/jpeg", "image/png", "image/webp", "image/gif"] as const;
 
@@ -29,12 +30,6 @@ const EnvelopeSchema = z.object({
   iv: z.string().min(8).max(64),
   ct: z.string().min(16).max(22_000_000),
 });
-
-const GROQ_VISION_MODELS = [
-  "qwen/qwen3.8-27b",
-  "meta-llama/llama-4-scout-17b-16e-instruct",
-  "meta-llama/llama-4-maverick-17b-128e-instruct",
-] as const;
 
 type RuntimeRequest = Request & {
   runtime?: {
@@ -68,6 +63,25 @@ function getGroqApiKey(request?: Request): string {
     readRuntimeEnv("VITE_GROQ_API_KEY", request) ||
     (typeof process !== "undefined" && process.env.GROQ_API_KEY
       ? process.env.GROQ_API_KEY.trim()
+      : "") ||
+    ""
+  );
+}
+
+function getGroqVisionModelOverride(request?: Request): string {
+  return (
+    readRuntimeEnv("GROQ_OCR_MODEL", request) ||
+    readRuntimeEnv("GROQ_VISION_MODEL", request) ||
+    readRuntimeEnv("VITE_GROQ_OCR_MODEL", request) ||
+    readRuntimeEnv("GROQ_MODEL", request) ||
+    (typeof process !== "undefined" &&
+    (process.env.GROQ_OCR_MODEL || process.env.GROQ_VISION_MODEL || process.env.GROQ_MODEL)
+      ? (
+          process.env.GROQ_OCR_MODEL ||
+          process.env.GROQ_VISION_MODEL ||
+          process.env.GROQ_MODEL ||
+          ""
+        ).trim()
       : "") ||
     ""
   );
@@ -176,10 +190,12 @@ async function transcribeWithGroqVision(
   mimeType: string,
   base64Data: string,
   signal: AbortSignal,
+  modelOverride?: string,
 ): Promise<string> {
+  const candidateModels = await getGroqVisionModels(apiKey, modelOverride);
   let lastErr = "Groq vision OCR failed";
   const cleanB64 = base64Data.replace(/\s+/g, "");
-  for (const model of GROQ_VISION_MODELS) {
+  for (const model of candidateModels) {
     const body: Record<string, unknown> = {
       model,
       temperature: 0.1,
@@ -217,6 +233,9 @@ async function transcribeWithGroqVision(
       return (json.choices?.[0]?.message?.content ?? "").trim();
     }
     lastErr = await res.text().catch(() => `HTTP ${res.status}`);
+    if (res.status === 404 || res.status === 400) {
+      markGroqModelUnavailable(model);
+    }
     if (res.status === 401 || res.status === 403) break;
   }
   throw new Error(lastErr);
@@ -230,6 +249,29 @@ const SECURITY_HEADERS = {
   "X-Frame-Options": "DENY",
   "Referrer-Policy": "no-referrer",
 };
+
+const OCR_RATE_WINDOW_MS = 60_000;
+const OCR_RATE_MAX_REQUESTS = 20;
+const ocrRateBuckets = new Map<string, { count: number; resetAt: number }>();
+
+function checkOcrRateLimit(tokenKey: string): boolean {
+  const now = Date.now();
+  if (ocrRateBuckets.size > 1000) {
+    for (const [k, v] of ocrRateBuckets) {
+      if (v.resetAt <= now) ocrRateBuckets.delete(k);
+    }
+  }
+  const bucketKey = tokenKey.slice(-32);
+  const existing = ocrRateBuckets.get(bucketKey);
+  if (!existing || existing.resetAt <= now) {
+    ocrRateBuckets.set(bucketKey, { count: 1, resetAt: now + OCR_RATE_WINDOW_MS });
+    return true;
+  }
+  existing.count += 1;
+  return existing.count <= OCR_RATE_MAX_REQUESTS;
+}
+
+const MAX_OCR_BODY_BYTES = 18 * 1024 * 1024;
 
 export const Route = createFileRoute("/api/handwriting-ocr")({
   server: {
@@ -247,7 +289,29 @@ export const Route = createFileRoute("/api/handwriting-ocr")({
             );
           }
 
-          const rawBody = await request.json();
+          if (!checkOcrRateLimit(accessToken)) {
+            return new Response(
+              JSON.stringify({
+                error: "Too many handwriting scan requests. Please wait a moment.",
+              }),
+              {
+                status: 429,
+                headers: {
+                  ...SECURITY_HEADERS,
+                  "Retry-After": "15",
+                },
+              },
+            );
+          }
+
+          const rawBodyText = await request.text();
+          if (rawBodyText.length > MAX_OCR_BODY_BYTES) {
+            return new Response(JSON.stringify({ error: "Image payload exceeds safety limit." }), {
+              status: 413,
+              headers: SECURITY_HEADERS,
+            });
+          }
+          const rawBody = JSON.parse(rawBodyText) as unknown;
           const envelopeCheck = EnvelopeSchema.safeParse(rawBody);
           if (!envelopeCheck.success) {
             return new Response(
@@ -312,11 +376,13 @@ export const Route = createFileRoute("/api/handwriting-ocr")({
           }
 
           const { imageBase64, mimeType } = parsed.data;
+          const modelOverride = getGroqVisionModelOverride(request);
           const transcribedText = await transcribeWithGroqVision(
             apiKey,
             mimeType,
             imageBase64,
             request.signal,
+            modelOverride,
           );
 
           const encryptedFrame = await encryptStreamChunk(
@@ -332,8 +398,7 @@ export const Route = createFileRoute("/api/handwriting-ocr")({
               "X-Companion-Encrypted": "1",
             },
           });
-        } catch (error) {
-          console.error("Handwriting OCR error:", error);
+        } catch {
           return new Response(
             JSON.stringify({
               error: "Could not transcribe image.",

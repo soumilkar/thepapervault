@@ -111,10 +111,90 @@ function cacheVerifiedUser(token: string, user: User, expiresAt: number) {
   verifiedTokenCache.set(token, { user, expiresAt });
 }
 
+const DANGEROUS_OBJECT_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
+function sanitizeRecord(input: Record<string, unknown>): Record<string, unknown> {
+  const clean: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(input)) {
+    if (DANGEROUS_OBJECT_KEYS.has(k)) continue;
+    clean[k] = v;
+  }
+  return clean;
+}
+
+const SAFE_RASTER_IMAGE_MIMES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
+
+function sanitizeDownloadContentType(
+  rawType: string | undefined,
+  bucket: string,
+  path: string,
+): string {
+  const lowerPath = path.toLowerCase();
+  if (bucket === "gallery" || lowerPath.endsWith(".bin")) {
+    return "application/octet-stream";
+  }
+  const normalizedMime = (rawType || "").split(";")[0].trim().toLowerCase();
+  if (SAFE_RASTER_IMAGE_MIMES.has(normalizedMime)) {
+    return normalizedMime;
+  }
+  return "application/octet-stream";
+}
+
+function sanitizeUploadContentType(
+  rawType: string | undefined,
+  bucket: string,
+  path: string,
+): string {
+  return sanitizeDownloadContentType(rawType, bucket, path);
+}
+
+const STORAGE_RATE_WINDOW_MS = 60_000;
+const STORAGE_RATE_MAX_REQUESTS = 600;
+const storageRateBuckets = new Map<string, { count: number; resetAt: number }>();
+
+function checkStorageRateLimit(key: string): boolean {
+  const now = Date.now();
+  if (storageRateBuckets.size > 2000) {
+    for (const [k, v] of storageRateBuckets) {
+      if (v.resetAt <= now) storageRateBuckets.delete(k);
+    }
+  }
+  const existing = storageRateBuckets.get(key);
+  if (!existing || existing.resetAt <= now) {
+    storageRateBuckets.set(key, { count: 1, resetAt: now + STORAGE_RATE_WINDOW_MS });
+    return true;
+  }
+  existing.count += 1;
+  return existing.count <= STORAGE_RATE_MAX_REQUESTS;
+}
+
 function normalizeStoragePath(p: string): string {
-  const clean = p.replace(/^[/\\]+/, "").trim();
-  if (clean.includes("..") || clean.includes("\0")) {
+  if (typeof p !== "string" || !p || p.length > 512) return "";
+  let decoded = p;
+  try {
+    for (let i = 0; i < 2; i++) {
+      const next = decodeURIComponent(decoded);
+      if (next === decoded) break;
+      decoded = next;
+    }
+  } catch {
     return "";
+  }
+  const clean = decoded.replace(/^[/\\]+/, "").trim();
+  if (!clean || clean.includes("\\") || clean.includes("..")) {
+    return "";
+  }
+  for (let i = 0; i < clean.length; i++) {
+    const code = clean.charCodeAt(i);
+    if (code <= 0x1f || code === 0x7f) {
+      return "";
+    }
+  }
+  const segments = clean.split("/");
+  for (const seg of segments) {
+    if (!seg || seg === "." || seg === ".." || DANGEROUS_OBJECT_KEYS.has(seg)) {
+      return "";
+    }
   }
   return clean;
 }
@@ -270,6 +350,25 @@ function filterRowsByQueryParams(
   });
 }
 
+function sanitizeAnonymousDiaryRow(r: Record<string, unknown>): Record<string, unknown> {
+  return {
+    id: r.id,
+    user_id: "_anonymous",
+    title: r.title ?? null,
+    content: r.content ?? "",
+    mood: r.mood ?? null,
+    entry_date: r.entry_date ?? null,
+    created_at: r.created_at ?? null,
+    updated_at: r.updated_at ?? r.created_at ?? null,
+    is_public: true,
+    visibility: "public_anon",
+    image_path: r.image_path ?? null,
+    music: r.music ?? null,
+    iv: null,
+    folder_id: null,
+  };
+}
+
 async function fetchUserRowsFromSupabase(
   request: Request,
   bearerToken: string,
@@ -293,12 +392,14 @@ async function fetchUserRowsFromSupabase(
         .select("*")
         .eq("user_id", userId)
         .order("created_at", { ascending: true });
-      return (data ?? []) as unknown as Record<string, unknown>[];
+      const rows = (data ?? []) as unknown as Record<string, unknown>[];
+      return rows.filter((r) => String(r.user_id ?? "") === userId);
     }
     const { data } = await (userClient.from(table as "notes") as ReturnType<typeof userClient.from>)
       .select("*")
       .eq("user_id" as never, userId as never);
-    return (data ?? []) as unknown as Record<string, unknown>[];
+    const rows = (data ?? []) as unknown as Record<string, unknown>[];
+    return rows.filter((r) => String(r.user_id ?? "") === userId);
   } catch {
     return [];
   }
@@ -364,8 +465,8 @@ async function syncPublicDiaryEntriesToCommunityStore(
         rows: Array.from(rowsById.values()),
         deletedIds,
       });
-    } catch (err) {
-      console.warn("Public diary community B2 sync warning:", err);
+    } catch {
+      // Ignore community sync transient error without leaking details to logs
     }
   });
 }
@@ -449,6 +550,15 @@ export const Route = createFileRoute("/api/storage-proxy")({
           const action = url.searchParams.get("action") || "download";
 
           if (action === "b2-status") {
+            const bearerToken = extractBearerToken(request);
+            const adminClient = getAdminClient(request, bearerToken);
+            const user = await authenticateUser(request, adminClient);
+            if (!user) {
+              return new Response(JSON.stringify({ error: "Unauthorized" }), {
+                status: 401,
+                headers: JSON_SECURITY_HEADERS,
+              });
+            }
             const b2Config = await resolveB2Config(request);
             return new Response(
               JSON.stringify({
@@ -511,17 +621,22 @@ export const Route = createFileRoute("/api/storage-proxy")({
             try {
               const b2Obj = await b2GetStorageObject(b2Config, bucket, safePath);
               if (b2Obj) {
+                const safeMime = sanitizeDownloadContentType(b2Obj.contentType, bucket, safePath);
                 return new Response(b2Obj.buffer, {
                   status: 200,
                   headers: {
-                    "Content-Type": b2Obj.contentType || "application/octet-stream",
+                    "Content-Type": safeMime,
                     "Cache-Control": cacheHeader,
                     "X-Content-Type-Options": "nosniff",
+                    "Content-Security-Policy": "default-src 'none'; sandbox",
+                    "Cross-Origin-Resource-Policy": "same-origin",
+                    "Content-Disposition":
+                      safeMime === "application/octet-stream" ? "attachment" : "inline",
                   },
                 });
               }
-            } catch (b2Err) {
-              console.warn("B2 download fallback to Supabase:", b2Err);
+            } catch {
+              // Fallback to Supabase Storage silently
             }
           }
 
@@ -538,27 +653,29 @@ export const Route = createFileRoute("/api/storage-proxy")({
           }
 
           const buffer = await sbBlob.arrayBuffer();
-          const contentType = sbBlob.type || "application/octet-stream";
+          const safeMime = sanitizeDownloadContentType(sbBlob.type, bucket, safePath);
 
           if (b2Config) {
             // Copy existing Supabase object into Backblaze B2 in the background so it is migrated
-            void b2PutStorageObject(b2Config, bucket, safePath, buffer, contentType).catch(
-              () => {},
-            );
+            void b2PutStorageObject(b2Config, bucket, safePath, buffer, safeMime).catch(() => {});
           }
 
           return new Response(buffer, {
             status: 200,
             headers: {
-              "Content-Type": contentType,
+              "Content-Type": safeMime,
               "Cache-Control": cacheHeader,
               "X-Content-Type-Options": "nosniff",
+              "Content-Security-Policy": "default-src 'none'; sandbox",
+              "Cross-Origin-Resource-Policy": "same-origin",
+              "Content-Disposition":
+                safeMime === "application/octet-stream" ? "attachment" : "inline",
             },
           });
-        } catch (err) {
+        } catch {
           return new Response(
             JSON.stringify({
-              error: err instanceof Error ? err.message : "Download error",
+              error: "Internal download error",
             }),
             { status: 500, headers: JSON_SECURITY_HEADERS },
           );
@@ -579,6 +696,16 @@ export const Route = createFileRoute("/api/storage-proxy")({
             return new Response(
               JSON.stringify({ error: "Unauthorized: valid session token required" }),
               { status: 401, headers: JSON_SECURITY_HEADERS },
+            );
+          }
+
+          if (!checkStorageRateLimit(user.id)) {
+            return new Response(
+              JSON.stringify({ error: "Too many storage requests. Please slow down." }),
+              {
+                status: 429,
+                headers: { ...JSON_SECURITY_HEADERS, "Retry-After": "15" },
+              },
             );
           }
 
@@ -747,7 +874,7 @@ export const Route = createFileRoute("/api/storage-proxy")({
               if (!b2Config) {
                 const anonymized = sbPubRows
                   .filter((r) => r.is_public === true && !r.iv && r.user_id !== user.id)
-                  .map((r) => ({ ...r, user_id: "_anonymous" }));
+                  .map((r) => sanitizeAnonymousDiaryRow(r));
                 return new Response(JSON.stringify(anonymized), {
                   status: 200,
                   headers: JSON_SECURITY_HEADERS,
@@ -778,7 +905,7 @@ export const Route = createFileRoute("/api/storage-proxy")({
 
               const anonymized = pubMerged
                 .filter((r) => r.is_public === true && !r.iv && r.user_id !== user.id)
-                .map((r) => ({ ...r, user_id: "_anonymous" }));
+                .map((r) => sanitizeAnonymousDiaryRow(r));
 
               return new Response(JSON.stringify(anonymized), {
                 status: 200,
@@ -833,9 +960,7 @@ export const Route = createFileRoute("/api/storage-proxy")({
               expiredToPurge = expiredSessionIds;
               diaryDeletedIds = mergedDoc.deletedIds;
               if (needsB2Save) {
-                await b2SaveTableStore(b2Config, mergedDoc).catch((err) => {
-                  console.warn("B2 table sync write warning:", err);
-                });
+                await b2SaveTableStore(b2Config, mergedDoc).catch(() => {});
               }
               return mergedDoc.rows;
             });
@@ -859,7 +984,11 @@ export const Route = createFileRoute("/api/storage-proxy")({
               );
             }
 
-            return new Response(JSON.stringify(mergedRows), {
+            const safeRows = isB2CommunityTable(table)
+              ? mergedRows
+              : mergedRows.filter((r) => String(r.user_id ?? "") === user.id);
+
+            return new Response(JSON.stringify(safeRows), {
               status: 200,
               headers: JSON_SECURITY_HEADERS,
             });
@@ -907,13 +1036,16 @@ export const Route = createFileRoute("/api/storage-proxy")({
               const nowIso = new Date().toISOString();
 
               if (mutateMethod === "POST") {
-                const inputList = Array.isArray(parsedBody)
+                const rawList = Array.isArray(parsedBody)
                   ? (parsedBody as Record<string, unknown>[])
                   : parsedBody && typeof parsedBody === "object"
                     ? [parsedBody as Record<string, unknown>]
                     : [];
+                const inputList = rawList.slice(0, 500);
 
-                for (const item of inputList) {
+                for (const rawItem of inputList) {
+                  if (!rawItem || typeof rawItem !== "object" || Array.isArray(rawItem)) continue;
+                  const item = sanitizeRecord(rawItem);
                   // Deduplicate blog_likes by (post_id, user_id) and comment_votes by (comment_id, user_id)
                   if (table === "blog_likes" && typeof item.post_id === "string") {
                     for (const [existingId, existingRow] of rowsById.entries()) {
@@ -1010,7 +1142,7 @@ export const Route = createFileRoute("/api/storage-proxy")({
               } else if (mutateMethod === "PATCH") {
                 const patchObj =
                   parsedBody && typeof parsedBody === "object" && !Array.isArray(parsedBody)
-                    ? (parsedBody as Record<string, unknown>)
+                    ? sanitizeRecord(parsedBody as Record<string, unknown>)
                     : {};
                 const safePatch: Record<string, unknown> = { ...patchObj };
                 delete safePatch.user_id;
@@ -1218,14 +1350,21 @@ export const Route = createFileRoute("/api/storage-proxy")({
             }
 
             const safeUploadPath = normalizeStoragePath(path);
+            const safeUploadMime = sanitizeUploadContentType(contentType, bucket, safeUploadPath);
 
             // Upload to Backblaze B2 when configured
             if (b2Config) {
-              await b2PutStorageObject(b2Config, bucket, safeUploadPath, fileBuffer, contentType);
+              await b2PutStorageObject(
+                b2Config,
+                bucket,
+                safeUploadPath,
+                fileBuffer,
+                safeUploadMime,
+              );
               // Best-effort mirror to Supabase Storage in background
               void adminClient.storage
                 .from(bucket)
-                .upload(safeUploadPath, fileBuffer, { contentType, upsert: true })
+                .upload(safeUploadPath, fileBuffer, { contentType: safeUploadMime, upsert: true })
                 .catch(() => {});
 
               return new Response(
@@ -1245,12 +1384,12 @@ export const Route = createFileRoute("/api/storage-proxy")({
             const { data, error } = await adminClient.storage
               .from(bucket)
               .upload(safeUploadPath, fileBuffer, {
-                contentType,
+                contentType: safeUploadMime,
                 upsert: true,
               });
 
             if (error) {
-              return new Response(JSON.stringify({ error: error.message }), {
+              return new Response(JSON.stringify({ error: "Storage upload failed" }), {
                 status: 400,
                 headers: JSON_SECURITY_HEADERS,
               });
@@ -1272,9 +1411,9 @@ export const Route = createFileRoute("/api/storage-proxy")({
           // 2. Batch Signed URLs
           if (action === "sign") {
             const body = (await request.json().catch(() => ({}))) as { paths?: string[] };
-            const paths = (body.paths ?? []).filter(
-              (p): p is string => typeof p === "string" && Boolean(p),
-            );
+            const paths = (body.paths ?? [])
+              .slice(0, 500)
+              .filter((p): p is string => typeof p === "string" && Boolean(p));
 
             const authorizedPaths = paths
               .map((p) => normalizeStoragePath(p))
@@ -1401,6 +1540,7 @@ export const Route = createFileRoute("/api/storage-proxy")({
           if (action === "remove") {
             const body = (await request.json().catch(() => ({}))) as { prefixes?: string[] };
             const prefixes = (body.prefixes ?? [])
+              .slice(0, 500)
               .filter(
                 (p): p is string =>
                   typeof p === "string" && isAllowedStoragePath(user, bucket, p, false),
@@ -1429,7 +1569,7 @@ export const Route = createFileRoute("/api/storage-proxy")({
 
             const { data, error } = await adminClient.storage.from(bucket).remove(prefixes);
             if (error) {
-              return new Response(JSON.stringify({ error: error.message }), {
+              return new Response(JSON.stringify({ error: "Storage remove failed" }), {
                 status: 400,
                 headers: JSON_SECURITY_HEADERS,
               });
@@ -1441,15 +1581,14 @@ export const Route = createFileRoute("/api/storage-proxy")({
             });
           }
 
-          return new Response(JSON.stringify({ error: `Unsupported action: ${action}` }), {
+          return new Response(JSON.stringify({ error: "Unsupported storage action" }), {
             status: 400,
             headers: JSON_SECURITY_HEADERS,
           });
-        } catch (err) {
-          console.error("Storage proxy error:", err);
+        } catch {
           return new Response(
             JSON.stringify({
-              error: err instanceof Error ? err.message : "Internal storage error",
+              error: "Internal storage error",
             }),
             { status: 500, headers: JSON_SECURITY_HEADERS },
           );

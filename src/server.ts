@@ -57,11 +57,23 @@ function withSecurityHeaders(response: Response): Response {
   if (!headers.has("Referrer-Policy")) {
     headers.set("Referrer-Policy", "no-referrer");
   }
+  if (!headers.has("X-Permitted-Cross-Domain-Policies")) {
+    headers.set("X-Permitted-Cross-Domain-Policies", "none");
+  }
   if (!headers.has("Strict-Transport-Security")) {
     headers.set("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload");
   }
   if (!headers.has("Permissions-Policy")) {
-    headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()");
+    headers.set(
+      "Permissions-Policy",
+      "camera=(self), microphone=(), geolocation=(), interest-cohort=(), payment=(), usb=()",
+    );
+  }
+  if (!headers.has("Content-Security-Policy")) {
+    headers.set(
+      "Content-Security-Policy",
+      "base-uri 'self'; object-src 'none'; form-action 'self'",
+    );
   }
   return new Response(response.body, {
     status: response.status,

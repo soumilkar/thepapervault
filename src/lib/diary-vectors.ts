@@ -266,6 +266,10 @@ interface CachedDiaryVector {
 
 const vectorCache = new Map<string, CachedDiaryVector>();
 
+export function clearDiaryVectorCache(): void {
+  vectorCache.clear();
+}
+
 function formatTemporalTerms(entryDate: string): { label: string; terms: string[] } {
   const parts = entryDate.split("-").map(Number);
   if (parts.length !== 3 || parts.some((n) => Number.isNaN(n))) {

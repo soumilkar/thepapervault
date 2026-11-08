@@ -2,6 +2,8 @@
 // Includes automatic lossless text compression (Deflate-Raw) and smart WebP photo optimization
 // right before AES-256-GCM encryption so storage holds 5x–10x more while staying 100% backward-compatible.
 
+import { clearDiaryVectorCache } from "@/lib/diary-vectors";
+
 const KDF_ITERATIONS = 250_000;
 const KEY_BITS = 256;
 
@@ -166,6 +168,7 @@ let decryptTextCache = new WeakMap<CryptoKey, Map<string, string>>();
 
 export function clearCryptoCache(): void {
   decryptTextCache = new WeakMap<CryptoKey, Map<string, string>>();
+  clearDiaryVectorCache();
 }
 
 export async function decryptText(key: CryptoKey, ctB64: string, ivB64: string): Promise<string> {

@@ -48,11 +48,12 @@ async function uploadMedia(userId: string, file: File, preallocatedPath?: string
   if (!ALLOWED[file.type]) throw new Error("Only JPEG, PNG, WebP, or GIF images are allowed");
   if (file.size > 15 * 1024 * 1024) throw new Error("Image must be smaller than 15 MB");
   const optimized = await optimizeImageBeforeEncryption(file);
-  const ext = ALLOWED[optimized.mime] || ALLOWED[file.type] || "webp";
+  const outMime = optimized.type || file.type || "image/webp";
+  const ext = ALLOWED[outMime] || ALLOWED[file.type] || "webp";
   const path = preallocatedPath || `${userId}/${crypto.randomUUID()}.${ext}`;
   const { error } = await supabase.storage
     .from(MEDIA_BUCKET)
-    .upload(path, optimized.blob, { contentType: optimized.mime });
+    .upload(path, optimized, { contentType: outMime });
   if (error) throw error;
   return path;
 }
