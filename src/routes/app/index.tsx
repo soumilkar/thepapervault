@@ -3,7 +3,6 @@ import { useQuery } from "@tanstack/react-query";
 import { memo, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { BookOpen, Image as ImageIcon, PenLine, Sparkles, StickyNote, Users } from "lucide-react";
-import { WelcomeTour } from "@/components/WelcomeTour";
 import { Markdown } from "@/components/Markdown";
 import { MusicPlayer } from "@/components/MusicSearch";
 import { WritingStreaks } from "@/components/WritingStreaks";
@@ -102,7 +101,6 @@ function Dashboard() {
 
   return (
     <div className="space-y-10">
-      <WelcomeTour userId={user.id} />
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <p className="font-hand text-2xl text-sepia">hello again</p>
