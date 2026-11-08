@@ -7,7 +7,6 @@ import { supabase } from "@/integrations/supabase/client";
 import { useVault } from "@/lib/vault";
 import { decryptText, encryptText } from "@/lib/crypto";
 import { decryptStreamChunk, postEncryptedCompanionRequest } from "@/lib/companion-transport";
-import { AppSelect } from "@/components/AppSelect";
 import { CHAT_MESSAGES_UPDATED, CHAT_SESSIONS_UPDATED } from "./chat";
 import { useBrowserDraft } from "@/lib/browser-drafts";
 import {
@@ -23,7 +22,6 @@ export const Route = createFileRoute("/app/chat/$sessionId")({
 });
 
 type Msg = { role: "user" | "assistant"; content: string; createdAt?: string };
-type Source = "both" | "diary" | "blog";
 
 const PROMPTS = [
   "I just need a soft, comforting place to rest my thoughts today.",
@@ -39,7 +37,6 @@ function isoDay(d: Date) {
 async function buildContext(
   userId: string,
   key: CryptoKey | null,
-  source: Source,
   startDate: string,
   endDate: string,
   userQuery: string,
@@ -47,42 +44,18 @@ async function buildContext(
 ): Promise<string> {
   if (!key) return "";
   type DiaryRow = { content: string; iv: string | null; entry_date: string };
-  type BlogRow = { title: string; content: string; tags: string[] | null; created_at: string };
-  const startIso = new Date(startDate).toISOString();
-  const endIso = new Date(new Date(endDate).getTime() + 24 * 3600 * 1000 - 1).toISOString();
 
-  const wantsDiary = source !== "blog";
-  const wantsBlog = source !== "diary";
-
-  const [diary, blog] = await Promise.all([
-    wantsDiary
-      ? supabase
-          .from("diary_entries")
-          .select("content,iv,entry_date" as never)
-          .eq("user_id", userId)
-          .gte("entry_date", startDate)
-          .lte("entry_date", endDate)
-          .order("entry_date", { ascending: false })
-          .limit(60)
-      : Promise.resolve({ data: [] as unknown as DiaryRow[] }),
-    wantsBlog
-      ? supabase
-          .from("blog_posts")
-          .select("title,content,tags,created_at")
-          .eq("user_id", userId)
-          .gte("created_at", startIso)
-          .lte("created_at", endIso)
-          .order("created_at", { ascending: false })
-          .limit(40)
-      : Promise.resolve({ data: [] as unknown as BlogRow[] }),
-  ]);
+  const diary = await supabase
+    .from("diary_entries")
+    .select("content,iv,entry_date" as never)
+    .eq("user_id", userId)
+    .gte("entry_date", startDate)
+    .lte("entry_date", endDate)
+    .order("entry_date", { ascending: false })
+    .limit(60);
 
   const diaryRows = (diary.data ?? []) as unknown as DiaryRow[];
-  const blogRows = (blog.data ?? []) as unknown as BlogRow[];
-
-  const BLOG_POST_MAX = 1500;
   const CONTEXT_BUDGET = 60_000;
-  const trim = (s: string, max: number) => (s.length > max ? `${s.slice(0, max)}…` : s);
 
   const diaryDecoded = (
     await Promise.all(
@@ -106,29 +79,14 @@ async function buildContext(
     )
   ).filter((item): item is DecodedDiaryEntry => item !== null);
 
-  const diarySection = wantsDiary
-    ? buildSmartVectorDiaryContext(
-        diaryDecoded,
-        userQuery,
-        recentConversationText,
-        startDate,
-        endDate,
-      ).formattedText
-    : "";
+  let combined = buildSmartVectorDiaryContext(
+    diaryDecoded,
+    userQuery,
+    recentConversationText,
+    startDate,
+    endDate,
+  ).formattedText;
 
-  const blogText = wantsBlog
-    ? blogRows
-        .map(
-          (b) =>
-            `# ${b.title}${b.tags?.length ? ` (${b.tags.join(", ")})` : ""}\n${trim(b.content, BLOG_POST_MAX)}`,
-        )
-        .join("\n\n---\n\n") || "(no blog posts in this range)"
-    : "";
-
-  const parts: string[] = [];
-  if (wantsDiary) parts.push(diarySection);
-  if (wantsBlog) parts.push(`=== BLOG POSTS (${startDate} → ${endDate}) ===\n${blogText}`);
-  let combined = parts.join("\n\n");
   if (combined.length > CONTEXT_BUDGET) {
     combined = `${combined.slice(0, CONTEXT_BUDGET)}\n\n(older entries trimmed to fit)`;
   }
@@ -335,7 +293,6 @@ function SessionChat() {
 
   const today = useMemo(() => new Date(), []);
   const monthAgo = useMemo(() => new Date(today.getTime() - 30 * 24 * 3600 * 1000), [today]);
-  const [source, setSource] = useState<Source>("both");
   const [startDate, setStartDate] = useState<string>(isoDay(monthAgo));
   const [endDate, setEndDate] = useState<string>(isoDay(today));
 
@@ -506,7 +463,7 @@ function SessionChat() {
         .join(" ");
 
       const [context] = await Promise.all([
-        buildContext(user.id, key, source, startDate, endDate, question, recentUserTurnsText),
+        buildContext(user.id, key, startDate, endDate, question, recentUserTurnsText),
         persistUserMsgPromise,
       ]);
       const emailPrefix = user.email?.split("@")[0]?.toLowerCase() ?? "";
@@ -694,7 +651,6 @@ function SessionChat() {
   };
 
   const resetToDefault = () => {
-    setSource("both");
     setStartDate(isoDay(monthAgo));
     setEndDate(isoDay(today));
     setTimeout(() => {
@@ -712,25 +668,10 @@ function SessionChat() {
 
   return (
     <div className="space-y-4">
-      <div className="paper-card p-4 grid gap-3 sm:grid-cols-4">
+      <div className="paper-card p-4 grid gap-3 sm:grid-cols-3">
         <label className="text-sm">
           <span className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">
-            Source
-          </span>
-          <AppSelect
-            value={source}
-            onValueChange={(v) => setSource(v as Source)}
-            triggerClassName="w-full h-9"
-            options={[
-              { value: "both", label: "Diary + Blog" },
-              { value: "diary", label: "Diary only" },
-              { value: "blog", label: "Blog only" },
-            ]}
-          />
-        </label>
-        <label className="text-sm">
-          <span className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">
-            From
+            Diary From
           </span>
           <input
             type="date"
