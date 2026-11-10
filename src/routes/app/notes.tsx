@@ -97,6 +97,18 @@ function formatSheetDate(iso?: string) {
   });
 }
 
+function getNoteOneLinePreview(content: string): string {
+  if (!content) return "No additional text";
+  const stripped = content
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/^[#>*\-\d.]+\s+/gm, "")
+    .replace(/[*_~`]+/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return stripped || "No additional text";
+}
+
 type Payload = { t?: string; c?: string; g?: string[]; ii?: string; im?: string };
 type Note = {
   id: string;
@@ -306,6 +318,19 @@ function NotesPage() {
       return cmp || a.id.localeCompare(b.id);
     });
   }, [notes.data, folders.data, filterFolder, sort, query]);
+
+  const folderCounts = useMemo(() => {
+    const allNotes = notes.data ?? [];
+    const allFolders = folders.data ?? [];
+    const counts = new Map<string, number>();
+    counts.set("all", allNotes.length);
+    counts.set("none", allNotes.filter((n) => !n.folder_id).length);
+    for (const f of allFolders) {
+      const desc = folderWithDescendants(allFolders, f.id);
+      counts.set(f.id, allNotes.filter((n) => n.folder_id && desc.has(n.folder_id)).length);
+    }
+    return counts;
+  }, [notes.data, folders.data]);
 
   const activeNote = useMemo(
     () =>
@@ -992,19 +1017,29 @@ function NotesPage() {
               className="fixed inset-0 z-30 bg-[oklch(0.28_0.04_50_/_0.08)] dark:bg-black/45 backdrop-blur-[1px]"
               onClick={() => setBrowseOpen(false)}
             />
-            <div className="absolute inset-x-0 top-full z-40 mt-2.5 w-full space-y-2.5 rounded-2xl border border-border/85 bg-[oklch(0.94_0.032_76_/_0.86)] dark:bg-card/95 p-3 text-foreground shadow-xl backdrop-blur-2xl sm:left-auto sm:right-0 sm:w-[30rem] sm:space-y-3 sm:p-4">
-              <div className="flex items-center justify-between gap-2 px-1">
+            <div className="absolute inset-x-0 top-full z-40 mt-2.5 w-full max-w-[calc(100vw-2rem)] space-y-3 rounded-2xl border border-border/85 bg-[oklch(0.94_0.032_76_/_0.9)] dark:bg-card/95 p-3 text-foreground shadow-xl backdrop-blur-2xl sm:left-auto sm:right-0 sm:p-4 md:w-[44rem] lg:w-[50rem]">
+              {/* Top Header Row */}
+              <div className="flex items-center justify-between gap-2 border-b border-border/60 pb-2.5 px-1">
                 <div className="flex min-w-0 items-center gap-2">
                   <Folder className="size-4 shrink-0 text-sepia" />
                   <span className="truncate font-serif text-base font-medium text-primary sm:text-lg">
-                    Browse Pages ({totalNotesCount})
+                    Browse Pages
+                  </span>
+                  <span className="text-xs text-muted-foreground tabular-nums">
+                    ·{" "}
+                    {filterFolder === "all"
+                      ? "All Notes"
+                      : filterFolder === "none"
+                        ? "Unfiled"
+                        : (fOpts.find((f) => f.value === filterFolder)?.label ?? "Folder")}{" "}
+                    ({totalNotesCount})
                   </span>
                 </div>
                 <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
                   <button
                     type="button"
                     onClick={startNewNote}
-                    className="flex items-center gap-1 rounded-lg border border-border/80 bg-card/75 px-2.5 py-1 text-xs font-medium text-primary shadow-2xs backdrop-blur-md transition hover:bg-card"
+                    className="flex items-center gap-1 rounded-lg border border-border/80 bg-card/80 px-2.5 py-1 text-xs font-medium text-primary shadow-2xs backdrop-blur-md transition hover:bg-card whitespace-nowrap shrink-0"
                   >
                     <Plus className="size-3.5" /> New Note
                   </button>
@@ -1019,161 +1054,433 @@ function NotesPage() {
                 </div>
               </div>
 
-              {/* Search Box (Translucent Warm-Tinted Box) */}
-              <label className="flex items-center gap-2 rounded-xl border border-border/75 bg-[oklch(0.89_0.038_74_/_0.52)] dark:bg-secondary/65 px-3.5 py-2 text-sm backdrop-blur-md transition focus-within:border-primary/40 focus-within:bg-card/80">
-                <Search className="size-4 shrink-0 text-sepia" />
-                <input
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Search notes..."
-                  className="min-w-0 flex-1 bg-transparent text-foreground outline-none placeholder:text-muted-foreground/80"
-                />
-                {query && (
-                  <button type="button" onClick={() => setQuery("")} aria-label="Clear search">
-                    <X className="size-4 text-muted-foreground hover:text-foreground" />
-                  </button>
-                )}
-              </label>
+              {/* ============================================================ */}
+              {/* TABLET & DESKTOP VIEW (md+): Apple Notes Side-by-Side Layout */}
+              {/* ============================================================ */}
+              <div className="hidden md:grid md:grid-cols-[230px_1fr] lg:grid-cols-[250px_1fr] md:gap-3.5 md:items-stretch">
+                {/* Left Column: Folders Sidebar + New Folder Creator */}
+                <div className="flex flex-col justify-between rounded-xl border border-border/75 bg-[oklch(0.89_0.038_74_/_0.52)] dark:bg-secondary/65 p-2.5 backdrop-blur-md">
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between px-2 py-0.5">
+                      <span className="text-xs font-medium text-muted-foreground">Folders</span>
+                      {filterFolder !== "all" && filterFolder !== "none" && (
+                        <button
+                          type="button"
+                          onClick={() => deleteFolder.mutate(filterFolder)}
+                          title="Delete selected folder"
+                          className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-muted-foreground transition hover:bg-secondary/80 hover:text-destructive"
+                        >
+                          <Trash2 className="size-3" />
+                          <span>Delete</span>
+                        </button>
+                      )}
+                    </div>
 
-              {/* Folder Filter & Sort Box (Translucent Warm-Tinted Box) */}
-              <div className="grid grid-cols-1 gap-2 rounded-xl border border-border/75 bg-[oklch(0.89_0.038_74_/_0.52)] dark:bg-secondary/65 p-2.5 text-xs backdrop-blur-md sm:flex sm:flex-wrap sm:items-center sm:justify-between sm:gap-2.5 sm:p-3 sm:text-sm">
-                <div className="flex items-center justify-between gap-2 sm:justify-start">
-                  <span className="flex items-center gap-1.5 text-muted-foreground sm:hidden">
-                    <Folder className="size-3.5 text-sepia" />
-                    Folder
-                  </span>
-                  <div className="flex min-w-0 flex-1 items-center justify-end gap-1.5 sm:flex-initial sm:justify-start">
-                    <Folder className="hidden size-4 shrink-0 text-sepia sm:inline" />
-                    <AppSelect
-                      value={filterFolder}
-                      onValueChange={(v) => setFilterFolder(v)}
-                      triggerClassName="w-full sm:w-auto border-border/80 bg-card/80 text-foreground hover:bg-card"
-                      options={[
-                        { value: "all", label: "All notes" },
-                        { value: "none", label: "No folder" },
-                        ...fOpts,
-                      ]}
-                    />
-                    {filterFolder !== "all" && filterFolder !== "none" && (
+                    <div className="max-h-[16.5rem] space-y-0.5 overflow-y-auto pr-0.5">
                       <button
                         type="button"
-                        onClick={() => deleteFolder.mutate(filterFolder)}
-                        title="Delete selected folder"
-                        className="rounded-md p-1.5 text-muted-foreground hover:bg-secondary/70 hover:text-destructive"
+                        onClick={() => setFilterFolder("all")}
+                        className={`flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm transition ${
+                          filterFolder === "all"
+                            ? "bg-primary text-primary-foreground font-medium shadow-2xs"
+                            : "text-foreground/85 hover:bg-card/70"
+                        }`}
                       >
-                        <Trash2 className="size-3.5" />
+                        <span className="flex min-w-0 items-center gap-2">
+                          <Folder
+                            className={`size-3.5 shrink-0 ${
+                              filterFolder === "all" ? "text-primary-foreground" : "text-sepia"
+                            }`}
+                          />
+                          <span className="truncate">All Notes</span>
+                        </span>
+                        <span
+                          className={`text-xs tabular-nums ${
+                            filterFolder === "all"
+                              ? "text-primary-foreground/85"
+                              : "text-muted-foreground"
+                          }`}
+                        >
+                          {folderCounts.get("all") ?? 0}
+                        </span>
                       </button>
-                    )}
-                  </div>
-                </div>
 
-                <label className="flex items-center justify-between gap-2 sm:justify-start">
-                  <span className="text-muted-foreground">Sort</span>
-                  <div className="min-w-0 flex-1 sm:flex-initial">
-                    <AppSelect
-                      value={sort}
-                      onValueChange={(v) => setSort(v as Sort)}
-                      triggerClassName="w-full sm:w-auto border-border/80 bg-card/80 text-foreground hover:bg-card"
-                      options={[
-                        { value: "newest", label: "Newest first" },
-                        { value: "oldest", label: "Oldest first" },
-                        { value: "edited", label: "Recently edited" },
-                        { value: "title", label: "Title A–Z" },
-                      ]}
-                    />
-                  </div>
-                </label>
-              </div>
+                      <button
+                        type="button"
+                        onClick={() => setFilterFolder("none")}
+                        className={`flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm transition ${
+                          filterFolder === "none"
+                            ? "bg-primary text-primary-foreground font-medium shadow-2xs"
+                            : "text-foreground/85 hover:bg-card/70"
+                        }`}
+                      >
+                        <span className="flex min-w-0 items-center gap-2">
+                          <FileText
+                            className={`size-3.5 shrink-0 ${
+                              filterFolder === "none" ? "text-primary-foreground" : "text-sepia"
+                            }`}
+                          />
+                          <span className="truncate">Unfiled Notes</span>
+                        </span>
+                        <span
+                          className={`text-xs tabular-nums ${
+                            filterFolder === "none"
+                              ? "text-primary-foreground/85"
+                              : "text-muted-foreground"
+                          }`}
+                        >
+                          {folderCounts.get("none") ?? 0}
+                        </span>
+                      </button>
 
-              {/* New Folder Creation Box (Translucent Warm-Tinted Box) */}
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  if (newFolder.trim()) createFolder.mutate(newFolder.trim());
-                }}
-                className="flex flex-col gap-2 rounded-xl border border-border/75 bg-[oklch(0.89_0.038_74_/_0.52)] dark:bg-secondary/65 p-2.5 text-xs backdrop-blur-md sm:flex-row sm:flex-wrap sm:items-center sm:p-3 sm:text-sm"
-              >
-                <input
-                  value={newFolder}
-                  onChange={(e) => setNewFolder(e.target.value)}
-                  placeholder="New folder"
-                  className="w-full rounded-md border border-border/80 bg-card/80 px-2.5 py-1.5 text-sm text-foreground outline-none placeholder:text-muted-foreground/80 focus:border-primary/40 sm:min-w-[7rem] sm:flex-1 sm:py-1"
-                />
-                <div className="flex items-center gap-2">
-                  <div className="min-w-0 flex-1 sm:flex-initial">
-                    <AppSelect
-                      value={newFolderParent}
-                      onValueChange={setNewFolderParent}
-                      triggerClassName="w-full sm:w-auto border-border/80 bg-card/80 text-foreground hover:bg-card"
-                      options={[
-                        { value: NONE, label: "Top level" },
-                        ...fOpts.map((o) => ({ value: o.value, label: `inside ${o.label}` })),
-                      ]}
-                    />
+                      {fOpts.map((o) => {
+                        const isSelectedFolder = filterFolder === o.value;
+                        const segments = o.label.split(" / ");
+                        const depth = Math.min(segments.length - 1, 4);
+                        const leafName = segments[segments.length - 1] || o.label;
+                        const count = folderCounts.get(o.value) ?? 0;
+                        return (
+                          <button
+                            key={o.value}
+                            type="button"
+                            onClick={() => setFilterFolder(o.value)}
+                            title={o.label}
+                            className={`flex w-full items-center justify-between gap-2 rounded-lg py-1.5 pr-2.5 text-left text-sm transition ${
+                              depth === 0
+                                ? "pl-2.5"
+                                : depth === 1
+                                  ? "pl-5"
+                                  : depth === 2
+                                    ? "pl-7"
+                                    : "pl-9"
+                            } ${
+                              isSelectedFolder
+                                ? "bg-primary text-primary-foreground font-medium shadow-2xs"
+                                : "text-foreground/85 hover:bg-card/70"
+                            }`}
+                          >
+                            <span className="flex min-w-0 items-center gap-2">
+                              <Folder
+                                className={`size-3.5 shrink-0 ${
+                                  isSelectedFolder ? "text-primary-foreground" : "text-sepia"
+                                }`}
+                              />
+                              <span className="truncate">{leafName}</span>
+                            </span>
+                            <span
+                              className={`text-xs tabular-nums ${
+                                isSelectedFolder
+                                  ? "text-primary-foreground/85"
+                                  : "text-muted-foreground"
+                              }`}
+                            >
+                              {count}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
-                  <button
-                    type="submit"
-                    className="flex shrink-0 items-center gap-1 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground shadow-2xs transition hover:opacity-95"
+
+                  {/* Pinned New Folder Form at Bottom of Folders Column */}
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      if (newFolder.trim()) createFolder.mutate(newFolder.trim());
+                    }}
+                    className="mt-3 space-y-2 border-t border-border/65 pt-2.5 text-xs"
                   >
-                    <FolderPlus className="size-3.5" /> Add
-                  </button>
-                </div>
-              </form>
-
-              {/* Saved Pages List (Each in a Translucent Warm-Tinted Box) */}
-              <div className="max-h-64 space-y-2 overflow-y-auto pr-0.5 sm:max-h-72">
-                {notes.isLoading && (
-                  <div className="rounded-xl border border-border/75 bg-[oklch(0.89_0.038_74_/_0.52)] dark:bg-secondary/65 p-3 font-hand text-sepia backdrop-blur-md">
-                    gathering notes...
-                  </div>
-                )}
-                {!notes.isLoading && filtered.length === 0 && (
-                  <div className="rounded-xl border border-border/75 bg-[oklch(0.89_0.038_74_/_0.52)] dark:bg-secondary/65 p-3 text-sm text-muted-foreground backdrop-blur-md">
-                    {notes.data?.length === 0 ? "No notes yet." : "No notes match."}
-                  </div>
-                )}
-                {filtered.map((n) => {
-                  const isSelected = n.id === selectedNoteId;
-                  const folderLabel = fOpts.find((f) => f.value === n.folder_id)?.label?.trim();
-                  return (
-                    <button
-                      key={n.id}
-                      type="button"
-                      onClick={() => openNoteInSheet(n, false)}
-                      className={`flex w-full items-start justify-between gap-3 rounded-xl border px-3 py-2.5 text-left backdrop-blur-md transition sm:px-3.5 ${
-                        isSelected
-                          ? "border-primary/45 bg-card/90 shadow-2xs"
-                          : "border-border/75 bg-[oklch(0.89_0.038_74_/_0.52)] dark:bg-secondary/60 hover:border-primary/30 hover:bg-card/80"
-                      }`}
-                    >
+                    <input
+                      value={newFolder}
+                      onChange={(e) => setNewFolder(e.target.value)}
+                      placeholder="New folder name..."
+                      className="w-full rounded-lg border border-border/80 bg-card/85 px-2.5 py-1.5 text-xs text-foreground outline-none placeholder:text-muted-foreground/80 focus:border-primary/40"
+                    />
+                    <div className="flex items-center gap-1.5">
                       <div className="min-w-0 flex-1">
-                        <div className="flex items-start gap-2">
-                          <FileText className="mt-1 size-3.5 shrink-0 text-sepia" />
-                          <div className="min-w-0 flex-1">
-                            <p className="break-words font-serif text-base font-medium leading-snug text-primary">
+                        <AppSelect
+                          value={newFolderParent}
+                          onValueChange={setNewFolderParent}
+                          triggerClassName="w-full border-border/80 bg-card/85 text-xs text-foreground hover:bg-card"
+                          options={[
+                            { value: NONE, label: "Top level" },
+                            ...fOpts.map((o) => ({ value: o.value, label: `inside ${o.label}` })),
+                          ]}
+                        />
+                      </div>
+                      <button
+                        type="submit"
+                        className="flex shrink-0 items-center gap-1 rounded-lg bg-primary px-2.5 py-1.5 text-xs font-medium text-primary-foreground shadow-2xs transition hover:opacity-95 whitespace-nowrap"
+                      >
+                        <FolderPlus className="size-3.5" /> Add
+                      </button>
+                    </div>
+                  </form>
+                </div>
+
+                {/* Right Column: Search, Sort & Apple Notes List (Title + Date & 1-Line Preview) */}
+                <div className="flex min-w-0 flex-col space-y-2.5">
+                  <div className="flex items-center gap-2">
+                    <label className="flex flex-1 items-center gap-2 rounded-xl border border-border/75 bg-[oklch(0.89_0.038_74_/_0.52)] dark:bg-secondary/65 px-3 py-1.5 text-sm backdrop-blur-md transition focus-within:border-primary/40 focus-within:bg-card/80">
+                      <Search className="size-4 shrink-0 text-sepia" />
+                      <input
+                        value={query}
+                        onChange={(e) => setQuery(e.target.value)}
+                        placeholder="Search notes..."
+                        className="min-w-0 flex-1 bg-transparent text-foreground outline-none placeholder:text-muted-foreground/80"
+                      />
+                      {query && (
+                        <button
+                          type="button"
+                          onClick={() => setQuery("")}
+                          aria-label="Clear search"
+                        >
+                          <X className="size-4 text-muted-foreground hover:text-foreground" />
+                        </button>
+                      )}
+                    </label>
+
+                    <div className="shrink-0">
+                      <AppSelect
+                        value={sort}
+                        onValueChange={(v) => setSort(v as Sort)}
+                        triggerClassName="border-border/80 bg-card/85 text-xs text-foreground hover:bg-card"
+                        options={[
+                          { value: "newest", label: "Newest first" },
+                          { value: "oldest", label: "Oldest first" },
+                          { value: "edited", label: "Recently edited" },
+                          { value: "title", label: "Title A–Z" },
+                        ]}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Apple Notes-Style List: Title on top, Date + 1-Line Preview side-by-side */}
+                  <div className="max-h-[22rem] flex-1 space-y-1.5 overflow-y-auto pr-0.5">
+                    {notes.isLoading && (
+                      <div className="rounded-xl border border-border/75 bg-[oklch(0.89_0.038_74_/_0.52)] dark:bg-secondary/65 p-4 font-hand text-sepia backdrop-blur-md">
+                        gathering notes...
+                      </div>
+                    )}
+                    {!notes.isLoading && filtered.length === 0 && (
+                      <div className="flex h-44 flex-col items-center justify-center rounded-xl border border-border/75 bg-[oklch(0.89_0.038_74_/_0.52)] dark:bg-secondary/65 p-4 text-center text-sm text-muted-foreground backdrop-blur-md">
+                        <p>{notes.data?.length === 0 ? "No notes yet." : "No notes match."}</p>
+                      </div>
+                    )}
+                    {filtered.map((n) => {
+                      const isSelected = n.id === selectedNoteId;
+                      const folderLabel = fOpts.find((f) => f.value === n.folder_id)?.label?.trim();
+                      const previewLine = getNoteOneLinePreview(n.content);
+                      return (
+                        <button
+                          key={n.id}
+                          type="button"
+                          onClick={() => openNoteInSheet(n, false)}
+                          className={`group flex w-full flex-col gap-1 rounded-xl border px-3.5 py-2.5 text-left backdrop-blur-md transition ${
+                            isSelected
+                              ? "border-primary/50 bg-card/95 shadow-xs"
+                              : "border-border/70 bg-[oklch(0.89_0.038_74_/_0.52)] dark:bg-secondary/60 hover:border-primary/30 hover:bg-card/80"
+                          }`}
+                        >
+                          <div className="flex items-baseline justify-between gap-2">
+                            <p className="min-w-0 flex-1 truncate font-serif text-base font-medium leading-snug text-primary">
                               {n.title || "Untitled"}
                             </p>
-                            {folderLabel && (
-                              <p className="mt-0.5 text-xs text-muted-foreground">{folderLabel}</p>
+                            {folderLabel && filterFolder === "all" && (
+                              <span className="shrink-0 truncate max-w-[10rem] text-[11px] text-muted-foreground">
+                                {folderLabel}
+                              </span>
                             )}
                           </div>
+
+                          <div className="flex items-baseline gap-2 text-xs">
+                            <span className="shrink-0 font-medium tabular-nums text-foreground/80">
+                              {formatSheetDate(n.updated_at || n.created_at)}
+                            </span>
+                            <span className="min-w-0 flex-1 truncate text-muted-foreground">
+                              {previewLine}
+                            </span>
+                          </div>
+
+                          {n.tags.length > 0 && (
+                            <div className="flex flex-wrap items-center gap-1.5 pt-0.5 text-[11px] text-sepia">
+                              {n.tags.map((t) => (
+                                <span key={t}>#{t}</span>
+                              ))}
+                            </div>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              {/* ============================================================ */}
+              {/* MOBILE VIEW (< md): Classic Menu Style with Apple Notes Rows */}
+              {/* ============================================================ */}
+              <div className="space-y-2.5 md:hidden">
+                {/* Search Box (Translucent Warm-Tinted Box) */}
+                <label className="flex items-center gap-2 rounded-xl border border-border/75 bg-[oklch(0.89_0.038_74_/_0.52)] dark:bg-secondary/65 px-3.5 py-2 text-sm backdrop-blur-md transition focus-within:border-primary/40 focus-within:bg-card/80">
+                  <Search className="size-4 shrink-0 text-sepia" />
+                  <input
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    placeholder="Search notes..."
+                    className="min-w-0 flex-1 bg-transparent text-foreground outline-none placeholder:text-muted-foreground/80"
+                  />
+                  {query && (
+                    <button type="button" onClick={() => setQuery("")} aria-label="Clear search">
+                      <X className="size-4 text-muted-foreground hover:text-foreground" />
+                    </button>
+                  )}
+                </label>
+
+                {/* Folder Filter & Sort Box (Translucent Warm-Tinted Box) */}
+                <div className="grid grid-cols-1 gap-2 rounded-xl border border-border/75 bg-[oklch(0.89_0.038_74_/_0.52)] dark:bg-secondary/65 p-2.5 text-xs backdrop-blur-md">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="flex items-center gap-1.5 text-muted-foreground">
+                      <Folder className="size-3.5 text-sepia" />
+                      Folder
+                    </span>
+                    <div className="flex min-w-0 flex-1 items-center justify-end gap-1.5">
+                      <AppSelect
+                        value={filterFolder}
+                        onValueChange={(v) => setFilterFolder(v)}
+                        triggerClassName="w-full border-border/80 bg-card/80 text-foreground hover:bg-card"
+                        options={[
+                          { value: "all", label: `All notes (${folderCounts.get("all") ?? 0})` },
+                          { value: "none", label: `No folder (${folderCounts.get("none") ?? 0})` },
+                          ...fOpts.map((o) => ({
+                            value: o.value,
+                            label: `${o.label} (${folderCounts.get(o.value) ?? 0})`,
+                          })),
+                        ]}
+                      />
+                      {filterFolder !== "all" && filterFolder !== "none" && (
+                        <button
+                          type="button"
+                          onClick={() => deleteFolder.mutate(filterFolder)}
+                          title="Delete selected folder"
+                          className="rounded-md p-1.5 text-muted-foreground hover:bg-secondary/70 hover:text-destructive"
+                        >
+                          <Trash2 className="size-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  <label className="flex items-center justify-between gap-2">
+                    <span className="text-muted-foreground">Sort</span>
+                    <div className="min-w-0 flex-1">
+                      <AppSelect
+                        value={sort}
+                        onValueChange={(v) => setSort(v as Sort)}
+                        triggerClassName="w-full border-border/80 bg-card/80 text-foreground hover:bg-card"
+                        options={[
+                          { value: "newest", label: "Newest first" },
+                          { value: "oldest", label: "Oldest first" },
+                          { value: "edited", label: "Recently edited" },
+                          { value: "title", label: "Title A–Z" },
+                        ]}
+                      />
+                    </div>
+                  </label>
+                </div>
+
+                {/* New Folder Creation Box (Translucent Warm-Tinted Box) */}
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    if (newFolder.trim()) createFolder.mutate(newFolder.trim());
+                  }}
+                  className="flex flex-col gap-2 rounded-xl border border-border/75 bg-[oklch(0.89_0.038_74_/_0.52)] dark:bg-secondary/65 p-2.5 text-xs backdrop-blur-md"
+                >
+                  <input
+                    value={newFolder}
+                    onChange={(e) => setNewFolder(e.target.value)}
+                    placeholder="New folder"
+                    className="w-full rounded-md border border-border/80 bg-card/80 px-2.5 py-1.5 text-sm text-foreground outline-none placeholder:text-muted-foreground/80 focus:border-primary/40"
+                  />
+                  <div className="flex items-center gap-2">
+                    <div className="min-w-0 flex-1">
+                      <AppSelect
+                        value={newFolderParent}
+                        onValueChange={setNewFolderParent}
+                        triggerClassName="w-full border-border/80 bg-card/80 text-foreground hover:bg-card"
+                        options={[
+                          { value: NONE, label: "Top level" },
+                          ...fOpts.map((o) => ({ value: o.value, label: `inside ${o.label}` })),
+                        ]}
+                      />
+                    </div>
+                    <button
+                      type="submit"
+                      className="flex shrink-0 items-center gap-1 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground shadow-2xs transition hover:opacity-95"
+                    >
+                      <FolderPlus className="size-3.5" /> Add
+                    </button>
+                  </div>
+                </form>
+
+                {/* Saved Pages List (Apple Notes Style: Title + Date & 1-Line Preview) */}
+                <div className="max-h-64 space-y-2 overflow-y-auto pr-0.5">
+                  {notes.isLoading && (
+                    <div className="rounded-xl border border-border/75 bg-[oklch(0.89_0.038_74_/_0.52)] dark:bg-secondary/65 p-3 font-hand text-sepia backdrop-blur-md">
+                      gathering notes...
+                    </div>
+                  )}
+                  {!notes.isLoading && filtered.length === 0 && (
+                    <div className="rounded-xl border border-border/75 bg-[oklch(0.89_0.038_74_/_0.52)] dark:bg-secondary/65 p-3 text-sm text-muted-foreground backdrop-blur-md">
+                      {notes.data?.length === 0 ? "No notes yet." : "No notes match."}
+                    </div>
+                  )}
+                  {filtered.map((n) => {
+                    const isSelected = n.id === selectedNoteId;
+                    const folderLabel = fOpts.find((f) => f.value === n.folder_id)?.label?.trim();
+                    const previewLine = getNoteOneLinePreview(n.content);
+                    return (
+                      <button
+                        key={n.id}
+                        type="button"
+                        onClick={() => openNoteInSheet(n, false)}
+                        className={`flex w-full flex-col gap-1 rounded-xl border px-3 py-2.5 text-left backdrop-blur-md transition ${
+                          isSelected
+                            ? "border-primary/45 bg-card/90 shadow-2xs"
+                            : "border-border/75 bg-[oklch(0.89_0.038_74_/_0.52)] dark:bg-secondary/60 hover:border-primary/30 hover:bg-card/80"
+                        }`}
+                      >
+                        <div className="flex items-baseline justify-between gap-2">
+                          <p className="min-w-0 flex-1 truncate font-serif text-base font-medium leading-snug text-primary">
+                            {n.title || "Untitled"}
+                          </p>
+                          {folderLabel && filterFolder === "all" && (
+                            <span className="shrink-0 truncate max-w-[7.5rem] text-[11px] text-muted-foreground">
+                              {folderLabel}
+                            </span>
+                          )}
                         </div>
+
+                        <div className="flex items-baseline gap-2 text-xs">
+                          <span className="shrink-0 font-medium tabular-nums text-foreground/80">
+                            {formatSheetDate(n.updated_at || n.created_at)}
+                          </span>
+                          <span className="min-w-0 flex-1 truncate text-muted-foreground">
+                            {previewLine}
+                          </span>
+                        </div>
+
                         {n.tags.length > 0 && (
-                          <div className="mt-1 flex flex-wrap gap-1 pl-5">
+                          <div className="flex flex-wrap gap-1.5 pt-0.5 text-[11px] text-sepia">
                             {n.tags.map((t) => (
-                              <span key={t} className="text-[11px] text-sepia">
-                                #{t}
-                              </span>
+                              <span key={t}>#{t}</span>
                             ))}
                           </div>
                         )}
-                      </div>
-                      <span className="shrink-0 pt-0.5 text-xs text-muted-foreground">
-                        {formatSheetDate(n.updated_at || n.created_at)}
-                      </span>
-                    </button>
-                  );
-                })}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             </div>
           </>

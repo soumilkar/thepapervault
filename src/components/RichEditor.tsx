@@ -5,9 +5,10 @@ import {
   useState,
   type ClipboardEvent,
   type KeyboardEvent,
+  type MouseEvent,
   type ReactNode,
 } from "react";
-import { Bold, Italic, Quote, List, Link2, ImagePlus, X } from "lucide-react";
+import { Bold, Italic, Quote, List, ListChecks, Link2, ImagePlus, X } from "lucide-react";
 import { isImageUrl } from "@/lib/rich-text";
 
 function escapeHtml(s: string): string {
@@ -53,7 +54,7 @@ export function markdownToHtml(md: string): string {
   if (!md) return "<p><br></p>";
   const lines = md.replace(/\r\n/g, "\n").split("\n");
   const out: string[] = [];
-  let inList = false;
+  let inList: false | "ul" | "checklist" = false;
 
   const closeList = () => {
     if (inList) {
@@ -75,12 +76,29 @@ export function markdownToHtml(md: string): string {
       continue;
     }
 
+    // Checklist item: - [ ] item or - [x] item
+    const taskMatch = /^[-*+]\s+\[([ xX])\]\s*(.*)$/.exec(line);
+    if (taskMatch) {
+      if (inList !== "checklist") {
+        closeList();
+        out.push('<ul data-checklist="true" class="list-none pl-0.5 space-y-1.5">');
+        inList = "checklist";
+      }
+      const isChecked = taskMatch[1].toLowerCase() === "x";
+      const itemHtml = formatInlineMarkdownToHtml(taskMatch[2]);
+      out.push(
+        `<li data-task="true" data-checked="${isChecked ? "true" : "false"}" class="flex items-start gap-2.5 leading-relaxed"><input type="checkbox" contenteditable="false" ${isChecked ? "checked" : ""} class="mt-1.5 size-4 shrink-0 rounded border-border accent-primary cursor-pointer select-none" /><span class="${isChecked ? "line-through text-muted-foreground/75" : ""}">${itemHtml || "<br>"}</span></li>`,
+      );
+      continue;
+    }
+
     // Unordered list item: - item or * item
     const ulMatch = /^[-*]\s+(.*)$/.exec(line);
     if (ulMatch) {
-      if (!inList) {
+      if (inList !== "ul") {
+        closeList();
         out.push("<ul>");
-        inList = true;
+        inList = "ul";
       }
       const itemHtml = formatInlineMarkdownToHtml(ulMatch[1]);
       out.push(`<li>${itemHtml || "<br>"}</li>`);
@@ -133,7 +151,7 @@ function serializeInline(node: Node): string {
   if (el.hasAttribute("data-md-image")) {
     return el.getAttribute("data-md-image") ?? "";
   }
-  if (tag === "BR") return "";
+  if (tag === "BR" || tag === "INPUT") return "";
   if (tag === "IMG") {
     const src = el.getAttribute("src") ?? "";
     return src ? `\n${src}\n` : "";
@@ -217,10 +235,23 @@ export function htmlToMarkdown(root: HTMLElement): string {
       return;
     }
     if (tag === "UL") {
+      const isChecklistUl = el.getAttribute("data-checklist") === "true";
       for (const li of Array.from(el.children)) {
         if (li.tagName.toUpperCase() === "LI") {
-          const t = serializeInline(li).trim();
-          if (t) lines.push(`- ${t}`);
+          const liEl = li as HTMLElement;
+          const checkbox = liEl.querySelector('input[type="checkbox"]') as HTMLInputElement | null;
+          const isTask =
+            isChecklistUl || liEl.getAttribute("data-task") === "true" || Boolean(checkbox);
+          const isChecked =
+            checkbox?.checked ||
+            checkbox?.hasAttribute("checked") ||
+            liEl.getAttribute("data-checked") === "true";
+          const t = serializeInline(liEl).trim();
+          if (isTask) {
+            lines.push(`- [${isChecked ? "x" : " "}] ${t}`);
+          } else if (t) {
+            lines.push(`- ${t}`);
+          }
         }
       }
       return;
@@ -318,6 +349,7 @@ export function RichEditor({
     italic: false,
     quote: false,
     list: false,
+    checklist: false,
   });
   const [linkPromptOpen, setLinkPromptOpen] = useState(false);
   const [linkUrl, setLinkUrl] = useState("");
@@ -333,12 +365,21 @@ export function RichEditor({
     const blockTag = getClosestBlockTag(el);
     let inQuote = false;
     let inList = false;
+    let inChecklist = false;
     let node: Node | null = sel.anchorNode;
     while (node && node !== el) {
       if (node.nodeType === Node.ELEMENT_NODE) {
-        const t = (node as HTMLElement).tagName.toUpperCase();
+        const elem = node as HTMLElement;
+        const t = elem.tagName.toUpperCase();
         if (t === "BLOCKQUOTE") inQuote = true;
-        if (t === "UL" || t === "LI") inList = true;
+        if (
+          elem.getAttribute("data-checklist") === "true" ||
+          elem.getAttribute("data-task") === "true"
+        ) {
+          inChecklist = true;
+        } else if (t === "UL" || t === "LI") {
+          inList = true;
+        }
       }
       node = node.parentNode;
     }
@@ -348,7 +389,8 @@ export function RichEditor({
       bold: document.queryCommandState("bold"),
       italic: document.queryCommandState("italic"),
       quote: inQuote,
-      list: inList,
+      list: inList && !inChecklist,
+      checklist: inChecklist,
     });
   }, []);
 
@@ -401,7 +443,7 @@ export function RichEditor({
   }, []);
 
   const handleToolbarAction = useCallback(
-    (kind: "h2" | "bold" | "italic" | "quote" | "list") => {
+    (kind: "h2" | "bold" | "italic" | "quote" | "list" | "checklist") => {
       const el = editorRef.current;
       if (!el) return;
       restoreSelection();
@@ -412,6 +454,26 @@ export function RichEditor({
         document.execCommand("italic", false);
       } else if (kind === "list") {
         document.execCommand("insertUnorderedList", false);
+      } else if (kind === "checklist") {
+        const currentMd = htmlToMarkdown(el);
+        const nextMd = currentMd.trim() ? `${currentMd.replace(/\s+$/, "")}\n- [ ] ` : "- [ ] ";
+        lastEmittedMdRef.current = nextMd;
+        el.innerHTML = markdownToHtml(nextMd);
+        onChange(nextMd);
+        // Move cursor to end of newly inserted checklist item
+        const spans = el.querySelectorAll('li[data-task="true"] span');
+        const lastSpan = spans[spans.length - 1];
+        if (lastSpan) {
+          const range = document.createRange();
+          range.selectNodeContents(lastSpan);
+          range.collapse(false);
+          const sel = window.getSelection();
+          sel?.removeAllRanges();
+          sel?.addRange(range);
+          savedRangeRef.current = range.cloneRange();
+        }
+        syncFormats();
+        return;
       } else if (kind === "h2") {
         const currentTag = getClosestBlockTag(el);
         if (currentTag === "H2") {
@@ -442,7 +504,7 @@ export function RichEditor({
 
       emitChange();
     },
-    [restoreSelection, emitChange],
+    [restoreSelection, emitChange, onChange, syncFormats],
   );
 
   const handleInsertLink = useCallback(() => {
@@ -470,12 +532,90 @@ export function RichEditor({
     emitChange();
   }, [linkUrl, linkText, restoreSelection, emitChange]);
 
+  const handleEditorClick = (e: MouseEvent<HTMLDivElement>) => {
+    const target = e.target as HTMLElement | null;
+    if (
+      target &&
+      target.tagName.toUpperCase() === "INPUT" &&
+      (target as HTMLInputElement).type === "checkbox"
+    ) {
+      const checkbox = target as HTMLInputElement;
+      const isChecked = checkbox.checked;
+      if (isChecked) {
+        checkbox.setAttribute("checked", "");
+      } else {
+        checkbox.removeAttribute("checked");
+      }
+      const li = checkbox.closest('li[data-task="true"]');
+      if (li) {
+        li.setAttribute("data-checked", isChecked ? "true" : "false");
+        const span = li.querySelector("span");
+        if (span) {
+          span.className = isChecked ? "line-through text-muted-foreground/75" : "";
+        }
+      }
+      emitChange();
+    }
+  };
+
   const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     const el = editorRef.current;
     if (!el) return;
 
-    // Exit H2 or BLOCKQUOTE cleanly on Enter into a fresh paragraph
+    // Handle Enter inside a checklist item
     if (e.key === "Enter" && !e.shiftKey) {
+      const sel = window.getSelection();
+      let taskLi: HTMLElement | null = null;
+      let node: Node | null = sel?.anchorNode ?? null;
+      while (node && node !== el) {
+        if (
+          node.nodeType === Node.ELEMENT_NODE &&
+          (node as HTMLElement).getAttribute("data-task") === "true"
+        ) {
+          taskLi = node as HTMLElement;
+          break;
+        }
+        node = node.parentNode;
+      }
+
+      if (taskLi) {
+        e.preventDefault();
+        const itemText = serializeInline(taskLi).trim();
+        const taskUl = taskLi.parentElement;
+        if (!itemText && taskUl) {
+          // Empty checklist item -> exit checklist into a fresh paragraph
+          const p = document.createElement("p");
+          p.innerHTML = "<br>";
+          taskUl.insertAdjacentElement("afterend", p);
+          taskLi.remove();
+          if (taskUl.children.length === 0) taskUl.remove();
+          const range = document.createRange();
+          range.selectNodeContents(p);
+          range.collapse(true);
+          sel?.removeAllRanges();
+          sel?.addRange(range);
+          emitChange();
+          return;
+        }
+        // Insert a new unchecked checklist item right after the current one
+        const newLi = document.createElement("li");
+        newLi.setAttribute("data-task", "true");
+        newLi.setAttribute("data-checked", "false");
+        newLi.className = "flex items-start gap-2.5 leading-relaxed";
+        newLi.innerHTML =
+          '<input type="checkbox" contenteditable="false" class="mt-1.5 size-4 shrink-0 rounded border-border accent-primary cursor-pointer select-none" /><span><br></span>';
+        taskLi.insertAdjacentElement("afterend", newLi);
+        const span = newLi.querySelector("span") ?? newLi;
+        const range = document.createRange();
+        range.selectNodeContents(span);
+        range.collapse(true);
+        sel?.removeAllRanges();
+        sel?.addRange(range);
+        emitChange();
+        return;
+      }
+
+      // Exit H2 or BLOCKQUOTE cleanly on Enter into a fresh paragraph
       const blockTag = getClosestBlockTag(el);
       if (
         blockTag === "H2" ||
@@ -491,7 +631,7 @@ export function RichEditor({
       }
     }
 
-    // Live markdown prefix conversion on Space (e.g. typing "## ", "> ", "- ")
+    // Live markdown prefix conversion on Space (e.g. typing "## ", "> ", "- ", "[] ")
     if (e.key === " ") {
       const sel = window.getSelection();
       if (sel && sel.isCollapsed && sel.anchorNode?.nodeType === Node.TEXT_NODE) {
@@ -509,6 +649,17 @@ export function RichEditor({
           textNode.textContent = textNode.textContent?.slice(sel.anchorOffset) ?? "";
           document.execCommand("formatBlock", false, "blockquote");
           emitChange();
+          return;
+        }
+        if (
+          textBefore === "[]" ||
+          textBefore === "[ ]" ||
+          textBefore === "- []" ||
+          textBefore === "- [ ]"
+        ) {
+          e.preventDefault();
+          textNode.textContent = textNode.textContent?.slice(sel.anchorOffset) ?? "";
+          handleToolbarAction("checklist");
           return;
         }
         if (textBefore === "-" || textBefore === "*") {
@@ -613,6 +764,21 @@ export function RichEditor({
           >
             <List className="size-4" />
           </button>
+          <button
+            type="button"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              handleToolbarAction("checklist");
+            }}
+            title="Interactive checklist"
+            className={`rounded-md p-1.5 transition ${
+              activeFormats.checklist
+                ? "bg-secondary text-primary shadow-2xs"
+                : "text-foreground/80 hover:bg-secondary hover:text-primary"
+            }`}
+          >
+            <ListChecks className="size-4" />
+          </button>
         </div>
 
         <div className="flex flex-wrap items-center gap-3 sm:gap-4">
@@ -683,7 +849,7 @@ export function RichEditor({
 
         {/* WYSIWYG Editable Surface */}
         <div className="relative">
-          {isEmpty && !activeFormats.list && !activeFormats.quote && (
+          {isEmpty && !activeFormats.list && !activeFormats.checklist && !activeFormats.quote && (
             <div
               className={`pointer-events-none absolute left-0 top-0 select-none text-muted-foreground/50 ${
                 activeFormats.h2
@@ -699,12 +865,13 @@ export function RichEditor({
             contentEditable
             suppressContentEditableWarning
             onInput={emitChange}
+            onClick={handleEditorClick}
             onKeyUp={syncFormats}
             onMouseUp={syncFormats}
             onFocus={syncFormats}
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
-            className={`${minHeightClass} w-full bg-transparent text-base leading-relaxed text-foreground/90 outline-none [&_a]:text-accent [&_a]:underline [&_a]:underline-offset-2 [&_b]:font-semibold [&_b]:text-primary [&_blockquote]:my-3 [&_blockquote]:border-l-2 [&_blockquote]:border-accent/60 [&_blockquote]:pl-3.5 [&_blockquote]:italic [&_blockquote]:text-sepia [&_em]:italic [&_h1]:mt-5 [&_h1]:mb-2.5 [&_h1]:font-serif [&_h1]:text-3xl [&_h1]:text-primary [&_h2]:mt-4 [&_h2]:mb-2 [&_h2]:font-serif [&_h2]:text-2xl [&_h2]:text-primary [&_h3]:mt-3 [&_h3]:mb-1.5 [&_h3]:font-serif [&_h3]:text-xl [&_h3]:text-primary [&_i]:italic [&_li]:leading-relaxed [&_ol]:my-2.5 [&_ol]:list-decimal [&_ol]:space-y-1 [&_ol]:pl-5 [&_p]:my-1.5 [&_strong]:font-semibold [&_strong]:text-primary [&_ul]:my-2.5 [&_ul]:list-disc [&_ul]:space-y-1 [&_ul]:pl-5`}
+            className={`${minHeightClass} w-full bg-transparent text-base leading-relaxed text-foreground/90 outline-none [&_a]:text-accent [&_a]:underline [&_a]:underline-offset-2 [&_b]:font-semibold [&_b]:text-primary [&_blockquote]:my-3 [&_blockquote]:border-l-2 [&_blockquote]:border-accent/60 [&_blockquote]:pl-3.5 [&_blockquote]:italic [&_blockquote]:text-sepia [&_em]:italic [&_h1]:mt-5 [&_h1]:mb-2.5 [&_h1]:font-serif [&_h1]:text-3xl [&_h1]:text-primary [&_h2]:mt-4 [&_h2]:mb-2 [&_h2]:font-serif [&_h2]:text-2xl [&_h2]:text-primary [&_h3]:mt-3 [&_h3]:mb-1.5 [&_h3]:font-serif [&_h3]:text-xl [&_h3]:text-primary [&_i]:italic [&_li]:leading-relaxed [&_ol]:my-2.5 [&_ol]:list-decimal [&_ol]:space-y-1 [&_ol]:pl-5 [&_p]:my-1.5 [&_strong]:font-semibold [&_strong]:text-primary [&_ul]:my-2.5 [&_ul]:list-disc [&_ul]:space-y-1 [&_ul]:pl-5 [&_ul[data-checklist='true']]:list-none [&_ul[data-checklist='true']]:pl-0.5`}
           />
         </div>
 

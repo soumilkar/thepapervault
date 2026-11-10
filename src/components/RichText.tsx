@@ -6,10 +6,16 @@ import { toRichMarkdown } from "@/lib/rich-text";
 export const RichText = memo(function RichText({
   children,
   className = "",
+  onToggleTask,
 }: {
   children: string;
   className?: string;
+  onToggleTask?: (taskIndex: number) => void;
 }) {
   const transformed = useMemo(() => toRichMarkdown(children), [children]);
-  return <Markdown className={className}>{transformed}</Markdown>;
+  return (
+    <Markdown className={className} onToggleTask={onToggleTask}>
+      {transformed}
+    </Markdown>
+  );
 });

@@ -1,6 +1,7 @@
-import { memo } from "react";
+import { memo, useMemo } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { TASK_LINE_REGEX } from "@/lib/rich-text";
 
 const REMARK_PLUGINS = [remarkGfm];
 
@@ -18,7 +19,7 @@ function isSafeMarkdownImageSrc(url?: string): boolean {
   return /^(?:https:\/\/|\/[^/])/i.test(trimmed);
 }
 
-const MARKDOWN_COMPONENTS: Components = {
+const BASE_MARKDOWN_COMPONENTS: Components = {
   h1: ({ node: _node, ...p }) => (
     <h1 className="font-serif text-3xl text-primary mt-5 mb-2.5" {...p} />
   ),
@@ -29,9 +30,33 @@ const MARKDOWN_COMPONENTS: Components = {
     <h3 className="font-serif text-xl text-primary mt-4 mb-1.5" {...p} />
   ),
   p: ({ node: _node, ...p }) => <p className="leading-relaxed my-2.5" {...p} />,
-  ul: ({ node: _node, ...p }) => <ul className="my-3 list-disc pl-5 space-y-1.5" {...p} />,
+  ul: ({ node: _node, className, ...p }) => {
+    const isTaskList = (className || "").includes("contains-task-list");
+    return (
+      <ul
+        className={
+          isTaskList
+            ? `my-2.5 list-none pl-0.5 space-y-1.5 ${className ?? ""}`
+            : `my-3 list-disc pl-5 space-y-1.5 ${className ?? ""}`
+        }
+        {...p}
+      />
+    );
+  },
   ol: ({ node: _node, ...p }) => <ol className="my-3 list-decimal pl-5 space-y-1.5" {...p} />,
-  li: ({ node: _node, ...p }) => <li className="leading-relaxed" {...p} />,
+  li: ({ node: _node, className, ...p }) => {
+    const isTaskItem = (className || "").includes("task-list-item");
+    return (
+      <li
+        className={
+          isTaskItem
+            ? `flex items-start gap-2.5 leading-relaxed [&:has(input:checked)]:text-muted-foreground/75 [&:has(input:checked)]:line-through ${className ?? ""}`
+            : `leading-relaxed ${className ?? ""}`
+        }
+        {...p}
+      />
+    );
+  },
   a: ({ node: _node, href, children, ...p }) => {
     const isSafe = isSafeMarkdownUrl(href);
     return (
@@ -40,6 +65,7 @@ const MARKDOWN_COMPONENTS: Components = {
         target="_blank"
         rel="noreferrer noopener"
         href={isSafe ? href : undefined}
+        onClick={(e) => e.stopPropagation()}
         {...p}
       >
         {children}
@@ -98,13 +124,61 @@ const MARKDOWN_COMPONENTS: Components = {
 export const Markdown = memo(function Markdown({
   children,
   className = "",
+  onToggleTask,
 }: {
   children: string;
   className?: string;
+  onToggleTask?: (taskIndex: number) => void;
 }) {
+  const lineToTaskIndex = useMemo(() => {
+    const map = new Map<number, number>();
+    const lines = children.split("\n");
+    let taskIdx = 0;
+    for (let i = 0; i < lines.length; i++) {
+      if (TASK_LINE_REGEX.test(lines[i].replace(/\s+$/, ""))) {
+        map.set(i + 1, taskIdx++);
+      }
+    }
+    return map;
+  }, [children]);
+
+  const components = useMemo<Components>(() => {
+    return {
+      ...BASE_MARKDOWN_COMPONENTS,
+      input: ({ node, type, checked, disabled, ...rest }) => {
+        if (type === "checkbox") {
+          const line = node?.position?.start?.line ?? -1;
+          const taskIdx = lineToTaskIndex.get(line);
+          const interactive = Boolean(onToggleTask && taskIdx !== undefined);
+          return (
+            <input
+              type="checkbox"
+              checked={Boolean(checked)}
+              disabled={!interactive && Boolean(disabled)}
+              readOnly={!interactive}
+              onClick={(e) => {
+                e.stopPropagation();
+              }}
+              onChange={(e) => {
+                e.stopPropagation();
+                if (interactive && taskIdx !== undefined) {
+                  onToggleTask?.(taskIdx);
+                }
+              }}
+              className={`mt-1 size-4 shrink-0 rounded border-border accent-primary transition ${
+                interactive ? "cursor-pointer hover:scale-105" : "cursor-default"
+              }`}
+            />
+          );
+        }
+        return <input type={type} checked={checked} disabled={disabled} {...rest} />;
+      },
+    };
+  }, [lineToTaskIndex, onToggleTask]);
+
   return (
     <div className={`prose-paper ${className}`}>
-      <ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={MARKDOWN_COMPONENTS}>
+      <ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={components}>
         {children}
       </ReactMarkdown>
     </div>
