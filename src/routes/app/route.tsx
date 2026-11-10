@@ -32,6 +32,7 @@ import {
   getCachedAuthSession,
   OFFLINE_DATA_UPDATED_EVENT,
   OFFLINE_SYNC_SUCCESS_EVENT,
+  resetSessionSyncCache,
   syncAllToBackblazeB2,
   triggerAutoSync,
 } from "@/lib/offline-supabase";
@@ -131,7 +132,9 @@ function AuthedLayout() {
   // Warm the user-profile query in background without blocking route navigation
   useQuery({
     queryKey: ["user-profile", user.id],
-    initialData: profileDisplayName ? { id: user.id, display_name: profileDisplayName } : undefined,
+    placeholderData: profileDisplayName
+      ? { id: user.id, display_name: profileDisplayName }
+      : undefined,
     queryFn: async () => {
       const { data } = await supabase
         .from("profiles")
@@ -155,6 +158,9 @@ function AuthedLayout() {
       qc.invalidateQueries({ queryKey: ["diary-metrics"] });
       qc.invalidateQueries({ queryKey: ["public-diary-feed"] });
       qc.invalidateQueries({ queryKey: ["blog"] });
+      qc.invalidateQueries({ queryKey: ["likes"] });
+      qc.invalidateQueries({ queryKey: ["comments"] });
+      qc.invalidateQueries({ queryKey: ["cvotes"] });
       qc.invalidateQueries({ queryKey: ["gallery"] });
       qc.invalidateQueries({ queryKey: ["gallery-folders"] });
       qc.invalidateQueries({ queryKey: ["vault-trackers"] });
@@ -219,9 +225,13 @@ function AuthedLayout() {
         t === "comment_votes"
       ) {
         qc.invalidateQueries({ queryKey: ["blog"] });
+        qc.invalidateQueries({ queryKey: ["likes"] });
+        qc.invalidateQueries({ queryKey: ["comments"] });
+        qc.invalidateQueries({ queryKey: ["cvotes"] });
         qc.invalidateQueries({ queryKey: ["dashboard-counts"] });
       } else if (t === "profiles") {
         qc.invalidateQueries({ queryKey: ["user-profile"] });
+        qc.invalidateQueries({ queryKey: ["dashboard-counts"] });
       } else if (t === "chat_sessions") {
         window.dispatchEvent(new Event("chat-sessions-updated"));
       } else if (t === "chat_messages") {
@@ -233,10 +243,26 @@ function AuthedLayout() {
     const handleFocusOrVisible = () => {
       if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
       if (typeof navigator !== "undefined" && navigator.onLine) {
+        resetSessionSyncCache();
         triggerAutoSync(0);
         refreshAllDeviceQueries();
       }
     };
+
+    const periodicSyncInterval =
+      typeof window !== "undefined"
+        ? window.setInterval(() => {
+            if (
+              typeof document !== "undefined" &&
+              document.visibilityState === "visible" &&
+              typeof navigator !== "undefined" &&
+              navigator.onLine
+            ) {
+              triggerAutoSync(0);
+              refreshAllDeviceQueries();
+            }
+          }, 20000)
+        : undefined;
 
     if (typeof window !== "undefined") {
       window.addEventListener(OFFLINE_SYNC_SUCCESS_EVENT, handleSyncSuccess);
@@ -250,6 +276,9 @@ function AuthedLayout() {
         window.removeEventListener(OFFLINE_DATA_UPDATED_EVENT, handleDataUpdated);
         window.removeEventListener("focus", handleFocusOrVisible);
         document.removeEventListener("visibilitychange", handleFocusOrVisible);
+        if (periodicSyncInterval !== undefined) {
+          window.clearInterval(periodicSyncInterval);
+        }
       }
     };
   }, [qc]);

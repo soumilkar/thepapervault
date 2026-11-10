@@ -56,27 +56,29 @@ const HYDRATED_TABLES_KEY = "papervault:hydrated-tables:v1";
 
 const memTableCache = new Map<string, Map<string | number, Record<string, unknown>>>();
 const hydratedTables = new Set<string>();
+const sessionHydratedTables = new Set<string>();
 const recentRevalidations = new Map<string, number>();
+const inFlightTableSyncs = new Map<
+  string,
+  Promise<{ rows: Record<string, unknown>[]; isFullTable: boolean } | null>
+>();
 
-if (typeof window !== "undefined") {
-  try {
-    const raw = window.localStorage.getItem(HYDRATED_TABLES_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw) as string[];
-      if (Array.isArray(parsed)) {
-        for (const t of parsed) hydratedTables.add(t);
-      }
-    }
-  } catch {
-    // ignore
-  }
+export function resetSessionSyncCache(): void {
+  sessionHydratedTables.clear();
+  recentRevalidations.clear();
 }
 
-function isTableHydrated(table: string): boolean {
-  return hydratedTables.has(table);
+function isMutableStoragePath(path: string): boolean {
+  const lower = path.toLowerCase();
+  return (
+    lower.endsWith("vault-trackers.bin") ||
+    lower.endsWith("gallery-folders.bin") ||
+    lower.endsWith(".bin")
+  );
 }
 
 function markTableHydrated(table: string): void {
+  sessionHydratedTables.add(table);
   if (hydratedTables.has(table)) return;
   hydratedTables.add(table);
   if (typeof window !== "undefined") {
@@ -106,6 +108,19 @@ export async function getFreshAccessToken(forceRefresh = false): Promise<string 
   }
   const session = getCachedAuthSession();
   return (session as { access_token?: string })?.access_token ?? null;
+}
+
+async function resolveRequestAuthHeader(
+  reqHeaders: Headers,
+  forceRefresh = false,
+): Promise<string> {
+  if (forceRefresh) {
+    const refreshed = await getFreshAccessToken(true);
+    if (refreshed) return `Bearer ${refreshed}`;
+  }
+  const fresh = await getFreshAccessToken(false);
+  if (fresh) return `Bearer ${fresh}`;
+  return reqHeaders.get("authorization") || reqHeaders.get("Authorization") || "";
 }
 
 let autoSyncTimer: number | null = null;
@@ -386,7 +401,7 @@ export async function getStorageBlobRecord(
 
 export async function getStorageBlobUrl(bucket: string, path: string): Promise<string | null> {
   const key = `${bucket}/${path}`;
-  const isMutable = path.endsWith("vault-trackers.bin");
+  const isMutable = isMutableStoragePath(path);
   if (!isMutable && blobUrlCache.has(key)) {
     return blobUrlCache.get(key)!;
   }
@@ -430,7 +445,9 @@ export async function cacheRemoteStorageUrl(
 
   const task = (async () => {
     try {
-      const res = await nativeFetch(normalizedUrl);
+      const res = await nativeFetch(normalizedUrl, {
+        cache: isMutableStoragePath(path) ? "no-store" : "default",
+      });
       if (!res.ok) return null;
       const blob = await res.blob();
       await saveStorageBlob(
@@ -456,7 +473,7 @@ export async function fetchStorageBytesWithOfflineCache(
   path: string,
   signedUrl?: string,
 ): Promise<ArrayBuffer | null> {
-  const isMutable = path.endsWith("vault-trackers.bin");
+  const isMutable = isMutableStoragePath(path);
   if (!isMutable) {
     const cached = await getStorageBlobRecord(bucket, path);
     if (cached?.buffer) {
@@ -487,8 +504,11 @@ export async function fetchStorageUrlWithOfflineCache(
   path: string,
   signedUrl?: string,
 ): Promise<string | null> {
-  const localUrl = await getStorageBlobUrl(bucket, path);
-  if (localUrl) return localUrl;
+  const isMutable = isMutableStoragePath(path);
+  if (!isMutable) {
+    const localUrl = await getStorageBlobUrl(bucket, path);
+    if (localUrl) return localUrl;
+  }
 
   if (signedUrl && (typeof navigator === "undefined" || navigator.onLine)) {
     const downloaded = await cacheRemoteStorageUrl(bucket, path, signedUrl);
@@ -816,7 +836,9 @@ function buildPostgrestResponse(
 export function clearAllOfflineUserData() {
   memTableCache.clear();
   hydratedTables.clear();
+  sessionHydratedTables.clear();
   recentRevalidations.clear();
+  inFlightTableSyncs.clear();
   clearOfflineBlobUrls();
 
   if (typeof window !== "undefined") {
@@ -1261,6 +1283,15 @@ export async function flushOfflineSyncQueue(): Promise<void> {
             await removeSyncItem(item.queueId);
             successfullySyncedCount++;
             if (item.table) syncedTables.add(item.table);
+          } else if (
+            res.status === 400 ||
+            res.status === 404 ||
+            res.status === 406 ||
+            res.status === 413 ||
+            res.status === 422
+          ) {
+            // Permanent client error on a stale queued request; remove so it never blocks table reconciliation
+            await removeSyncItem(item.queueId);
           } else if (res.status === 401 || res.status === 403) {
             break;
           }
@@ -1482,9 +1513,8 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
 
       if (navigator.onLine) {
         try {
-          const authHeader =
-            req.headers.get("authorization") || req.headers.get("Authorization") || "";
-          const proxyRes = await quickFetch(
+          let authHeader = await resolveRequestAuthHeader(req.headers);
+          let proxyRes = await quickFetch(
             `/api/storage-proxy?action=sign-single&bucket=${encodeURIComponent(bucket)}&path=${encodeURIComponent(objectPath)}`,
             {
               method: "POST",
@@ -1494,20 +1524,37 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
               },
               body: JSON.stringify({ path: objectPath }),
             },
-            4000,
+            6000,
           );
+          if (proxyRes.status === 401) {
+            authHeader = await resolveRequestAuthHeader(req.headers, true);
+            proxyRes = await quickFetch(
+              `/api/storage-proxy?action=sign-single&bucket=${encodeURIComponent(bucket)}&path=${encodeURIComponent(objectPath)}`,
+              {
+                method: "POST",
+                headers: {
+                  authorization: authHeader,
+                  "content-type": "application/json",
+                },
+                body: JSON.stringify({ path: objectPath }),
+              },
+              6000,
+            );
+          }
           if (proxyRes.ok) return proxyRes;
         } catch {
           // Fall through to local blob URL
         }
       }
 
-      const localUrl = await getStorageBlobUrl(bucket, objectPath);
-      if (localUrl) {
-        return new Response(JSON.stringify({ signedURL: localUrl, signedUrl: localUrl }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
+      if (!navigator.onLine || !isMutableStoragePath(objectPath)) {
+        const localUrl = await getStorageBlobUrl(bucket, objectPath);
+        if (localUrl) {
+          return new Response(JSON.stringify({ signedURL: localUrl, signedUrl: localUrl }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
       }
     }
 
@@ -1540,9 +1587,8 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
 
       if (navigator.onLine) {
         try {
-          const authHeader =
-            req.headers.get("authorization") || req.headers.get("Authorization") || "";
-          const proxyRes = await quickFetch(
+          let authHeader = await resolveRequestAuthHeader(req.headers);
+          let proxyRes = await quickFetch(
             `/api/storage-proxy?action=upload&bucket=${encodeURIComponent(bucket)}&path=${encodeURIComponent(objectPath)}`,
             {
               method: "POST",
@@ -1554,6 +1600,21 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
             },
             30000,
           );
+          if (proxyRes.status === 401) {
+            authHeader = await resolveRequestAuthHeader(req.headers, true);
+            proxyRes = await quickFetch(
+              `/api/storage-proxy?action=upload&bucket=${encodeURIComponent(bucket)}&path=${encodeURIComponent(objectPath)}`,
+              {
+                method: "POST",
+                headers: {
+                  authorization: authHeader,
+                  "content-type": targetType || "application/octet-stream",
+                },
+                body: targetBlob,
+              },
+              30000,
+            );
+          }
           if (proxyRes.ok) return proxyRes;
         } catch {
           // Queue below
@@ -1587,7 +1648,11 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
       const objectPath = decodeURIComponent(signedDownloadMatch[2]);
       if (navigator.onLine) {
         try {
-          const res = await quickFetch(req.clone(), undefined, 3000);
+          const res = await quickFetch(
+            req.clone(),
+            { cache: isMutableStoragePath(objectPath) ? "no-store" : "default" },
+            6000,
+          );
           if (res.ok) {
             const clonedBlob = await res.clone().blob();
             void saveStorageBlob(
@@ -1628,24 +1693,43 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
         table === "blog_posts" ||
         table === "blog_comments" ||
         table === "blog_likes" ||
-        table === "comment_votes";
+        table === "comment_votes" ||
+        table === "profiles";
 
       const reconcileRemoteTableRows = async (
         freshList: Record<string, unknown>[],
         isFullTable: boolean,
         sessionFilterId?: string | null,
-      ) => {
+      ): Promise<boolean> => {
+        const beforeLocal = await idbGetAll<Record<string, unknown>>(table);
+        const beforeSerialized = JSON.stringify(beforeLocal);
+
         const queueItems = await idbGetAll<SyncQueueItem>("sync_queue");
-        const hasPendingForTable = queueItems.some((q) => q.table === table);
+        const nowMs = Date.now();
+        const hasPendingForTable = queueItems.some(
+          (q) => q.table === table && nowMs - q.createdAt < 24 * 60 * 60 * 1000,
+        );
         if (!hasPendingForTable) {
-          const currentLocal = await idbGetAll<Record<string, unknown>>(table);
           const freshIds = new Set(
             freshList
               .map((r) => r[pk])
               .filter((k): k is string | number => typeof k === "string" || typeof k === "number"),
           );
-          if (isFullTable && !isPublicDiaryFeed) {
-            const staleKeys = currentLocal
+          if (table === "diary_entries") {
+            const staleDiaryKeys = beforeLocal
+              .filter((r) =>
+                isPublicDiaryFeed ? r.user_id === "_anonymous" : r.user_id !== "_anonymous",
+              )
+              .map((r) => r[pk])
+              .filter(
+                (k): k is string | number =>
+                  (typeof k === "string" || typeof k === "number") && !freshIds.has(k),
+              );
+            if (staleDiaryKeys.length > 0) {
+              await idbDeleteKeys(table, staleDiaryKeys);
+            }
+          } else if (isFullTable) {
+            const staleKeys = beforeLocal
               .map((r) => r[pk])
               .filter(
                 (k): k is string | number =>
@@ -1655,7 +1739,7 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
               await idbDeleteKeys(table, staleKeys);
             }
           } else if (table === "chat_messages" && sessionFilterId) {
-            const staleMsgKeys = currentLocal
+            const staleMsgKeys = beforeLocal
               .filter((r) => String(r.session_id ?? "") === sessionFilterId)
               .map((r) => r[pk])
               .filter(
@@ -1668,6 +1752,8 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
           }
         }
         await idbPutMany(table, freshList);
+        const afterLocal = await idbGetAll<Record<string, unknown>>(table);
+        return JSON.stringify(afterLocal) !== beforeSerialized;
       };
 
       const fetchRowsFromRemote = async (
@@ -1676,12 +1762,11 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
       ): Promise<{ rows: Record<string, unknown>[]; isFullTable: boolean } | null> => {
         if (isB2Table) {
           try {
-            const authHeader =
-              reqClone.headers.get("authorization") || reqClone.headers.get("Authorization") || "";
+            let authHeader = await resolveRequestAuthHeader(reqClone.headers);
             const proxyQueryUrl = `/api/storage-proxy?action=db-query&table=${encodeURIComponent(table)}${
               isPublicDiaryFeed ? "&publicFeed=1" : ""
             }`;
-            const proxyRes = await quickFetch(
+            let proxyRes = await quickFetch(
               proxyQueryUrl,
               {
                 method: "POST",
@@ -1692,6 +1777,20 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
               },
               timeoutMs,
             );
+            if (proxyRes.status === 401) {
+              authHeader = await resolveRequestAuthHeader(reqClone.headers, true);
+              proxyRes = await quickFetch(
+                proxyQueryUrl,
+                {
+                  method: "POST",
+                  headers: {
+                    authorization: authHeader,
+                    "content-type": "application/json",
+                  },
+                },
+                timeoutMs,
+              );
+            }
             if (proxyRes.ok) {
               const data = await proxyRes.json().catch(() => null);
               if (Array.isArray(data)) {
@@ -1705,9 +1804,17 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
             // Fall through to direct Supabase PostgREST fetch
           }
         }
+        if (reqClone.method.toUpperCase() === "HEAD") {
+          return null;
+        }
         const res = await quickFetch(reqClone, undefined, timeoutMs);
         if (!res.ok) return null;
         const data = await res.json().catch(() => null);
+        const selectParam = url.searchParams.get("select") || "*";
+        const isWildcardSelect = selectParam === "*" || selectParam.includes("id");
+        if (!isWildcardSelect) {
+          return null;
+        }
         const filterKeys = Array.from(url.searchParams.keys()).filter(
           (k) => k !== "select" && k !== "order" && k !== "user_id",
         );
@@ -1724,48 +1831,64 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
       const eqSessionParam = url.searchParams.get("session_id");
       const sessionFilterId =
         eqSessionParam && eqSessionParam.startsWith("eq.") ? eqSessionParam.slice(3) : null;
+      const syncScopeKey = isPublicDiaryFeed ? `${table}:public` : table;
 
-      // SELECT / HEAD — Local-first Stale-While-Revalidate when cached rows exist,
-      // but always fetch remote first if local filtered result is empty while online.
+      const syncTableFromServer = (
+        reqClone: Request,
+        timeoutMs: number,
+        notifyOnDiff: boolean,
+      ): Promise<{ rows: Record<string, unknown>[]; isFullTable: boolean } | null> => {
+        const existingInFlight = inFlightTableSyncs.get(syncScopeKey);
+        if (existingInFlight) return existingInFlight;
+
+        const task = (async () => {
+          try {
+            const remoteRes = await fetchRowsFromRemote(reqClone, timeoutMs);
+            if (!remoteRes) return null;
+            markTableHydrated(syncScopeKey);
+            markTableHydrated(table);
+            const changed = await reconcileRemoteTableRows(
+              remoteRes.rows,
+              remoteRes.isFullTable,
+              sessionFilterId,
+            );
+            if (changed && notifyOnDiff && typeof window !== "undefined") {
+              window.dispatchEvent(
+                new CustomEvent(OFFLINE_DATA_UPDATED_EVENT, { detail: { table } }),
+              );
+            }
+            return remoteRes;
+          } catch {
+            return null;
+          } finally {
+            inFlightTableSyncs.delete(syncScopeKey);
+          }
+        })();
+
+        inFlightTableSyncs.set(syncScopeKey, task);
+        return task;
+      };
+
+      // SELECT / HEAD — Always hydrate from remote server on first read per session while online
+      // so every device sees 100% identical data immediately, then use instant local cache + background sync.
       if (method === "GET" || method === "HEAD") {
         const allLocal = await idbGetAll<Record<string, unknown>>(table);
         const filtered = filterAndSortRows(allLocal, url.searchParams);
         const hasFilteredLocalRows = filtered.length > 0;
+        const isSessionHydrated = sessionHydratedTables.has(syncScopeKey);
 
-        if (hasFilteredLocalRows) {
+        if (hasFilteredLocalRows && isSessionHydrated) {
           if (navigator.onLine) {
             if (currentSyncState.pendingCount > 0) {
               void flushOfflineSyncQueue();
             }
-            const revalidateKey = `${method}:${req.url}`;
             const nowMs = Date.now();
-            const lastReval = recentRevalidations.get(revalidateKey) ?? 0;
+            const lastReval = recentRevalidations.get(syncScopeKey) ?? 0;
             const revalIntervalMs =
-              table === "chat_sessions" || table === "chat_messages" ? 1000 : 2000;
+              table === "chat_sessions" || table === "chat_messages" ? 800 : 1500;
             if (nowMs - lastReval > revalIntervalMs) {
-              recentRevalidations.set(revalidateKey, nowMs);
-              const reqClone = req.clone();
-              void fetchRowsFromRemote(reqClone, 8000)
-                .then(async (remoteRes) => {
-                  if (!remoteRes) return;
-                  markTableHydrated(table);
-                  if (method !== "GET") return;
-                  await reconcileRemoteTableRows(
-                    remoteRes.rows,
-                    remoteRes.isFullTable,
-                    sessionFilterId,
-                  );
-                  const updatedAllLocal = await idbGetAll<Record<string, unknown>>(table);
-                  const freshFiltered = filterAndSortRows(updatedAllLocal, url.searchParams);
-                  if (JSON.stringify(freshFiltered) !== JSON.stringify(filtered)) {
-                    if (typeof window !== "undefined") {
-                      window.dispatchEvent(
-                        new CustomEvent(OFFLINE_DATA_UPDATED_EVENT, { detail: { table } }),
-                      );
-                    }
-                  }
-                })
-                .catch(() => {});
+              recentRevalidations.set(syncScopeKey, nowMs);
+              void syncTableFromServer(req.clone(), 8000, true);
             }
           }
 
@@ -1778,23 +1901,17 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
               await flushOfflineSyncQueue();
             }
 
-            if (method === "GET") {
-              const remoteRes = await fetchRowsFromRemote(req.clone(), 8000);
-              if (remoteRes) {
-                markTableHydrated(table);
-                await reconcileRemoteTableRows(
-                  remoteRes.rows,
-                  remoteRes.isFullTable,
-                  sessionFilterId,
-                );
-                const updatedAllLocal = await idbGetAll<Record<string, unknown>>(table);
-                const freshFiltered = filterAndSortRows(updatedAllLocal, url.searchParams);
-                return buildPostgrestResponse(freshFiltered, method, req.headers, 200);
-              }
+            recentRevalidations.set(syncScopeKey, Date.now());
+            const remoteRes = await syncTableFromServer(req.clone(), 8000, false);
+            if (remoteRes) {
+              const updatedAllLocal = await idbGetAll<Record<string, unknown>>(table);
+              const freshFiltered = filterAndSortRows(updatedAllLocal, url.searchParams);
+              return buildPostgrestResponse(freshFiltered, method, req.headers, 200);
             }
 
             const res = await quickFetch(req.clone(), undefined, 5000);
             if (res.ok) {
+              markTableHydrated(syncScopeKey);
               markTableHydrated(table);
               if (method === "GET") {
                 const cloned = res.clone();
@@ -1840,9 +1957,8 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
         if (navigator.onLine) {
           if (b2MutateUrl) {
             try {
-              const authHeader =
-                req.headers.get("authorization") || req.headers.get("Authorization") || "";
-              const proxyRes = await quickFetch(
+              let authHeader = await resolveRequestAuthHeader(req.headers);
+              let proxyRes = await quickFetch(
                 b2MutateUrl,
                 {
                   method: "POST",
@@ -1854,6 +1970,21 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
                 },
                 10000,
               );
+              if (proxyRes.status === 401) {
+                authHeader = await resolveRequestAuthHeader(req.headers, true);
+                proxyRes = await quickFetch(
+                  b2MutateUrl,
+                  {
+                    method: "POST",
+                    headers: {
+                      authorization: authHeader,
+                      "content-type": "application/json",
+                    },
+                    body: forwardBody,
+                  },
+                  10000,
+                );
+              }
               if (proxyRes.ok) {
                 const serverData = await proxyRes
                   .clone()
@@ -1916,10 +2047,22 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
         if (table === "diary_entries" && patchObj.is_public !== undefined && !patchObj.visibility) {
           patchObj.visibility = patchObj.is_public ? "public_anon" : "private";
         }
+        const now = new Date().toISOString();
+        const hasUpdatedAtColumn =
+          table === "diary_entries" ||
+          table === "diary_folders" ||
+          table === "notes" ||
+          table === "note_folders" ||
+          table === "blog_posts" ||
+          table === "blog_comments" ||
+          table === "profiles" ||
+          table === "vault_keys";
+        if (hasUpdatedAtColumn && patchObj.updated_at === undefined) {
+          patchObj.updated_at = now;
+        }
         const normalizedPatchText = JSON.stringify(patchObj);
         const allLocal = await idbGetAll<Record<string, unknown>>(table);
         const matched = filterAndSortRows(allLocal, url.searchParams);
-        const now = new Date().toISOString();
         const updatedRows = matched.map((row) => ({
           ...row,
           ...patchObj,
@@ -1932,9 +2075,8 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
         if (navigator.onLine) {
           if (b2MutateUrl) {
             try {
-              const authHeader =
-                req.headers.get("authorization") || req.headers.get("Authorization") || "";
-              const proxyRes = await quickFetch(
+              let authHeader = await resolveRequestAuthHeader(req.headers);
+              let proxyRes = await quickFetch(
                 b2MutateUrl,
                 {
                   method: "POST",
@@ -1946,6 +2088,21 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
                 },
                 10000,
               );
+              if (proxyRes.status === 401) {
+                authHeader = await resolveRequestAuthHeader(req.headers, true);
+                proxyRes = await quickFetch(
+                  b2MutateUrl,
+                  {
+                    method: "POST",
+                    headers: {
+                      authorization: authHeader,
+                      "content-type": "application/json",
+                    },
+                    body: normalizedPatchText,
+                  },
+                  10000,
+                );
+              }
               if (proxyRes.ok) {
                 return buildPostgrestResponse(updatedRows, method, req.headers, 200);
               }
@@ -2008,9 +2165,8 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
         if (navigator.onLine) {
           if (b2MutateUrl) {
             try {
-              const authHeader =
-                req.headers.get("authorization") || req.headers.get("Authorization") || "";
-              const proxyRes = await quickFetch(
+              let authHeader = await resolveRequestAuthHeader(req.headers);
+              let proxyRes = await quickFetch(
                 b2MutateUrl,
                 {
                   method: "POST",
@@ -2021,6 +2177,20 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
                 },
                 10000,
               );
+              if (proxyRes.status === 401) {
+                authHeader = await resolveRequestAuthHeader(req.headers, true);
+                proxyRes = await quickFetch(
+                  b2MutateUrl,
+                  {
+                    method: "POST",
+                    headers: {
+                      authorization: authHeader,
+                      "content-type": "application/json",
+                    },
+                  },
+                  10000,
+                );
+              }
               if (proxyRes.ok) {
                 return buildPostgrestResponse(matched, method, req.headers, 200);
               }

@@ -40,6 +40,7 @@ export const B2_SYNCED_TABLES = [
   "blog_comments",
   "blog_likes",
   "comment_votes",
+  "profiles",
 ] as const;
 
 export type B2SyncedTable = (typeof B2_SYNCED_TABLES)[number];
@@ -49,6 +50,7 @@ export const B2_COMMUNITY_TABLES = new Set<string>([
   "blog_comments",
   "blog_likes",
   "comment_votes",
+  "profiles",
 ]);
 
 export const B2_COMMUNITY_SCOPE = "_community";
@@ -529,7 +531,8 @@ export function isChatSessionExpired(row: Record<string, unknown>, nowMs = Date.
 }
 
 function getRowTimestamp(row: Record<string, unknown>): number {
-  const ts = (row.updated_at || row.last_message_at || row.created_at) as string | undefined;
+  const ts = (row._b2_updated_at || row.updated_at || row.last_message_at || row.created_at) as
+    string | undefined;
   if (!ts) return 0;
   const parsed = Date.parse(ts);
   return Number.isNaN(parsed) ? 0 : parsed;

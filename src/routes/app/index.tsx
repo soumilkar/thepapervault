@@ -34,13 +34,25 @@ function Dashboard() {
 
   const profileQuery = useQuery({
     queryKey: ["user-profile", user.id],
-    initialData: profileDisplayName ? { id: user.id, display_name: profileDisplayName } : undefined,
+    placeholderData: profileDisplayName
+      ? { id: user.id, display_name: profileDisplayName }
+      : undefined,
     queryFn: async () => {
       const { data } = await supabase
         .from("profiles")
         .select("id, display_name")
         .eq("id", user.id)
         .maybeSingle();
+      if (data?.display_name?.trim() && typeof window !== "undefined") {
+        try {
+          window.localStorage.setItem(
+            `papervault:profile_name:${user.id}`,
+            data.display_name.trim(),
+          );
+        } catch {
+          // ignore
+        }
+      }
       return data;
     },
   });
@@ -48,23 +60,34 @@ function Dashboard() {
   const counts = useQuery({
     queryKey: ["dashboard-counts", user.id],
     queryFn: async () => {
-      const [n, b, g, u] = await Promise.all([
-        supabase.from("notes").select("id", { count: "exact", head: true }).eq("user_id", user.id),
-        supabase
-          .from("blog_posts")
-          .select("id", { count: "exact", head: true })
-          .eq("user_id", user.id),
-        supabase
-          .from("gallery_images")
-          .select("id", { count: "exact", head: true })
-          .eq("user_id", user.id),
-        supabase.from("profiles").select("id", { count: "exact", head: true }),
+      const [n, b, g, d, u] = await Promise.all([
+        supabase.from("notes").select("id,image_urls").eq("user_id", user.id),
+        supabase.from("blog_posts").select("id").eq("user_id", user.id),
+        supabase.from("gallery_images").select("id,storage_path").eq("user_id", user.id),
+        supabase.from("diary_entries").select("id,image_urls").eq("user_id", user.id),
+        supabase.from("profiles").select("id"),
       ]);
+
+      const uniquePhotoPaths = new Set<string>();
+      for (const img of (g.data ?? []) as { id: string; storage_path?: string }[]) {
+        uniquePhotoPaths.add(img.storage_path || img.id);
+      }
+      for (const entry of (d.data ?? []) as { image_urls?: string[] | null }[]) {
+        for (const p of entry.image_urls ?? []) {
+          if (p) uniquePhotoPaths.add(p);
+        }
+      }
+      for (const note of (n.data ?? []) as { image_urls?: string[] | null }[]) {
+        for (const p of note.image_urls ?? []) {
+          if (p) uniquePhotoPaths.add(p);
+        }
+      }
+
       return {
-        notes: n.count ?? 0,
-        blog: b.count ?? 0,
-        gallery: g.count ?? 0,
-        totalUsers: u.count ?? 0,
+        notes: n.data?.length ?? 0,
+        blog: b.data?.length ?? 0,
+        gallery: uniquePhotoPaths.size,
+        totalUsers: u.data?.length ?? 0,
       };
     },
   });

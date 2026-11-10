@@ -377,6 +377,22 @@ async function fetchUserRowsFromSupabase(
 ): Promise<Record<string, unknown>[]> {
   try {
     const userClient = getUserScopedClient(request, bearerToken);
+    if (table === "profiles") {
+      const { data } = await userClient
+        .from("profiles")
+        .select("id, display_name, tour_completed, created_at, updated_at")
+        .limit(1000);
+      return ((data ?? []) as unknown as Record<string, unknown>[]).map((r) =>
+        r.id === userId
+          ? r
+          : {
+              id: r.id,
+              display_name: r.display_name ?? null,
+              created_at: r.created_at ?? null,
+              updated_at: r.updated_at ?? null,
+            },
+      );
+    }
     if (isB2CommunityTable(table)) {
       const { data } = await (
         userClient.from(table as "blog_posts") as ReturnType<typeof userClient.from>
@@ -984,9 +1000,30 @@ export const Route = createFileRoute("/api/storage-proxy")({
               );
             }
 
-            const safeRows = isB2CommunityTable(table)
-              ? mergedRows
-              : mergedRows.filter((r) => String(r.user_id ?? "") === user.id);
+            const safeRows =
+              table === "profiles"
+                ? mergedRows.map((r) => {
+                    const clean = { ...r };
+                    delete clean._b2_updated_at;
+                    delete clean.user_id;
+                    if (clean.id !== user.id) {
+                      delete clean.tour_completed;
+                    }
+                    return clean;
+                  })
+                : isB2CommunityTable(table)
+                  ? mergedRows.map((r) => {
+                      const clean = { ...r };
+                      delete clean._b2_updated_at;
+                      return clean;
+                    })
+                  : mergedRows
+                      .filter((r) => String(r.user_id ?? "") === user.id)
+                      .map((r) => {
+                        const clean = { ...r };
+                        delete clean._b2_updated_at;
+                        return clean;
+                      });
 
             return new Response(JSON.stringify(safeRows), {
               status: 200,
@@ -1065,27 +1102,50 @@ export const Route = createFileRoute("/api/storage-proxy")({
                   }
 
                   const rowId =
-                    typeof item.id === "string" && item.id ? item.id : crypto.randomUUID();
+                    table === "profiles"
+                      ? user.id
+                      : typeof item.id === "string" && item.id
+                        ? item.id
+                        : crypto.randomUUID();
                   const existingRow = rowsById.get(rowId);
-                  if (
-                    existingRow &&
-                    typeof existingRow.user_id === "string" &&
-                    existingRow.user_id !== user.id
-                  ) {
+                  const existingOwnerId =
+                    table === "profiles"
+                      ? typeof existingRow?.id === "string"
+                        ? existingRow.id
+                        : ""
+                      : typeof existingRow?.user_id === "string"
+                        ? existingRow.user_id
+                        : "";
+                  if (existingRow && existingOwnerId && existingOwnerId !== user.id) {
                     // Prevent cross-user ID collision or overwrite in shared community tables
                     continue;
                   }
-                  const normalized: Record<string, unknown> = {
-                    ...item,
-                    id: rowId,
-                    user_id: user.id,
-                  };
+                  const normalized: Record<string, unknown> =
+                    table === "profiles"
+                      ? {
+                          ...(existingRow ?? {}),
+                          ...item,
+                          id: user.id,
+                          updated_at: nowIso,
+                          _b2_updated_at: nowIso,
+                        }
+                      : {
+                          ...item,
+                          id: rowId,
+                          user_id: user.id,
+                          _b2_updated_at: nowIso,
+                        };
+                  if (table === "profiles") {
+                    delete normalized.user_id;
+                  }
                   if (table === "diary_entries") {
                     normalized.visibility = normalized.is_public ? "public_anon" : "private";
                   }
                   delete mergedDoc.deletedIds[rowId];
                   rowsById.set(rowId, normalized);
-                  affectedRows.push(normalized);
+                  const forSupabase = { ...normalized };
+                  delete forSupabase._b2_updated_at;
+                  affectedRows.push(forSupabase);
                 }
 
                 // Write to Supabase (and ensure parent chat_sessions exist before inserting chat_messages)
@@ -1147,13 +1207,29 @@ export const Route = createFileRoute("/api/storage-proxy")({
                 const safePatch: Record<string, unknown> = { ...patchObj };
                 delete safePatch.user_id;
                 delete safePatch.id;
+                delete safePatch._b2_updated_at;
+                const hasUpdatedAtColumn =
+                  table === "diary_entries" ||
+                  table === "diary_folders" ||
+                  table === "notes" ||
+                  table === "note_folders" ||
+                  table === "blog_posts" ||
+                  table === "blog_comments" ||
+                  table === "profiles";
+                if (hasUpdatedAtColumn && !safePatch.updated_at) {
+                  safePatch.updated_at = nowIso;
+                }
                 if (table === "diary_entries" && safePatch.is_public !== undefined) {
                   safePatch.visibility = safePatch.is_public ? "public_anon" : "private";
                 }
                 const matched = filterRowsByQueryParams(
                   Array.from(rowsById.values()),
                   url.searchParams,
-                ).filter((r) => String(r.user_id ?? "") === user.id);
+                ).filter((r) =>
+                  table === "profiles"
+                    ? String(r.id ?? "") === user.id
+                    : String(r.user_id ?? "") === user.id,
+                );
 
                 if (
                   matched.length === 0 &&
@@ -1170,22 +1246,39 @@ export const Route = createFileRoute("/api/storage-proxy")({
                       created_at: nowIso,
                       last_message_at: nowIso,
                       ...safePatch,
+                      _b2_updated_at: nowIso,
                     };
                     delete mergedDoc.deletedIds[targetSessionId];
                     rowsById.set(targetSessionId, synthesized);
-                    affectedRows.push(synthesized);
+                    const cleanRow = { ...synthesized };
+                    delete cleanRow._b2_updated_at;
+                    affectedRows.push(cleanRow);
                   }
                 } else {
                   for (const row of matched) {
                     const rowId = String(row.id);
-                    const updated: Record<string, unknown> = {
-                      ...row,
-                      ...safePatch,
-                      id: rowId,
-                      user_id: user.id,
-                    };
+                    const updated: Record<string, unknown> =
+                      table === "profiles"
+                        ? {
+                            ...row,
+                            ...safePatch,
+                            id: user.id,
+                            _b2_updated_at: nowIso,
+                          }
+                        : {
+                            ...row,
+                            ...safePatch,
+                            id: rowId,
+                            user_id: user.id,
+                            _b2_updated_at: nowIso,
+                          };
+                    if (table === "profiles") {
+                      delete updated.user_id;
+                    }
                     rowsById.set(rowId, updated);
-                    affectedRows.push(updated);
+                    const cleanRow = { ...updated };
+                    delete cleanRow._b2_updated_at;
+                    affectedRows.push(cleanRow);
                   }
                 }
 
@@ -1194,6 +1287,13 @@ export const Route = createFileRoute("/api/storage-proxy")({
                   const userClient = getUserScopedClient(request, bearerToken);
                   if (table === "chat_sessions" && affectedRows.length > 0) {
                     await userClient.from("chat_sessions").upsert(affectedRows as never);
+                  } else if (table === "profiles") {
+                    for (const row of affectedRows) {
+                      await userClient
+                        .from("profiles")
+                        .update(safePatch as never)
+                        .eq("id", String(row.id));
+                    }
                   } else {
                     for (const row of affectedRows) {
                       await (
@@ -1211,26 +1311,42 @@ export const Route = createFileRoute("/api/storage-proxy")({
                 const matched = filterRowsByQueryParams(
                   Array.from(rowsById.values()),
                   url.searchParams,
-                ).filter((r) => String(r.user_id ?? "") === user.id);
+                ).filter((r) =>
+                  table === "profiles"
+                    ? String(r.id ?? "") === user.id
+                    : String(r.user_id ?? "") === user.id,
+                );
 
                 for (const row of matched) {
                   const rowId = String(row.id);
                   rowsById.delete(rowId);
                   mergedDoc.deletedIds[rowId] = nowIso;
-                  affectedRows.push(row);
+                  const cleanRow = { ...row };
+                  delete cleanRow._b2_updated_at;
+                  affectedRows.push(cleanRow);
                 }
 
                 // Delete in Supabase (both matched rows and any explicit id filter)
                 try {
                   const userClient = getUserScopedClient(request, bearerToken);
                   for (const row of affectedRows) {
-                    await (userClient.from(table as "notes") as ReturnType<typeof userClient.from>)
-                      .delete()
-                      .eq("id" as never, String(row.id) as never)
-                      .eq("user_id" as never, user.id as never);
+                    if (table === "profiles") {
+                      await userClient.from("profiles").delete().eq("id", user.id);
+                    } else {
+                      await (
+                        userClient.from(table as "notes") as ReturnType<typeof userClient.from>
+                      )
+                        .delete()
+                        .eq("id" as never, String(row.id) as never)
+                        .eq("user_id" as never, user.id as never);
+                    }
                   }
                   const eqId = url.searchParams.get("id");
-                  if (affectedRows.length === 0 && eqId?.startsWith("eq.")) {
+                  if (
+                    affectedRows.length === 0 &&
+                    eqId?.startsWith("eq.") &&
+                    table !== "profiles"
+                  ) {
                     await (userClient.from(table as "notes") as ReturnType<typeof userClient.from>)
                       .delete()
                       .eq("id" as never, eqId.slice(3) as never)
@@ -1426,50 +1542,18 @@ export const Route = createFileRoute("/api/storage-proxy")({
               });
             }
 
-            if (b2Config) {
-              const signedItems = await Promise.all(
-                authorizedPaths.map(async (p) => {
-                  const dlUrl = await createSignedProxyDownloadUrl(request, bucket, p, 60 * 60);
-                  return {
-                    error: null,
-                    path: p,
-                    signedURL: dlUrl,
-                    signedUrl: dlUrl,
-                  };
-                }),
-              );
-              return new Response(JSON.stringify(signedItems), {
-                status: 200,
-                headers: JSON_SECURITY_HEADERS,
-              });
-            }
-
-            const { data, error } = await adminClient.storage
-              .from(bucket)
-              .createSignedUrls(authorizedPaths, 60 * 60);
-            if (error) {
-              return new Response(JSON.stringify({ error: error.message }), {
-                status: 400,
-                headers: JSON_SECURITY_HEADERS,
-              });
-            }
-
-            const marker = "/storage/v1";
-            const normalized = (data ?? []).map((item) => {
-              const raw =
-                (item as unknown as { signedURL?: string; signedUrl?: string }).signedURL ||
-                (item as unknown as { signedURL?: string; signedUrl?: string }).signedUrl ||
-                "";
-              const idx = raw.indexOf(marker);
-              const rel = idx !== -1 ? raw.slice(idx + marker.length) : raw;
-              return {
-                ...item,
-                signedURL: rel,
-                signedUrl: raw,
-              };
-            });
-
-            return new Response(JSON.stringify(normalized), {
+            const signedItems = await Promise.all(
+              authorizedPaths.map(async (p) => {
+                const dlUrl = await createSignedProxyDownloadUrl(request, bucket, p, 60 * 60);
+                return {
+                  error: null,
+                  path: p,
+                  signedURL: dlUrl,
+                  signedUrl: dlUrl,
+                };
+              }),
+            );
+            return new Response(JSON.stringify(signedItems), {
               status: 200,
               headers: JSON_SECURITY_HEADERS,
             });
@@ -1497,43 +1581,16 @@ export const Route = createFileRoute("/api/storage-proxy")({
               );
             }
 
-            if (b2Config) {
-              const dlUrl = await createSignedProxyDownloadUrl(
-                request,
-                bucket,
-                normalizedTarget,
-                60 * 60,
-              );
-              return new Response(JSON.stringify({ signedURL: dlUrl, signedUrl: dlUrl }), {
-                status: 200,
-                headers: JSON_SECURITY_HEADERS,
-              });
-            }
-
-            const { data, error } = await adminClient.storage
-              .from(bucket)
-              .createSignedUrl(normalizedTarget, 60 * 60);
-
-            if (error) {
-              return new Response(JSON.stringify({ error: error.message }), {
-                status: 400,
-                headers: JSON_SECURITY_HEADERS,
-              });
-            }
-
-            const rawSignedUrl = data?.signedUrl ?? "";
-            const marker = "/storage/v1";
-            const idx = rawSignedUrl.indexOf(marker);
-            const relativeSignedURL =
-              idx !== -1 ? rawSignedUrl.slice(idx + marker.length) : rawSignedUrl;
-
-            return new Response(
-              JSON.stringify({ signedURL: relativeSignedURL, signedUrl: rawSignedUrl }),
-              {
-                status: 200,
-                headers: JSON_SECURITY_HEADERS,
-              },
+            const dlUrl = await createSignedProxyDownloadUrl(
+              request,
+              bucket,
+              normalizedTarget,
+              60 * 60,
             );
+            return new Response(JSON.stringify({ signedURL: dlUrl, signedUrl: dlUrl }), {
+              status: 200,
+              headers: JSON_SECURITY_HEADERS,
+            });
           }
 
           // 4. Batch Remove Objects
