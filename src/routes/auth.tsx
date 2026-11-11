@@ -66,8 +66,6 @@ function AuthPage() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [loading, setLoading] = useState(false);
-  const [pastedResetLink, setPastedResetLink] = useState("");
-  const [verifyingResetLink, setVerifyingResetLink] = useState(false);
 
   // First-time Sign-Up Security Questions state
   const [signupQuestionSlots, setSignupQuestionSlots] = useState<
@@ -105,71 +103,6 @@ function AuthPage() {
       subscription.unsubscribe();
     };
   }, []);
-
-  const handleVerifyPastedResetLink = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const raw = pastedResetLink.trim();
-    if (!raw) return;
-    setVerifyingResetLink(true);
-    try {
-      let verified = false;
-      if (raw.startsWith("http://") || raw.startsWith("https://")) {
-        const parsed = new URL(raw);
-        const tokenParam =
-          parsed.searchParams.get("token_hash") || parsed.searchParams.get("token") || "";
-        const codeParam = parsed.searchParams.get("code") || "";
-        if (tokenParam) {
-          for (const t of ["recovery", "magiclink", "email"] as const) {
-            const { error } = await supabase.auth.verifyOtp({ token_hash: tokenParam, type: t });
-            if (!error) {
-              verified = true;
-              break;
-            }
-          }
-        }
-        if (!verified && codeParam) {
-          const { error } = await supabase.auth.exchangeCodeForSession(codeParam);
-          if (!error) verified = true;
-        }
-        if (!verified && parsed.hash.includes("access_token=")) {
-          const hashParams = new URLSearchParams(parsed.hash.replace(/^#/, ""));
-          const accessToken = hashParams.get("access_token") || "";
-          const refreshToken = hashParams.get("refresh_token") || "";
-          if (accessToken && refreshToken) {
-            const { error } = await supabase.auth.setSession({
-              access_token: accessToken,
-              refresh_token: refreshToken,
-            });
-            if (!error) verified = true;
-          }
-        }
-      } else if (email.trim()) {
-        for (const t of ["recovery", "email", "magiclink"] as const) {
-          const { error } = await supabase.auth.verifyOtp({
-            email: email.trim().toLowerCase(),
-            token: raw,
-            type: t,
-          });
-          if (!error) {
-            verified = true;
-            break;
-          }
-        }
-      }
-      if (!verified) {
-        throw new Error(
-          "Could not verify that reset link. Right-click the button in your reset email, copy the link address, and paste it here.",
-        );
-      }
-      setPastedResetLink("");
-      setMode("reset");
-      toast.success("Reset link verified! Enter your new password below.");
-    } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "Could not verify reset link");
-    } finally {
-      setVerifyingResetLink(false);
-    }
-  };
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -322,33 +255,6 @@ function AuthPage() {
                 password.
               </p>
             </div>
-
-            <form onSubmit={handleVerifyPastedResetLink} className="space-y-2.5">
-              <label className="block">
-                <span className="mb-1 block text-xs font-medium text-foreground/80">
-                  Or right-click the reset link in your email, copy the link address, and paste it
-                  here to reset right in this tab:
-                </span>
-                <input
-                  type="text"
-                  value={pastedResetLink}
-                  onChange={(e) => setPastedResetLink(e.target.value)}
-                  placeholder="Paste reset link from email (https://...)"
-                  className="w-full rounded-md border border-input bg-card px-3 py-2 font-mono text-xs text-foreground outline-none focus:border-ring focus:ring-1 focus:ring-ring"
-                />
-              </label>
-              {pastedResetLink.trim() && (
-                <button
-                  type="submit"
-                  disabled={verifyingResetLink}
-                  className="w-full rounded-md bg-primary px-4 py-2 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:opacity-60"
-                >
-                  {verifyingResetLink
-                    ? "Verifying reset link..."
-                    : "Verify Reset Link & Set New Password"}
-                </button>
-              )}
-            </form>
 
             <button
               type="button"

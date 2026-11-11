@@ -161,26 +161,6 @@ async function checkSecurityPanelChallengeStatusOnServer(): Promise<boolean> {
   }
 }
 
-async function verifySecurityPanelLinkOnServer(rawInput: string): Promise<boolean> {
-  try {
-    const token = await getFreshAccessToken();
-    if (!token) return false;
-    const res = await fetch(`/api/storage-proxy?action=security-panel-verify-link`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ input: rawInput }),
-    });
-    if (!res.ok) return false;
-    const data = (await res.json()) as { verified?: boolean };
-    return Boolean(data.verified);
-  } catch {
-    return false;
-  }
-}
-
 export async function consumeSecurityEmailCallback(userId: string): Promise<boolean> {
   if (typeof window === "undefined" || !userId) return false;
   try {
@@ -245,9 +225,6 @@ export function SecuritySettingsDialog({
   );
   const [sendingConfirmEmail, setSendingConfirmEmail] = useState(false);
   const [confirmEmailSent, setConfirmEmailSent] = useState(false);
-  const [otpCode, setOtpCode] = useState("");
-  const [verifyingOtp, setVerifyingOtp] = useState(false);
-  const [checkingLinkStatus, setCheckingLinkStatus] = useState(false);
 
   // Account Password state
   const [newAccountPassword, setNewAccountPassword] = useState("");
@@ -369,7 +346,6 @@ export function SecuritySettingsDialog({
     setSendingConfirmEmail(true);
     try {
       setPendingEmailIntent("security_panel");
-      // Use clean /app redirect URL so Supabase Redirect URL allowlist never blocks query params
       const redirectUrl = `${window.location.origin}/app`;
       const { error: otpError } = await supabase.auth.signInWithOtp({
         email: userEmail,
@@ -393,14 +369,13 @@ export function SecuritySettingsDialog({
             await startSecurityPanelChallengeOnServer();
             setConfirmEmailSent(true);
             toast.info(
-              `A confirmation email was recently sent to ${userEmail}. Click the link in that email (or paste it below) to unlock.`,
+              `A confirmation email was recently sent to ${userEmail}. Please click the link in that email to open the Security panel.`,
             );
             return;
           }
           throw resetError;
         }
       }
-      // Record post-send baseline on server so clicking the email link is detected immediately
       await startSecurityPanelChallengeOnServer();
       setConfirmEmailSent(true);
       toast.success(`Confirmation email sent to ${userEmail}`);
@@ -408,118 +383,6 @@ export function SecuritySettingsDialog({
       toast.error(err instanceof Error ? err.message : "Could not send confirmation email");
     } finally {
       setSendingConfirmEmail(false);
-    }
-  };
-
-  const handleCheckEmailLinkClicked = async () => {
-    if (!userId) return;
-    setCheckingLinkStatus(true);
-    try {
-      const verified = await checkSecurityPanelChallengeStatusOnServer();
-      if (verified) {
-        markSecurityPanelEmailVerified(userId);
-        setEmailVerified(true);
-        toast.success("Email confirmed! Security panel unlocked.");
-      } else {
-        toast.info(
-          "Not detected yet. Make sure you clicked the link inside the email, or copy & paste the link into the box below.",
-        );
-      }
-    } finally {
-      setCheckingLinkStatus(false);
-    }
-  };
-
-  const handleVerifyEmailCode = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const rawInput = otpCode.trim();
-    if (!userEmail || !rawInput) {
-      toast.error("Please paste the confirmation link or code from your email.");
-      return;
-    }
-    setVerifyingOtp(true);
-    try {
-      let verified = false;
-
-      // 1. Check if the user pasted a full confirmation URL from their email or browser address bar
-      if (rawInput.startsWith("http://") || rawInput.startsWith("https://")) {
-        try {
-          const parsedUrl = new URL(rawInput);
-          const tokenParam =
-            parsedUrl.searchParams.get("token_hash") || parsedUrl.searchParams.get("token") || "";
-          const typeParam = parsedUrl.searchParams.get("type") || "magiclink";
-          const codeParam = parsedUrl.searchParams.get("code") || "";
-
-          if (tokenParam) {
-            for (const otpType of [typeParam, "magiclink", "recovery", "email"] as const) {
-              const { error } = await supabase.auth.verifyOtp({
-                token_hash: tokenParam,
-                type: otpType as "magiclink" | "recovery" | "email",
-              });
-              if (!error) {
-                verified = true;
-                break;
-              }
-            }
-          }
-
-          if (!verified && codeParam) {
-            const { error } = await supabase.auth.exchangeCodeForSession(codeParam);
-            if (!error) verified = true;
-          }
-        } catch {
-          // fall through to server verification
-        }
-
-        if (!verified) {
-          verified = await verifySecurityPanelLinkOnServer(rawInput);
-        }
-      } else {
-        // 2. User entered a 6-digit OTP code or token hash string directly
-        for (const otpType of ["email", "magiclink", "recovery"] as const) {
-          const { error } = await supabase.auth.verifyOtp({
-            email: userEmail,
-            token: rawInput,
-            type: otpType,
-          });
-          if (!error) {
-            verified = true;
-            break;
-          }
-        }
-        if (!verified && rawInput.length >= 20) {
-          for (const otpType of ["magiclink", "recovery", "email"] as const) {
-            const { error } = await supabase.auth.verifyOtp({
-              token_hash: rawInput,
-              type: otpType,
-            });
-            if (!error) {
-              verified = true;
-              break;
-            }
-          }
-        }
-      }
-
-      if (!verified) {
-        verified = await checkSecurityPanelChallengeStatusOnServer();
-      }
-
-      if (!verified) {
-        throw new Error(
-          "Could not verify that link or code. Please click the confirmation link in your email or right-click and copy the link address from the email.",
-        );
-      }
-
-      await completeSecurityPanelChallengeOnServer();
-      markSecurityPanelEmailVerified(userId);
-      setEmailVerified(true);
-      setOtpCode("");
-      toast.success("Email confirmed! Security panel unlocked.");
-    } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "Could not verify link or code");
-    } finally {
-      setVerifyingOtp(false);
     }
   };
 
@@ -732,48 +595,50 @@ export function SecuritySettingsDialog({
 
         {!emailVerified ? (
           <div className="space-y-4 pt-1">
-            <div className="rounded-xl border border-border/80 bg-secondary/30 p-4 space-y-2">
+            <div className="rounded-xl border border-border/80 bg-secondary/30 p-4 space-y-2.5">
               <div className="flex items-center gap-2 text-accent">
                 <Mail className="size-4" />
                 <p className="font-hand text-xl text-sepia">verify it&apos;s really you</p>
               </div>
-              <h3 className="font-serif text-lg text-primary">Email Confirmation Required</h3>
+              <h3 className="font-serif text-lg text-primary">Confirm via Email</h3>
               <p className="text-xs leading-relaxed text-muted-foreground">
-                To protect your passwords, recovery key, and security questions against unauthorized
-                access on an unlocked device, please confirm with an email sent to{" "}
-                <strong className="text-foreground">{userEmail || "your account email"}</strong>.
+                Send a confirmation link to{" "}
+                <strong className="text-foreground">{userEmail || "your account email"}</strong> and
+                click the link in your inbox to open your Security &amp; Vault settings.
               </p>
+              <ul className="space-y-1 pt-1 text-xs text-muted-foreground">
+                <li className="flex items-center gap-2">
+                  <span className="size-1.5 rounded-full bg-accent shrink-0" />
+                  <span>Protects your passwords, recovery key, and security questions.</span>
+                </li>
+                <li className="flex items-center gap-2">
+                  <span className="size-1.5 rounded-full bg-accent shrink-0" />
+                  <span>Opens automatically as soon as you click the link sent to your email.</span>
+                </li>
+                <li className="flex items-center gap-2">
+                  <span className="size-1.5 rounded-full bg-accent shrink-0" />
+                  <span>Stays unlocked for 15 minutes during your active session.</span>
+                </li>
+              </ul>
             </div>
 
             {!confirmEmailSent ? (
-              <div className="space-y-2.5">
-                <button
-                  type="button"
-                  disabled={sendingConfirmEmail || !userEmail}
-                  onClick={() => void handleSendSecurityConfirmationEmail()}
-                  className="flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground transition hover:opacity-90 disabled:opacity-60"
-                >
-                  <Mail className="size-4" />
-                  <span>
-                    {sendingConfirmEmail
-                      ? "Sending confirmation email..."
-                      : `Send Confirmation Email to ${userEmail || "your email"}`}
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    void startSecurityPanelChallengeOnServer();
-                    setConfirmEmailSent(true);
-                  }}
-                  className="w-full text-center text-xs text-accent hover:text-primary hover:underline"
-                >
-                  Already received a confirmation email? Click here to verify or paste the link
-                </button>
-              </div>
+              <button
+                type="button"
+                disabled={sendingConfirmEmail || !userEmail}
+                onClick={() => void handleSendSecurityConfirmationEmail()}
+                className="flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground transition hover:opacity-90 disabled:opacity-60"
+              >
+                <Mail className="size-4" />
+                <span>
+                  {sendingConfirmEmail
+                    ? "Sending confirmation email..."
+                    : "Send Confirmation Email"}
+                </span>
+              </button>
             ) : (
-              <div className="space-y-4">
-                <div className="rounded-xl border border-accent/40 bg-accent/10 p-3.5 text-xs leading-relaxed text-foreground space-y-2">
+              <div className="space-y-3">
+                <div className="rounded-xl border border-accent/40 bg-accent/10 p-4 text-xs leading-relaxed text-foreground space-y-2">
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-1.5 font-semibold text-primary">
                       <Check className="size-4 text-accent shrink-0" />
@@ -781,62 +646,23 @@ export function SecuritySettingsDialog({
                     </div>
                     <span className="inline-flex items-center gap-1 text-[11px] font-medium text-accent">
                       <RefreshCw className="size-3 animate-spin" />
-                      <span>Listening for click...</span>
+                      <span>Waiting for click...</span>
                     </span>
                   </div>
                   <p className="text-muted-foreground">
-                    <strong>1. Click the link in your email:</strong> Keep this window open and
-                    click the confirmation link in the email we sent you—this panel will unlock
-                    automatically within 2 seconds (even if the email link opens in another tab).
+                    Open the email we just sent you and click the confirmation link. Your Security
+                    &amp; Vault panel will unlock automatically.
                   </p>
-                  <button
-                    type="button"
-                    disabled={checkingLinkStatus}
-                    onClick={() => void handleCheckEmailLinkClicked()}
-                    className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-accent/50 bg-card px-3 py-2 text-xs font-medium text-primary transition hover:bg-secondary disabled:opacity-60"
-                  >
-                    <ShieldCheck className="size-4 text-accent" />
-                    <span>
-                      {checkingLinkStatus
-                        ? "Checking confirmation status..."
-                        : "I've clicked the email link — Unlock Security Panel"}
-                    </span>
-                  </button>
                 </div>
 
-                <form onSubmit={handleVerifyEmailCode} className="space-y-3">
-                  <label className="block">
-                    <span className="mb-1 block text-xs font-medium text-foreground/80">
-                      <strong>2. Or paste the link from your email:</strong> Right-click the button
-                      or link in your email, choose <em>Copy link address</em>, and paste it below
-                      (or enter a 6-digit code if your email template includes one):
-                    </span>
-                    <input
-                      type="text"
-                      value={otpCode}
-                      onChange={(e) => setOtpCode(e.target.value)}
-                      placeholder="Paste confirmation link (https://...) or code"
-                      className="w-full rounded-lg border border-input bg-card px-3 py-2 font-mono text-xs outline-none focus:border-ring focus:ring-1 focus:ring-ring"
-                    />
-                  </label>
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      disabled={sendingConfirmEmail}
-                      onClick={() => void handleSendSecurityConfirmationEmail()}
-                      className="rounded-lg border border-border bg-card px-3 py-2 text-xs text-muted-foreground transition hover:bg-secondary hover:text-primary disabled:opacity-60"
-                    >
-                      {sendingConfirmEmail ? "Sending..." : "Resend email"}
-                    </button>
-                    <button
-                      type="submit"
-                      disabled={verifyingOtp || !otpCode.trim()}
-                      className="flex-1 rounded-lg bg-primary px-4 py-2 text-xs font-medium text-primary-foreground transition hover:opacity-90 disabled:opacity-60"
-                    >
-                      {verifyingOtp ? "Verifying..." : "Verify Link / Code & Open Security"}
-                    </button>
-                  </div>
-                </form>
+                <button
+                  type="button"
+                  disabled={sendingConfirmEmail}
+                  onClick={() => void handleSendSecurityConfirmationEmail()}
+                  className="w-full rounded-lg border border-border bg-card px-4 py-2 text-xs font-medium text-muted-foreground transition hover:bg-secondary hover:text-primary disabled:opacity-60"
+                >
+                  {sendingConfirmEmail ? "Sending..." : "Resend Confirmation Email"}
+                </button>
               </div>
             )}
           </div>
