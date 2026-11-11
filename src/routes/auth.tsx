@@ -1,6 +1,12 @@
 import { createFileRoute, redirect, useRouter } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
-import { supabase } from "@/integrations/supabase/client";
+import {
+  consumeEmailCallbackIntent,
+  EMAIL_AUTH_CALLBACK_EVENT,
+  peekEmailCallbackIntent,
+  setPendingEmailIntent,
+  supabase,
+} from "@/integrations/supabase/client";
 import { ThemeToggleButton } from "@/lib/theme";
 import { markFirstTimeSignup } from "@/components/WelcomeTour";
 import { toast } from "sonner";
@@ -23,11 +29,14 @@ function isPasswordRecoveryUrl(): boolean {
   if (typeof window === "undefined") return false;
   const search = new URLSearchParams(window.location.search);
   const hash = window.location.hash || "";
-  return (
+  if (
     search.get("mode") === "reset" ||
     search.get("type") === "recovery" ||
     hash.includes("type=recovery")
-  );
+  ) {
+    return true;
+  }
+  return peekEmailCallbackIntent() === "password_reset";
 }
 
 export const Route = createFileRoute("/auth")({
@@ -37,6 +46,9 @@ export const Route = createFileRoute("/auth")({
       return;
     }
     const { data } = await supabase.auth.getSession();
+    if (peekEmailCallbackIntent(data.session) === "password_reset") {
+      return;
+    }
     if (data.session?.user) throw redirect({ to: "/app" });
   },
   head: () => ({ meta: [{ title: "Sign in · The PaperVault" }] }),
@@ -54,6 +66,8 @@ function AuthPage() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [loading, setLoading] = useState(false);
+  const [pastedResetLink, setPastedResetLink] = useState("");
+  const [verifyingResetLink, setVerifyingResetLink] = useState(false);
 
   // First-time Sign-Up Security Questions state
   const [signupQuestionSlots, setSignupQuestionSlots] = useState<
@@ -67,19 +81,95 @@ function AuthPage() {
 
   useEffect(() => {
     if (isPasswordRecoveryUrl()) {
+      consumeEmailCallbackIntent();
       setMode("reset");
     }
+    const onEmailCallback = (e: Event) => {
+      const detail = (e as CustomEvent<{ intent?: string }>).detail;
+      if (detail?.intent === "password_reset" || isPasswordRecoveryUrl()) {
+        consumeEmailCallbackIntent();
+        setMode("reset");
+      }
+    };
+    window.addEventListener(EMAIL_AUTH_CALLBACK_EVENT, onEmailCallback);
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((event) => {
-      if (event === "PASSWORD_RECOVERY") {
+    } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === "PASSWORD_RECOVERY" || peekEmailCallbackIntent(session) === "password_reset") {
+        consumeEmailCallbackIntent(session);
         setMode("reset");
       }
     });
     return () => {
+      window.removeEventListener(EMAIL_AUTH_CALLBACK_EVENT, onEmailCallback);
       subscription.unsubscribe();
     };
   }, []);
+
+  const handleVerifyPastedResetLink = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const raw = pastedResetLink.trim();
+    if (!raw) return;
+    setVerifyingResetLink(true);
+    try {
+      let verified = false;
+      if (raw.startsWith("http://") || raw.startsWith("https://")) {
+        const parsed = new URL(raw);
+        const tokenParam =
+          parsed.searchParams.get("token_hash") || parsed.searchParams.get("token") || "";
+        const codeParam = parsed.searchParams.get("code") || "";
+        if (tokenParam) {
+          for (const t of ["recovery", "magiclink", "email"] as const) {
+            const { error } = await supabase.auth.verifyOtp({ token_hash: tokenParam, type: t });
+            if (!error) {
+              verified = true;
+              break;
+            }
+          }
+        }
+        if (!verified && codeParam) {
+          const { error } = await supabase.auth.exchangeCodeForSession(codeParam);
+          if (!error) verified = true;
+        }
+        if (!verified && parsed.hash.includes("access_token=")) {
+          const hashParams = new URLSearchParams(parsed.hash.replace(/^#/, ""));
+          const accessToken = hashParams.get("access_token") || "";
+          const refreshToken = hashParams.get("refresh_token") || "";
+          if (accessToken && refreshToken) {
+            const { error } = await supabase.auth.setSession({
+              access_token: accessToken,
+              refresh_token: refreshToken,
+            });
+            if (!error) verified = true;
+          }
+        }
+      } else if (email.trim()) {
+        for (const t of ["recovery", "email", "magiclink"] as const) {
+          const { error } = await supabase.auth.verifyOtp({
+            email: email.trim().toLowerCase(),
+            token: raw,
+            type: t,
+          });
+          if (!error) {
+            verified = true;
+            break;
+          }
+        }
+      }
+      if (!verified) {
+        throw new Error(
+          "Could not verify that reset link. Right-click the button in your reset email, copy the link address, and paste it here.",
+        );
+      }
+      setPastedResetLink("");
+      setMode("reset");
+      toast.success("Reset link verified! Enter your new password below.");
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Could not verify reset link");
+    } finally {
+      setVerifyingResetLink(false);
+    }
+  };
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -101,8 +191,9 @@ function AuthPage() {
             return;
           }
           // If the user hasn't set security questions yet on this email, send reset link directly
+          setPendingEmailIntent("password_reset");
           const { error } = await supabase.auth.resetPasswordForEmail(cleanEmail, {
-            redirectTo: `${window.location.origin}/auth?mode=reset`,
+            redirectTo: `${window.location.origin}/auth`,
           });
           if (error) throw error;
           setForgotStep("email_sent");
@@ -119,8 +210,9 @@ function AuthPage() {
           if (!verified) {
             throw new Error("Security question answers did not match. Please try again.");
           }
+          setPendingEmailIntent("password_reset");
           const { error } = await supabase.auth.resetPasswordForEmail(cleanEmail, {
-            redirectTo: `${window.location.origin}/auth?mode=reset`,
+            redirectTo: `${window.location.origin}/auth`,
           });
           if (error) throw error;
           setForgotStep("email_sent");
@@ -139,6 +231,7 @@ function AuthPage() {
         }
         const { error } = await supabase.auth.updateUser({ password });
         if (error) throw error;
+        consumeEmailCallbackIntent();
         toast.success("Your password has been updated!");
         router.navigate({ to: "/app", replace: true });
         return;
@@ -219,17 +312,44 @@ function AuthPage() {
 
         {mode === "forgot" && forgotStep === "email_sent" ? (
           <div className="mt-6 space-y-4">
-            <div className="rounded-lg border border-border bg-secondary/40 p-4 text-sm text-foreground">
+            <div className="rounded-lg border border-border bg-secondary/40 p-4 text-sm text-foreground space-y-2">
               <div className="flex items-center gap-2 font-medium text-primary">
                 <CheckCircle2 className="size-4 text-accent shrink-0" />
                 <span>Reset link sent to {email}</span>
               </div>
-              <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+              <p className="text-xs leading-relaxed text-muted-foreground">
                 Open the email we just sent you and click the recovery link to set a new account
-                password. Don&apos;t forget to check your spam or promotions folder if it takes a
-                minute.
+                password.
               </p>
             </div>
+
+            <form onSubmit={handleVerifyPastedResetLink} className="space-y-2.5">
+              <label className="block">
+                <span className="mb-1 block text-xs font-medium text-foreground/80">
+                  Or right-click the reset link in your email, copy the link address, and paste it
+                  here to reset right in this tab:
+                </span>
+                <input
+                  type="text"
+                  value={pastedResetLink}
+                  onChange={(e) => setPastedResetLink(e.target.value)}
+                  placeholder="Paste reset link from email (https://...)"
+                  className="w-full rounded-md border border-input bg-card px-3 py-2 font-mono text-xs text-foreground outline-none focus:border-ring focus:ring-1 focus:ring-ring"
+                />
+              </label>
+              {pastedResetLink.trim() && (
+                <button
+                  type="submit"
+                  disabled={verifyingResetLink}
+                  className="w-full rounded-md bg-primary px-4 py-2 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:opacity-60"
+                >
+                  {verifyingResetLink
+                    ? "Verifying reset link..."
+                    : "Verify Reset Link & Set New Password"}
+                </button>
+              )}
+            </form>
+
             <button
               type="button"
               onClick={() => {

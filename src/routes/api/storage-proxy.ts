@@ -267,6 +267,58 @@ function clearSqVerifyFailures(key: string): void {
   sqVerifyFailureBuckets.delete(key);
 }
 
+type SecurityPanelChallenge = {
+  userId: string;
+  startedAt: number;
+  baselineLastSignInAt: string;
+  baselineUpdatedAt: string;
+  verifiedAt: number;
+};
+
+const securityPanelChallenges = new Map<string, SecurityPanelChallenge>();
+
+async function fetchLiveSupabaseAuthUser(
+  request: Request,
+  bearerToken: string,
+): Promise<{
+  id?: string;
+  email?: string;
+  last_sign_in_at?: string;
+  updated_at?: string;
+  confirmation_sent_at?: string;
+  recovery_sent_at?: string;
+} | null> {
+  const url = getSupabaseUrl(request).replace(/\/+$/, "");
+  const anonKey = getSupabaseAnonOrServiceKey(request);
+  if (!url || !anonKey || !bearerToken) return null;
+  try {
+    const res = await fetch(`${url}/auth/v1/user`, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${bearerToken}`,
+        apikey: anonKey,
+        "Cache-Control": "no-cache",
+      },
+      cache: "no-store",
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as Record<string, unknown>;
+    if (!data || typeof data.id !== "string") return null;
+    return {
+      id: data.id,
+      email: typeof data.email === "string" ? data.email : undefined,
+      last_sign_in_at: typeof data.last_sign_in_at === "string" ? data.last_sign_in_at : undefined,
+      updated_at: typeof data.updated_at === "string" ? data.updated_at : undefined,
+      confirmation_sent_at:
+        typeof data.confirmation_sent_at === "string" ? data.confirmation_sent_at : undefined,
+      recovery_sent_at:
+        typeof data.recovery_sent_at === "string" ? data.recovery_sent_at : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
 function isAllowedStoragePath(
   user: User,
   bucket: string,
@@ -1208,6 +1260,219 @@ export const Route = createFileRoute("/api/storage-proxy")({
             };
             return new Response(JSON.stringify({ configured: true, record: safeClientRecord }), {
               status: 200,
+              headers: JSON_SECURITY_HEADERS,
+            });
+          }
+
+          if (action === "security-panel-challenge-start") {
+            const liveUser = await fetchLiveSupabaseAuthUser(request, bearerToken);
+            const nowMs = Date.now();
+            const challenge: SecurityPanelChallenge = {
+              userId: user.id,
+              startedAt: nowMs,
+              baselineLastSignInAt: liveUser?.last_sign_in_at || user.last_sign_in_at || "",
+              baselineUpdatedAt: liveUser?.updated_at || user.updated_at || "",
+              verifiedAt: 0,
+            };
+            securityPanelChallenges.set(user.id, challenge);
+            if (b2Config) {
+              await writeSecurityQuestionsBlob(
+                `_security_panel_challenge/${user.id}.bin`,
+                challenge as unknown as Record<string, unknown>,
+              ).catch(() => {});
+            }
+            return new Response(JSON.stringify({ ok: true, startedAt: nowMs }), {
+              status: 200,
+              headers: JSON_SECURITY_HEADERS,
+            });
+          }
+
+          if (action === "security-panel-challenge-complete") {
+            const nowMs = Date.now();
+            const existing = securityPanelChallenges.get(user.id);
+            const updated: SecurityPanelChallenge = {
+              userId: user.id,
+              startedAt: existing?.startedAt || nowMs,
+              baselineLastSignInAt: existing?.baselineLastSignInAt || user.last_sign_in_at || "",
+              baselineUpdatedAt: existing?.baselineUpdatedAt || user.updated_at || "",
+              verifiedAt: nowMs,
+            };
+            securityPanelChallenges.set(user.id, updated);
+            if (b2Config) {
+              await writeSecurityQuestionsBlob(
+                `_security_panel_challenge/${user.id}.bin`,
+                updated as unknown as Record<string, unknown>,
+              ).catch(() => {});
+            }
+            return new Response(JSON.stringify({ verified: true }), {
+              status: 200,
+              headers: JSON_SECURITY_HEADERS,
+            });
+          }
+
+          if (action === "security-panel-challenge-status") {
+            const nowMs = Date.now();
+            let challenge = securityPanelChallenges.get(user.id) || null;
+            if (!challenge && b2Config) {
+              const stored = await readSecurityQuestionsBlob(
+                `_security_panel_challenge/${user.id}.bin`,
+              );
+              if (stored && typeof stored.userId === "string" && stored.userId === user.id) {
+                challenge = {
+                  userId: user.id,
+                  startedAt: Number(stored.startedAt) || 0,
+                  baselineLastSignInAt: String(stored.baselineLastSignInAt || ""),
+                  baselineUpdatedAt: String(stored.baselineUpdatedAt || ""),
+                  verifiedAt: Number(stored.verifiedAt) || 0,
+                };
+                securityPanelChallenges.set(user.id, challenge);
+              }
+            }
+
+            if (
+              challenge &&
+              challenge.verifiedAt > 0 &&
+              nowMs - challenge.verifiedAt < 15 * 60_000
+            ) {
+              return new Response(JSON.stringify({ verified: true }), {
+                status: 200,
+                headers: JSON_SECURITY_HEADERS,
+              });
+            }
+
+            const liveUser = await fetchLiveSupabaseAuthUser(request, bearerToken);
+            if (liveUser) {
+              const liveSignInStr = liveUser.last_sign_in_at || "";
+              const liveSignInMs = Date.parse(liveSignInStr) || 0;
+              const confirmSentMs = Date.parse(liveUser.confirmation_sent_at || "") || 0;
+              const recoverySentMs = Date.parse(liveUser.recovery_sent_at || "") || 0;
+              const latestEmailSentMs = Math.max(confirmSentMs, recoverySentMs);
+
+              let emailLinkClicked = false;
+
+              if (challenge && nowMs - challenge.startedAt < 30 * 60_000) {
+                if (
+                  liveSignInStr &&
+                  liveSignInStr !== challenge.baselineLastSignInAt &&
+                  liveSignInMs >= challenge.startedAt - 60_000
+                ) {
+                  emailLinkClicked = true;
+                }
+              }
+
+              // Also check if the user clicked the link in the most recent confirmation/recovery email within the last 20 minutes
+              if (
+                !emailLinkClicked &&
+                latestEmailSentMs > 0 &&
+                nowMs - latestEmailSentMs < 20 * 60_000 &&
+                liveSignInMs >= latestEmailSentMs - 1000
+              ) {
+                emailLinkClicked = true;
+              }
+
+              if (emailLinkClicked) {
+                const updated: SecurityPanelChallenge = {
+                  userId: user.id,
+                  startedAt: challenge?.startedAt || nowMs,
+                  baselineLastSignInAt: liveSignInStr,
+                  baselineUpdatedAt: liveUser.updated_at || "",
+                  verifiedAt: nowMs,
+                };
+                securityPanelChallenges.set(user.id, updated);
+                if (b2Config) {
+                  await writeSecurityQuestionsBlob(
+                    `_security_panel_challenge/${user.id}.bin`,
+                    updated as unknown as Record<string, unknown>,
+                  ).catch(() => {});
+                }
+                return new Response(JSON.stringify({ verified: true }), {
+                  status: 200,
+                  headers: JSON_SECURITY_HEADERS,
+                });
+              }
+            }
+
+            return new Response(JSON.stringify({ verified: false }), {
+              status: 200,
+              headers: JSON_SECURITY_HEADERS,
+            });
+          }
+
+          if (action === "security-panel-verify-link") {
+            const body = (await request.json().catch(() => null)) as { input?: string } | null;
+            const rawInput = typeof body?.input === "string" ? body.input.trim() : "";
+            if (!rawInput || rawInput.length > 4096) {
+              return new Response(JSON.stringify({ error: "Invalid link or code" }), {
+                status: 400,
+                headers: JSON_SECURITY_HEADERS,
+              });
+            }
+
+            const sbUrlStr = getSupabaseUrl(request).replace(/\/+$/, "");
+            let verifiedOnServer = false;
+
+            try {
+              const parsedUrl = new URL(rawInput);
+              const sbHost = sbUrlStr ? new URL(sbUrlStr).hostname : "";
+              // 1. If the user pasted the raw Supabase confirmation URL (https://<project>.supabase.co/auth/v1/verify?token=...)
+              if (
+                sbHost &&
+                parsedUrl.hostname === sbHost &&
+                parsedUrl.pathname.includes("/auth/v1/verify")
+              ) {
+                const verifyRes = await fetch(parsedUrl.toString(), {
+                  method: "GET",
+                  redirect: "manual",
+                });
+                const locationHeader = verifyRes.headers.get("location") || "";
+                if (
+                  locationHeader &&
+                  !locationHeader.includes("error=") &&
+                  (locationHeader.includes("access_token=") || locationHeader.includes("code="))
+                ) {
+                  verifiedOnServer = true;
+                }
+              }
+
+              // 2. If the user pasted the redirected URL containing #access_token=...
+              if (!verifiedOnServer && parsedUrl.hash.includes("access_token=")) {
+                const hashParams = new URLSearchParams(parsedUrl.hash.replace(/^#/, ""));
+                const pastedAccessToken = hashParams.get("access_token") || "";
+                if (pastedAccessToken) {
+                  const pastedUser = await fetchLiveSupabaseAuthUser(request, pastedAccessToken);
+                  if (pastedUser?.id === user.id) {
+                    verifiedOnServer = true;
+                  }
+                }
+              }
+            } catch {
+              // Not a full URL; handled by client or status check below
+            }
+
+            if (verifiedOnServer) {
+              const nowMs = Date.now();
+              const updated: SecurityPanelChallenge = {
+                userId: user.id,
+                startedAt: nowMs,
+                baselineLastSignInAt: new Date(nowMs).toISOString(),
+                baselineUpdatedAt: new Date(nowMs).toISOString(),
+                verifiedAt: nowMs,
+              };
+              securityPanelChallenges.set(user.id, updated);
+              if (b2Config) {
+                await writeSecurityQuestionsBlob(
+                  `_security_panel_challenge/${user.id}.bin`,
+                  updated as unknown as Record<string, unknown>,
+                ).catch(() => {});
+              }
+              return new Response(JSON.stringify({ verified: true }), {
+                status: 200,
+                headers: JSON_SECURITY_HEADERS,
+              });
+            }
+
+            return new Response(JSON.stringify({ verified: false }), {
+              status: 400,
               headers: JSON_SECURITY_HEADERS,
             });
           }

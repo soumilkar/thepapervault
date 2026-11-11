@@ -1,6 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { memo, useEffect, useState } from "react";
+import { memo, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import {
   BookOpen,
@@ -19,12 +19,7 @@ import { EntryHeatmap } from "@/components/EntryHeatmap";
 import { MoodTracker } from "@/components/MoodTracker";
 import { GoalsTracker } from "@/components/GoalsTracker";
 import { useDiaryMetrics } from "@/lib/diary-metrics";
-import {
-  consumeSecurityEmailCallback,
-  SecuritySettingsDialog,
-  type SecurityTab,
-} from "@/components/SecuritySettingsDialog";
-import { toast } from "sonner";
+import { requestOpenSecurityDialog, type SecurityTab } from "@/components/SecuritySettingsDialog";
 
 export const Route = createFileRoute("/app/")({
   component: Dashboard,
@@ -45,38 +40,10 @@ type PublicDiary = {
 function Dashboard() {
   const { user, profileDisplayName } = Route.useRouteContext();
   const diaryMetrics = useDiaryMetrics(user.id);
-  const [securityOpen, setSecurityOpen] = useState(false);
-  const [securityInitialTab, setSecurityInitialTab] = useState<SecurityTab>("account");
 
   const openSecurityAt = (targetTab: SecurityTab) => {
-    setSecurityInitialTab(targetTab);
-    setSecurityOpen(true);
+    requestOpenSecurityDialog(targetTab);
   };
-
-  useEffect(() => {
-    let cancelled = false;
-    if (typeof window !== "undefined") {
-      void consumeSecurityEmailCallback(user.id).then((verified) => {
-        if (cancelled || !verified) return;
-        openSecurityAt("account");
-        toast.success("Email confirmed! Security panel unlocked.");
-        try {
-          const cleanUrl = new URL(window.location.href);
-          cleanUrl.searchParams.delete("security_nonce");
-          cleanUrl.searchParams.delete("security_verified");
-          cleanUrl.searchParams.delete("type");
-          cleanUrl.searchParams.delete("code");
-          cleanUrl.searchParams.delete("token_hash");
-          window.history.replaceState({}, "", cleanUrl.pathname + cleanUrl.search);
-        } catch {
-          // ignore
-        }
-      });
-    }
-    return () => {
-      cancelled = true;
-    };
-  }, [user.id]);
 
   const profileQuery = useQuery({
     queryKey: ["user-profile", user.id],
@@ -172,13 +139,6 @@ function Dashboard() {
   return (
     <div className="space-y-10">
       <WelcomeTour userId={user.id} />
-      <SecuritySettingsDialog
-        open={securityOpen}
-        onOpenChange={setSecurityOpen}
-        userId={user.id}
-        userEmail={user.email}
-        initialTab={securityInitialTab}
-      />
 
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>

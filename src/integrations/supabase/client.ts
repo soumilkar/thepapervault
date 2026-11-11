@@ -18,9 +18,174 @@ import {
 const MISSING_ENV_MESSAGE =
   "Supabase is not configured yet. Please add VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY (or VITE_SUPABASE_ANON_KEY) in your environment secrets.";
 
+export const EMAIL_AUTH_CALLBACK_STORAGE_KEY = "papervault:email_auth_callback_ts";
+export const EMAIL_AUTH_CALLBACK_TYPE_KEY = "papervault:email_auth_callback_type";
+export const EMAIL_AUTH_CALLBACK_EVENT = "papervault:email-auth-callback";
+const PENDING_EMAIL_INTENT_KEY = "papervault:pending_email_intent";
+const CONSUMED_AMR_TS_KEY = "papervault:consumed_amr_ts";
+
+export type EmailCallbackIntent = "password_reset" | "security_panel";
+
+export function setPendingEmailIntent(intent: EmailCallbackIntent): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(
+      PENDING_EMAIL_INTENT_KEY,
+      JSON.stringify({ intent, ts: Date.now() }),
+    );
+    window.sessionStorage.setItem(
+      PENDING_EMAIL_INTENT_KEY,
+      JSON.stringify({ intent, ts: Date.now() }),
+    );
+  } catch {
+    // ignore
+  }
+}
+
+function getRecentPendingEmailIntent(): EmailCallbackIntent | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw =
+      window.sessionStorage.getItem(PENDING_EMAIL_INTENT_KEY) ||
+      window.localStorage.getItem(PENDING_EMAIL_INTENT_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { intent?: EmailCallbackIntent; ts?: number };
+    if (parsed?.intent && parsed?.ts && Date.now() - parsed.ts < 20 * 60_000) {
+      return parsed.intent;
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+function extractJwtAmrCallback(
+  accessToken?: string | null,
+): { method: "recovery" | "otp"; timestamp: number } | null {
+  if (!accessToken) return null;
+  try {
+    const parts = accessToken.split(".");
+    if (parts.length < 2) return null;
+    const b64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const padded = b64 + "=".repeat((4 - (b64.length % 4)) % 4);
+    const payload = JSON.parse(atob(padded)) as {
+      amr?: { method?: string; timestamp?: number }[];
+      iat?: number;
+    };
+    const nowSec = Math.floor(Date.now() / 1000);
+    if (Array.isArray(payload.amr)) {
+      for (const item of payload.amr) {
+        const ts = item.timestamp || payload.iat || 0;
+        if (ts > 0 && nowSec - ts <= 240) {
+          if (item.method === "recovery") return { method: "recovery", timestamp: ts };
+          if (item.method === "otp") return { method: "otp", timestamp: ts };
+        }
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+export function peekEmailCallbackIntent(session?: Session | null): EmailCallbackIntent | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const search = new URLSearchParams(window.location.search);
+    const hash = window.location.hash || "";
+    if (search.get("mode") === "reset") return "password_reset";
+
+    const storedTs = Number(window.sessionStorage.getItem(EMAIL_AUTH_CALLBACK_STORAGE_KEY) || "0");
+    const storedType = window.sessionStorage.getItem(
+      EMAIL_AUTH_CALLBACK_TYPE_KEY,
+    ) as EmailCallbackIntent | null;
+    if (storedTs > 0 && Date.now() - storedTs < 5 * 60_000 && storedType) {
+      return storedType;
+    }
+
+    const pendingIntent = getRecentPendingEmailIntent();
+    if (hash.includes("type=recovery") || search.get("type") === "recovery") {
+      return pendingIntent || "password_reset";
+    }
+    if (
+      hash.includes("type=magiclink") ||
+      hash.includes("type=email") ||
+      hash.includes("access_token=") ||
+      search.has("code") ||
+      search.has("token_hash") ||
+      search.has("security_nonce") ||
+      search.get("security_verified") === "1"
+    ) {
+      return pendingIntent || "security_panel";
+    }
+
+    const activeSession = session ?? (getCachedAuthSession() as Session | null);
+    const amr = extractJwtAmrCallback(activeSession?.access_token);
+    if (amr) {
+      const consumedTs = Number(window.sessionStorage.getItem(CONSUMED_AMR_TS_KEY) || "0");
+      if (amr.timestamp > consumedTs) {
+        if (pendingIntent) return pendingIntent;
+        return amr.method === "recovery" ? "password_reset" : "security_panel";
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+export function consumeEmailCallbackIntent(session?: Session | null): EmailCallbackIntent | null {
+  if (typeof window === "undefined") return null;
+  const intent = peekEmailCallbackIntent(session);
+  if (!intent) return null;
+  try {
+    window.sessionStorage.removeItem(EMAIL_AUTH_CALLBACK_STORAGE_KEY);
+    window.sessionStorage.removeItem(EMAIL_AUTH_CALLBACK_TYPE_KEY);
+    window.sessionStorage.removeItem(PENDING_EMAIL_INTENT_KEY);
+    window.localStorage.removeItem(PENDING_EMAIL_INTENT_KEY);
+    const activeSession = session ?? (getCachedAuthSession() as Session | null);
+    const amr = extractJwtAmrCallback(activeSession?.access_token);
+    if (amr) {
+      window.sessionStorage.setItem(CONSUMED_AMR_TS_KEY, String(amr.timestamp));
+    } else {
+      window.sessionStorage.setItem(CONSUMED_AMR_TS_KEY, String(Math.floor(Date.now() / 1000)));
+    }
+  } catch {
+    // ignore
+  }
+  return intent;
+}
+
 if (typeof window !== "undefined") {
   try {
     window.localStorage.removeItem("papervault:mock-auth-user");
+    const initHash = window.location.hash || "";
+    const initSearch = window.location.search || "";
+    const pendingIntent = getRecentPendingEmailIntent();
+
+    const isRecoveryRedirect =
+      initHash.includes("type=recovery") ||
+      initSearch.includes("type=recovery") ||
+      initSearch.includes("mode=reset");
+
+    const isAuthRedirect =
+      isRecoveryRedirect ||
+      initHash.includes("access_token=") ||
+      initHash.includes("type=magiclink") ||
+      initHash.includes("type=email") ||
+      initSearch.includes("code=") ||
+      initSearch.includes("token_hash=") ||
+      initSearch.includes("type=magiclink") ||
+      initSearch.includes("security_nonce=") ||
+      initSearch.includes("security_verified=1");
+
+    if (isAuthRedirect) {
+      const resolvedIntent: EmailCallbackIntent = isRecoveryRedirect
+        ? pendingIntent || "password_reset"
+        : pendingIntent || "security_panel";
+      window.sessionStorage.setItem(EMAIL_AUTH_CALLBACK_STORAGE_KEY, String(Date.now()));
+      window.sessionStorage.setItem(EMAIL_AUTH_CALLBACK_TYPE_KEY, resolvedIntent);
+    }
   } catch {
     // ignore storage errors
   }
@@ -221,6 +386,25 @@ function createSupabaseClient(): SupabaseClient<Database> {
     client.auth.onAuthStateChange((event, session) => {
       if (session) {
         cacheAuthSession(session);
+        if (event === "PASSWORD_RECOVERY") {
+          const pending = getRecentPendingEmailIntent() || "password_reset";
+          try {
+            window.sessionStorage.setItem(EMAIL_AUTH_CALLBACK_STORAGE_KEY, String(Date.now()));
+            window.sessionStorage.setItem(EMAIL_AUTH_CALLBACK_TYPE_KEY, pending);
+          } catch {
+            // ignore
+          }
+          window.dispatchEvent(
+            new CustomEvent(EMAIL_AUTH_CALLBACK_EVENT, { detail: { intent: pending } }),
+          );
+        } else if (event === "SIGNED_IN") {
+          const intent = peekEmailCallbackIntent(session);
+          if (intent) {
+            window.dispatchEvent(
+              new CustomEvent(EMAIL_AUTH_CALLBACK_EVENT, { detail: { intent } }),
+            );
+          }
+        }
         if (typeof navigator !== "undefined" && navigator.onLine) {
           triggerAutoSync(200);
         }

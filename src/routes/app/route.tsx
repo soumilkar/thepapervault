@@ -6,9 +6,9 @@ import {
   useRouter,
   useRouterState,
 } from "@tanstack/react-router";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { EMAIL_AUTH_CALLBACK_EVENT, supabase } from "@/integrations/supabase/client";
 import {
   BookOpen,
   Image as ImageIcon,
@@ -27,7 +27,13 @@ import { ThemeToggleButton, useTheme } from "@/lib/theme";
 import { clearCryptoCache } from "@/lib/crypto";
 import { VaultGate } from "@/components/VaultGate";
 import { SecurityQuestionsOnboardingModal } from "@/components/SecurityQuestionsOnboardingModal";
-import { clearSecurityPanelEmailVerified } from "@/components/SecuritySettingsDialog";
+import {
+  clearSecurityPanelEmailVerified,
+  consumeSecurityEmailCallback,
+  OPEN_SECURITY_DIALOG_EVENT,
+  SecuritySettingsDialog,
+  type SecurityTab,
+} from "@/components/SecuritySettingsDialog";
 import { toast } from "sonner";
 import {
   clearAllOfflineUserData,
@@ -355,6 +361,7 @@ function AuthedLayout() {
         </header>
         <main className="mx-auto max-w-6xl px-4 pb-10 pt-28 sm:px-6 sm:pt-32">
           <VaultOfflineWarmer userId={user.id} />
+          <GlobalSecurityDialogHost userId={user.id} userEmail={user.email} />
           <VaultGate userId={user.id}>
             <SecurityQuestionsOnboardingModal userId={user.id} />
             <Outlet />
@@ -362,6 +369,71 @@ function AuthedLayout() {
         </main>
       </div>
     </VaultProvider>
+  );
+}
+
+function GlobalSecurityDialogHost({ userId, userEmail }: { userId: string; userEmail?: string }) {
+  const [securityOpen, setSecurityOpen] = useState(false);
+  const [securityInitialTab, setSecurityInitialTab] = useState<SecurityTab>("account");
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const triggerEmailUnlock = () => {
+      void consumeSecurityEmailCallback(userId).then((verified) => {
+        if (cancelled || !verified) return;
+        setSecurityInitialTab("account");
+        setSecurityOpen(true);
+        toast.success("Email confirmed! Security & Password panel unlocked.");
+        try {
+          const cleanUrl = new URL(window.location.href);
+          cleanUrl.searchParams.delete("security_nonce");
+          cleanUrl.searchParams.delete("security_verified");
+          cleanUrl.searchParams.delete("type");
+          cleanUrl.searchParams.delete("code");
+          cleanUrl.searchParams.delete("token_hash");
+          window.history.replaceState({}, "", cleanUrl.pathname + cleanUrl.search);
+        } catch {
+          // ignore
+        }
+      });
+    };
+
+    if (typeof window !== "undefined") {
+      triggerEmailUnlock();
+
+      const onOpenRequest = (e: Event) => {
+        const detail = (e as CustomEvent<{ tab?: SecurityTab }>).detail;
+        setSecurityInitialTab(detail?.tab || "account");
+        setSecurityOpen(true);
+      };
+
+      const onEmailCallback = () => {
+        triggerEmailUnlock();
+      };
+
+      window.addEventListener(OPEN_SECURITY_DIALOG_EVENT, onOpenRequest);
+      window.addEventListener(EMAIL_AUTH_CALLBACK_EVENT, onEmailCallback);
+      return () => {
+        cancelled = true;
+        window.removeEventListener(OPEN_SECURITY_DIALOG_EVENT, onOpenRequest);
+        window.removeEventListener(EMAIL_AUTH_CALLBACK_EVENT, onEmailCallback);
+      };
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [userId]);
+
+  return (
+    <SecuritySettingsDialog
+      open={securityOpen}
+      onOpenChange={setSecurityOpen}
+      userId={userId}
+      userEmail={userEmail}
+      initialTab={securityInitialTab}
+    />
   );
 }
 

@@ -13,7 +13,13 @@ import {
   Sparkles,
 } from "lucide-react";
 import { toast } from "sonner";
-import { supabase } from "@/integrations/supabase/client";
+import {
+  consumeEmailCallbackIntent,
+  EMAIL_AUTH_CALLBACK_STORAGE_KEY,
+  setPendingEmailIntent,
+  supabase,
+} from "@/integrations/supabase/client";
+import { getFreshAccessToken } from "@/lib/offline-supabase";
 import { useVault } from "@/lib/vault";
 import {
   buildSecurityQuestionsRecord,
@@ -28,7 +34,6 @@ import {
   SecurityQuestionsPicker,
   type QuestionDraftSlot,
 } from "@/components/SecurityQuestionsOnboardingModal";
-import { randomBytes, timingSafeEqualStr, toB64 } from "@/lib/crypto";
 import {
   Dialog,
   DialogContent,
@@ -39,6 +44,13 @@ import {
 
 export type SecurityTab = "account" | "vault" | "questions" | "recovery" | "about";
 
+export const OPEN_SECURITY_DIALOG_EVENT = "papervault:open-security-dialog";
+
+export function requestOpenSecurityDialog(tab: SecurityTab = "account"): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent(OPEN_SECURITY_DIALOG_EVENT, { detail: { tab } }));
+}
+
 const SECURITY_EMAIL_VERIFY_TTL_MS = 15 * 60 * 1000; // 15 minutes
 const LEGACY_VERIFY_PREFIX = "papervault:security_panel_verified:v1:";
 const PENDING_NONCE_PREFIX = "papervault:sec_email_nonce:v2:";
@@ -47,12 +59,6 @@ const SECURITY_BC_CHANNEL = "papervault_security_gate_v2";
 
 // Volatile in-memory map of userId -> verifiedAt timestamp (never persisted in plain localStorage)
 const verifiedSecuritySessions = new Map<string, number>();
-
-async function sha256B64(input: string): Promise<string> {
-  const bytes = new TextEncoder().encode(input);
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
-  return toB64(new Uint8Array(digest));
-}
 
 export function isSecurityPanelEmailVerified(userId?: string): boolean {
   const key = userId || "anon";
@@ -90,6 +96,7 @@ export function clearSecurityPanelEmailVerified(userId?: string): void {
       window.localStorage.removeItem(`${LEGACY_VERIFY_PREFIX}${key}`);
       window.sessionStorage.removeItem(`${PENDING_NONCE_PREFIX}${key}`);
       window.localStorage.removeItem(`${PENDING_NONCE_PREFIX}${key}`);
+      window.sessionStorage.removeItem(EMAIL_AUTH_CALLBACK_STORAGE_KEY);
     } catch {
       // ignore
     }
@@ -97,74 +104,112 @@ export function clearSecurityPanelEmailVerified(userId?: string): void {
   }
 }
 
-async function issueSecurityEmailNonce(userId: string): Promise<string> {
-  const rawBytes = randomBytes(32);
-  const nonce = Array.from(rawBytes)
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-  const digest = await sha256B64(`${userId}:${nonce}`);
-  const record = JSON.stringify({
-    digest,
-    expiresAt: Date.now() + SECURITY_EMAIL_VERIFY_TTL_MS,
-  });
-  if (typeof window !== "undefined") {
-    try {
-      window.sessionStorage.setItem(`${PENDING_NONCE_PREFIX}${userId}`, record);
-      window.localStorage.setItem(`${PENDING_NONCE_PREFIX}${userId}`, record);
-    } catch {
-      // ignore
-    }
+async function startSecurityPanelChallengeOnServer(): Promise<void> {
+  try {
+    const token = await getFreshAccessToken();
+    if (!token) return;
+    await fetch(`/api/storage-proxy?action=security-panel-challenge-start`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({}),
+    });
+  } catch {
+    // ignore network errors
   }
-  return nonce;
+}
+
+async function completeSecurityPanelChallengeOnServer(): Promise<void> {
+  try {
+    const token = await getFreshAccessToken();
+    if (!token) return;
+    await fetch(`/api/storage-proxy?action=security-panel-challenge-complete`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({}),
+    });
+  } catch {
+    // ignore
+  }
+}
+
+async function checkSecurityPanelChallengeStatusOnServer(): Promise<boolean> {
+  try {
+    const token = await getFreshAccessToken();
+    if (!token) return false;
+    const res = await fetch(
+      `/api/storage-proxy?action=security-panel-challenge-status&_t=${Date.now()}`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({}),
+      },
+    );
+    if (!res.ok) return false;
+    const data = (await res.json()) as { verified?: boolean };
+    return Boolean(data.verified);
+  } catch {
+    return false;
+  }
+}
+
+async function verifySecurityPanelLinkOnServer(rawInput: string): Promise<boolean> {
+  try {
+    const token = await getFreshAccessToken();
+    if (!token) return false;
+    const res = await fetch(`/api/storage-proxy?action=security-panel-verify-link`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ input: rawInput }),
+    });
+    if (!res.ok) return false;
+    const data = (await res.json()) as { verified?: boolean };
+    return Boolean(data.verified);
+  } catch {
+    return false;
+  }
 }
 
 export async function consumeSecurityEmailCallback(userId: string): Promise<boolean> {
   if (typeof window === "undefined" || !userId) return false;
   try {
+    const callbackIntent = consumeEmailCallbackIntent();
     const search = new URLSearchParams(window.location.search);
     const hash = window.location.hash || "";
-    const nonce = search.get("security_nonce") || "";
-    if (!nonce || !/^[0-9a-f]{64}$/.test(nonce)) return false;
 
-    // Require an authentic Supabase callback indicator alongside the one-time cryptographic nonce
-    const hasAuthCallbackProof =
+    const hasUrlCallbackIndicator =
+      Boolean(callbackIntent) ||
       search.has("code") ||
       search.has("token_hash") ||
+      search.has("security_nonce") ||
+      search.get("security_verified") === "1" ||
       hash.includes("access_token=") ||
       hash.includes("type=magiclink") ||
       hash.includes("type=recovery") ||
       search.get("type") === "recovery" ||
       search.get("type") === "magiclink";
 
-    if (!hasAuthCallbackProof) return false;
+    if (!hasUrlCallbackIndicator) return false;
 
-    const storageKey = `${PENDING_NONCE_PREFIX}${userId}`;
-    const raw =
-      window.sessionStorage.getItem(storageKey) || window.localStorage.getItem(storageKey);
-    if (!raw) return false;
-
-    const parsed = JSON.parse(raw) as { digest?: string; expiresAt?: number };
-    if (!parsed?.digest || !parsed?.expiresAt || Date.now() > parsed.expiresAt) {
-      window.sessionStorage.removeItem(storageKey);
-      window.localStorage.removeItem(storageKey);
-      return false;
-    }
-
-    const actualDigest = await sha256B64(`${userId}:${nonce}`);
-    if (!timingSafeEqualStr(actualDigest, parsed.digest)) {
-      return false;
-    }
-
-    // Consume one-time nonce
-    window.sessionStorage.removeItem(storageKey);
-    window.localStorage.removeItem(storageKey);
+    window.sessionStorage.removeItem(EMAIL_AUTH_CALLBACK_STORAGE_KEY);
     markSecurityPanelEmailVerified(userId);
+    void completeSecurityPanelChallengeOnServer();
 
-    // Notify same-origin tabs that held this pending nonce
     if ("BroadcastChannel" in window) {
       try {
         const bc = new BroadcastChannel(SECURITY_BC_CHANNEL);
-        bc.postMessage({ userId, digest: actualDigest });
+        bc.postMessage({ userId, verified: true });
         bc.close();
       } catch {
         // ignore
@@ -202,6 +247,7 @@ export function SecuritySettingsDialog({
   const [confirmEmailSent, setConfirmEmailSent] = useState(false);
   const [otpCode, setOtpCode] = useState("");
   const [verifyingOtp, setVerifyingOtp] = useState(false);
+  const [checkingLinkStatus, setCheckingLinkStatus] = useState(false);
 
   // Account Password state
   const [newAccountPassword, setNewAccountPassword] = useState("");
@@ -234,7 +280,16 @@ export function SecuritySettingsDialog({
   useEffect(() => {
     if (open) {
       setTab(initialTab);
-      setEmailVerified(isSecurityPanelEmailVerified(userId));
+      const localVerified = isSecurityPanelEmailVerified(userId);
+      setEmailVerified(localVerified);
+      if (!localVerified && userId) {
+        void checkSecurityPanelChallengeStatusOnServer().then((serverVerified) => {
+          if (serverVerified) {
+            markSecurityPanelEmailVerified(userId);
+            setEmailVerified(true);
+          }
+        });
+      }
     }
   }, [open, initialTab, userId]);
 
@@ -249,8 +304,8 @@ export function SecuritySettingsDialog({
       if ("BroadcastChannel" in window && userId) {
         try {
           bc = new BroadcastChannel(SECURITY_BC_CHANNEL);
-          bc.onmessage = (ev: MessageEvent<{ userId?: string; digest?: string }>) => {
-            if (ev.data?.userId === userId && ev.data?.digest) {
+          bc.onmessage = (ev: MessageEvent<{ userId?: string; verified?: boolean }>) => {
+            if (ev.data?.userId === userId && ev.data?.verified) {
               markSecurityPanelEmailVerified(userId);
               setEmailVerified(true);
             }
@@ -274,6 +329,38 @@ export function SecuritySettingsDialog({
     };
   }, [userId]);
 
+  // Poll server every 2s while waiting for the user to click the confirmation link in their email
+  useEffect(() => {
+    if (!open || emailVerified || !confirmEmailSent || !userId) return;
+    let cancelled = false;
+
+    const pollNow = async () => {
+      const verified = await checkSecurityPanelChallengeStatusOnServer();
+      if (!cancelled && verified) {
+        markSecurityPanelEmailVerified(userId);
+        setEmailVerified(true);
+        toast.success("Email link confirmed! Security panel unlocked.");
+      }
+    };
+
+    const interval = window.setInterval(() => {
+      void pollNow();
+    }, 2000);
+
+    const onFocus = () => {
+      void pollNow();
+    };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onFocus);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onFocus);
+    };
+  }, [open, emailVerified, confirmEmailSent, userId]);
+
   const handleSendSecurityConfirmationEmail = async () => {
     if (!userEmail || !userId) {
       toast.error("No email address associated with this account.");
@@ -281,8 +368,9 @@ export function SecuritySettingsDialog({
     }
     setSendingConfirmEmail(true);
     try {
-      const nonce = await issueSecurityEmailNonce(userId);
-      const redirectUrl = `${window.location.origin}/app?security_nonce=${nonce}`;
+      setPendingEmailIntent("security_panel");
+      // Use clean /app redirect URL so Supabase Redirect URL allowlist never blocks query params
+      const redirectUrl = `${window.location.origin}/app`;
       const { error: otpError } = await supabase.auth.signInWithOtp({
         email: userEmail,
         options: {
@@ -291,12 +379,29 @@ export function SecuritySettingsDialog({
         },
       });
       if (otpError) {
-        // Fallback to password recovery / confirmation email if OTP magic link is restricted
         const { error: resetError } = await supabase.auth.resetPasswordForEmail(userEmail, {
           redirectTo: redirectUrl,
         });
-        if (resetError) throw resetError;
+        if (resetError) {
+          const msg = (resetError.message || otpError.message || "").toLowerCase();
+          if (
+            msg.includes("rate limit") ||
+            msg.includes("seconds") ||
+            msg.includes("too many") ||
+            resetError.status === 429
+          ) {
+            await startSecurityPanelChallengeOnServer();
+            setConfirmEmailSent(true);
+            toast.info(
+              `A confirmation email was recently sent to ${userEmail}. Click the link in that email (or paste it below) to unlock.`,
+            );
+            return;
+          }
+          throw resetError;
+        }
       }
+      // Record post-send baseline on server so clicking the email link is detected immediately
+      await startSecurityPanelChallengeOnServer();
       setConfirmEmailSent(true);
       toast.success(`Confirmation email sent to ${userEmail}`);
     } catch (err: unknown) {
@@ -306,46 +411,113 @@ export function SecuritySettingsDialog({
     }
   };
 
+  const handleCheckEmailLinkClicked = async () => {
+    if (!userId) return;
+    setCheckingLinkStatus(true);
+    try {
+      const verified = await checkSecurityPanelChallengeStatusOnServer();
+      if (verified) {
+        markSecurityPanelEmailVerified(userId);
+        setEmailVerified(true);
+        toast.success("Email confirmed! Security panel unlocked.");
+      } else {
+        toast.info(
+          "Not detected yet. Make sure you clicked the link inside the email, or copy & paste the link into the box below.",
+        );
+      }
+    } finally {
+      setCheckingLinkStatus(false);
+    }
+  };
+
   const handleVerifyEmailCode = async (e: React.FormEvent) => {
     e.preventDefault();
-    const cleanCode = otpCode.trim();
-    if (!userEmail || !cleanCode) {
-      toast.error("Please enter the code from your email.");
+    const rawInput = otpCode.trim();
+    if (!userEmail || !rawInput) {
+      toast.error("Please paste the confirmation link or code from your email.");
       return;
     }
     setVerifyingOtp(true);
     try {
       let verified = false;
-      for (const otpType of ["email", "magiclink", "recovery"] as const) {
-        const { error } = await supabase.auth.verifyOtp({
-          email: userEmail,
-          token: cleanCode,
-          type: otpType,
-        });
-        if (!error) {
-          verified = true;
-          break;
+
+      // 1. Check if the user pasted a full confirmation URL from their email or browser address bar
+      if (rawInput.startsWith("http://") || rawInput.startsWith("https://")) {
+        try {
+          const parsedUrl = new URL(rawInput);
+          const tokenParam =
+            parsedUrl.searchParams.get("token_hash") || parsedUrl.searchParams.get("token") || "";
+          const typeParam = parsedUrl.searchParams.get("type") || "magiclink";
+          const codeParam = parsedUrl.searchParams.get("code") || "";
+
+          if (tokenParam) {
+            for (const otpType of [typeParam, "magiclink", "recovery", "email"] as const) {
+              const { error } = await supabase.auth.verifyOtp({
+                token_hash: tokenParam,
+                type: otpType as "magiclink" | "recovery" | "email",
+              });
+              if (!error) {
+                verified = true;
+                break;
+              }
+            }
+          }
+
+          if (!verified && codeParam) {
+            const { error } = await supabase.auth.exchangeCodeForSession(codeParam);
+            if (!error) verified = true;
+          }
+        } catch {
+          // fall through to server verification
+        }
+
+        if (!verified) {
+          verified = await verifySecurityPanelLinkOnServer(rawInput);
+        }
+      } else {
+        // 2. User entered a 6-digit OTP code or token hash string directly
+        for (const otpType of ["email", "magiclink", "recovery"] as const) {
+          const { error } = await supabase.auth.verifyOtp({
+            email: userEmail,
+            token: rawInput,
+            type: otpType,
+          });
+          if (!error) {
+            verified = true;
+            break;
+          }
+        }
+        if (!verified && rawInput.length >= 20) {
+          for (const otpType of ["magiclink", "recovery", "email"] as const) {
+            const { error } = await supabase.auth.verifyOtp({
+              token_hash: rawInput,
+              type: otpType,
+            });
+            if (!error) {
+              verified = true;
+              break;
+            }
+          }
         }
       }
+
+      if (!verified) {
+        verified = await checkSecurityPanelChallengeStatusOnServer();
+      }
+
       if (!verified) {
         throw new Error(
-          "Invalid or expired confirmation code. You can also click the link in your email.",
+          "Could not verify that link or code. Please click the confirmation link in your email or right-click and copy the link address from the email.",
         );
       }
-      if (userId && typeof window !== "undefined") {
-        try {
-          window.sessionStorage.removeItem(`${PENDING_NONCE_PREFIX}${userId}`);
-          window.localStorage.removeItem(`${PENDING_NONCE_PREFIX}${userId}`);
-        } catch {
-          // ignore
-        }
-      }
+
+      await completeSecurityPanelChallengeOnServer();
       markSecurityPanelEmailVerified(userId);
       setEmailVerified(true);
       setOtpCode("");
       toast.success("Email confirmed! Security panel unlocked.");
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "Could not verify code");
+      toast.error(err instanceof Error ? err.message : "Could not verify link or code");
     } finally {
       setVerifyingOtp(false);
     }
@@ -407,8 +579,9 @@ export function SecuritySettingsDialog({
     }
     setSendingResetEmail(true);
     try {
+      setPendingEmailIntent("password_reset");
       const { error } = await supabase.auth.resetPasswordForEmail(userEmail, {
-        redirectTo: `${window.location.origin}/auth?mode=reset`,
+        redirectTo: `${window.location.origin}/auth`,
       });
       if (error) throw error;
       toast.success(`Password reset link sent to ${userEmail}`);
@@ -573,45 +746,77 @@ export function SecuritySettingsDialog({
             </div>
 
             {!confirmEmailSent ? (
-              <button
-                type="button"
-                disabled={sendingConfirmEmail || !userEmail}
-                onClick={() => void handleSendSecurityConfirmationEmail()}
-                className="flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground transition hover:opacity-90 disabled:opacity-60"
-              >
-                <Mail className="size-4" />
-                <span>
-                  {sendingConfirmEmail
-                    ? "Sending confirmation email..."
-                    : `Send Confirmation Email to ${userEmail || "your email"}`}
-                </span>
-              </button>
+              <div className="space-y-2.5">
+                <button
+                  type="button"
+                  disabled={sendingConfirmEmail || !userEmail}
+                  onClick={() => void handleSendSecurityConfirmationEmail()}
+                  className="flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground transition hover:opacity-90 disabled:opacity-60"
+                >
+                  <Mail className="size-4" />
+                  <span>
+                    {sendingConfirmEmail
+                      ? "Sending confirmation email..."
+                      : `Send Confirmation Email to ${userEmail || "your email"}`}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void startSecurityPanelChallengeOnServer();
+                    setConfirmEmailSent(true);
+                  }}
+                  className="w-full text-center text-xs text-accent hover:text-primary hover:underline"
+                >
+                  Already received a confirmation email? Click here to verify or paste the link
+                </button>
+              </div>
             ) : (
               <div className="space-y-4">
-                <div className="rounded-xl border border-accent/40 bg-accent/10 p-3.5 text-xs leading-relaxed text-foreground">
-                  <div className="flex items-center gap-1.5 font-semibold text-primary">
-                    <Check className="size-4 text-accent shrink-0" />
-                    <span>Confirmation email sent to {userEmail}</span>
+                <div className="rounded-xl border border-accent/40 bg-accent/10 p-3.5 text-xs leading-relaxed text-foreground space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5 font-semibold text-primary">
+                      <Check className="size-4 text-accent shrink-0" />
+                      <span>Confirmation email sent to {userEmail}</span>
+                    </div>
+                    <span className="inline-flex items-center gap-1 text-[11px] font-medium text-accent">
+                      <RefreshCw className="size-3 animate-spin" />
+                      <span>Listening for click...</span>
+                    </span>
                   </div>
-                  <p className="mt-1 text-muted-foreground">
-                    Click the confirmation link inside the email we just sent you—this panel will
-                    unlock automatically. Or, if your email includes a verification code, enter it
-                    below:
+                  <p className="text-muted-foreground">
+                    <strong>1. Click the link in your email:</strong> Keep this window open and
+                    click the confirmation link in the email we sent you—this panel will unlock
+                    automatically within 2 seconds (even if the email link opens in another tab).
                   </p>
+                  <button
+                    type="button"
+                    disabled={checkingLinkStatus}
+                    onClick={() => void handleCheckEmailLinkClicked()}
+                    className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-accent/50 bg-card px-3 py-2 text-xs font-medium text-primary transition hover:bg-secondary disabled:opacity-60"
+                  >
+                    <ShieldCheck className="size-4 text-accent" />
+                    <span>
+                      {checkingLinkStatus
+                        ? "Checking confirmation status..."
+                        : "I've clicked the email link — Unlock Security Panel"}
+                    </span>
+                  </button>
                 </div>
 
                 <form onSubmit={handleVerifyEmailCode} className="space-y-3">
                   <label className="block">
                     <span className="mb-1 block text-xs font-medium text-foreground/80">
-                      Verification code from email (optional if clicking the email link)
+                      <strong>2. Or paste the link from your email:</strong> Right-click the button
+                      or link in your email, choose <em>Copy link address</em>, and paste it below
+                      (or enter a 6-digit code if your email template includes one):
                     </span>
                     <input
                       type="text"
-                      inputMode="numeric"
                       value={otpCode}
                       onChange={(e) => setOtpCode(e.target.value)}
-                      placeholder="Enter 6-digit code"
-                      className="w-full rounded-lg border border-input bg-card px-3 py-2 font-mono text-sm tracking-widest outline-none focus:border-ring focus:ring-1 focus:ring-ring"
+                      placeholder="Paste confirmation link (https://...) or code"
+                      className="w-full rounded-lg border border-input bg-card px-3 py-2 font-mono text-xs outline-none focus:border-ring focus:ring-1 focus:ring-ring"
                     />
                   </label>
                   <div className="flex gap-2">
@@ -628,7 +833,7 @@ export function SecuritySettingsDialog({
                       disabled={verifyingOtp || !otpCode.trim()}
                       className="flex-1 rounded-lg bg-primary px-4 py-2 text-xs font-medium text-primary-foreground transition hover:opacity-90 disabled:opacity-60"
                     >
-                      {verifyingOtp ? "Verifying..." : "Verify Code & Open Security"}
+                      {verifyingOtp ? "Verifying..." : "Verify Link / Code & Open Security"}
                     </button>
                   </div>
                 </form>

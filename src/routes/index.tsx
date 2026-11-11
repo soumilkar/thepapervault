@@ -1,15 +1,24 @@
 import { createFileRoute, Link, redirect } from "@tanstack/react-router";
-import { supabase } from "@/integrations/supabase/client";
+import { peekEmailCallbackIntent, supabase } from "@/integrations/supabase/client";
 import { getCachedAuthSession } from "@/lib/offline-supabase";
 import { ThemeToggleButton } from "@/lib/theme";
-import { BookOpen, Image as ImageIcon, PenLine, Sparkles } from "lucide-react";
+import { BookOpen, ImageIcon, PenLine, Sparkles } from "lucide-react";
 
 export const Route = createFileRoute("/")({
   ssr: false,
   beforeLoad: async () => {
-    const cached = getCachedAuthSession() as { user?: { id: string } } | null;
+    const cached = getCachedAuthSession() as {
+      user?: { id: string };
+      access_token?: string;
+    } | null;
+    if (peekEmailCallbackIntent(cached as never) === "password_reset") {
+      throw redirect({ to: "/auth" });
+    }
     if (cached?.user) throw redirect({ to: "/app" });
     const { data } = await supabase.auth.getSession();
+    if (peekEmailCallbackIntent(data.session) === "password_reset") {
+      throw redirect({ to: "/auth" });
+    }
     if (data.session?.user) throw redirect({ to: "/app" });
   },
   head: () => ({
