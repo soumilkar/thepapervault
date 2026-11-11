@@ -199,6 +199,74 @@ function normalizeStoragePath(p: string): string {
   return clean;
 }
 
+const sqChallengeRateBuckets = new Map<string, { count: number; resetAt: number }>();
+const sqVerifyFailureBuckets = new Map<
+  string,
+  { failures: number; lockedUntil: number; windowResetAt: number }
+>();
+
+function extractClientIp(request: Request): string {
+  const xff = request.headers.get("x-forwarded-for");
+  if (xff) {
+    const first = xff.split(",")[0]?.trim();
+    if (first) return first.slice(0, 64);
+  }
+  return (request.headers.get("cf-connecting-ip") || "unknown-ip").slice(0, 64);
+}
+
+function checkSqChallengeLimit(key: string): boolean {
+  const now = Date.now();
+  if (sqChallengeRateBuckets.size > 2000) {
+    for (const [k, v] of sqChallengeRateBuckets) {
+      if (v.resetAt <= now) sqChallengeRateBuckets.delete(k);
+    }
+  }
+  const existing = sqChallengeRateBuckets.get(key);
+  if (!existing || existing.resetAt <= now) {
+    sqChallengeRateBuckets.set(key, { count: 1, resetAt: now + 5 * 60_000 });
+    return true;
+  }
+  existing.count += 1;
+  return existing.count <= 12;
+}
+
+function isSqVerifyLockedOut(key: string): boolean {
+  const now = Date.now();
+  const entry = sqVerifyFailureBuckets.get(key);
+  if (!entry) return false;
+  if (entry.lockedUntil > now) return true;
+  if (entry.windowResetAt <= now) {
+    sqVerifyFailureBuckets.delete(key);
+  }
+  return false;
+}
+
+function recordSqVerifyFailure(key: string): void {
+  const now = Date.now();
+  if (sqVerifyFailureBuckets.size > 2000) {
+    for (const [k, v] of sqVerifyFailureBuckets) {
+      if (v.windowResetAt <= now && v.lockedUntil <= now) sqVerifyFailureBuckets.delete(k);
+    }
+  }
+  const existing = sqVerifyFailureBuckets.get(key);
+  if (!existing || existing.windowResetAt <= now) {
+    sqVerifyFailureBuckets.set(key, {
+      failures: 1,
+      lockedUntil: 0,
+      windowResetAt: now + 15 * 60_000,
+    });
+    return;
+  }
+  existing.failures += 1;
+  if (existing.failures >= 5) {
+    existing.lockedUntil = now + 15 * 60_000;
+  }
+}
+
+function clearSqVerifyFailures(key: string): void {
+  sqVerifyFailureBuckets.delete(key);
+}
+
 function isAllowedStoragePath(
   user: User,
   bucket: string,
@@ -207,6 +275,15 @@ function isAllowedStoragePath(
 ): boolean {
   const path = normalizeStoragePath(rawPath);
   if (!path) return false;
+
+  // Hard block internal system prefixes and raw security-questions records from generic file access
+  if (
+    path.startsWith("_") ||
+    path.includes("security-questions.bin") ||
+    path.includes("_security_questions")
+  ) {
+    return false;
+  }
 
   const userPrefix = `${user.id}/`;
 
@@ -705,8 +782,225 @@ export const Route = createFileRoute("/api/storage-proxy")({
           const bucket = url.searchParams.get("bucket") || "gallery";
           const path = url.searchParams.get("path") || "";
 
+          const b2Config = await resolveB2Config(request);
           const bearerToken = extractBearerToken(request);
           const adminClient = getAdminClient(request, bearerToken);
+
+          const hashEmailIdentifier = async (rawEmail: string): Promise<string> => {
+            const clean = rawEmail.trim().toLowerCase();
+            if (!clean || !clean.includes("@") || clean.length > 254) return "";
+            const digest = await crypto.subtle.digest(
+              "SHA-256",
+              new TextEncoder().encode(`papervault:sq:v1:${clean}`),
+            );
+            const bytes = new Uint8Array(digest);
+            let hex = "";
+            for (let i = 0; i < bytes.length; i++) {
+              hex += bytes[i].toString(16).padStart(2, "0");
+            }
+            return hex;
+          };
+
+          const readSecurityQuestionsBlob = async (
+            objectPath: string,
+          ): Promise<Record<string, unknown> | null> => {
+            if (b2Config) {
+              try {
+                const b2Obj = await b2GetStorageObject(b2Config, "media", objectPath);
+                if (b2Obj) {
+                  const text = new TextDecoder().decode(b2Obj.buffer);
+                  return JSON.parse(text) as Record<string, unknown>;
+                }
+              } catch {
+                // fallback
+              }
+            }
+            try {
+              const { data: sbBlob, error: sbErr } = await adminClient.storage
+                .from("media")
+                .download(objectPath);
+              if (!sbErr && sbBlob) {
+                const text = await sbBlob.text();
+                return JSON.parse(text) as Record<string, unknown>;
+              }
+            } catch {
+              // ignore
+            }
+            return null;
+          };
+
+          const writeSecurityQuestionsBlob = async (
+            objectPath: string,
+            payloadObj: Record<string, unknown>,
+          ): Promise<void> => {
+            const serialized = JSON.stringify(payloadObj);
+            const bytes = new TextEncoder().encode(serialized);
+            const blob = new Blob([bytes], { type: "application/octet-stream" });
+
+            if (b2Config) {
+              try {
+                await b2PutStorageObject(
+                  b2Config,
+                  "media",
+                  objectPath,
+                  bytes,
+                  "application/octet-stream",
+                );
+              } catch {
+                // fallback
+              }
+            }
+            try {
+              await adminClient.storage.from("media").upload(objectPath, blob, {
+                contentType: "application/octet-stream",
+                upsert: true,
+              });
+            } catch {
+              // ignore
+            }
+          };
+
+          const constantTimeEq = (a: string, b: string): boolean => {
+            if (!a || !b) return false;
+            const maxLen = Math.max(a.length, b.length);
+            let diff = a.length ^ b.length;
+            for (let i = 0; i < maxLen; i++) {
+              diff |= (a.charCodeAt(i) || 0) ^ (b.charCodeAt(i) || 0);
+            }
+            return diff === 0;
+          };
+
+          const verifyRecordAgainstSubmitted = (
+            record: Record<string, unknown> | null,
+            submittedVerifiers: unknown,
+            submittedCombined: unknown,
+          ): boolean => {
+            const storedQuestions = Array.isArray(record?.questions)
+              ? (record.questions as { verifier?: string }[])
+              : [];
+            const verArr = Array.isArray(submittedVerifiers) ? submittedVerifiers : [];
+            const storedCombined =
+              typeof record?.combined_verifier === "string" ? record.combined_verifier : "";
+            const subCombined = typeof submittedCombined === "string" ? submittedCombined : "";
+
+            if (
+              !record ||
+              storedQuestions.length !== 3 ||
+              verArr.length !== 3 ||
+              !storedCombined ||
+              !subCombined
+            ) {
+              return false;
+            }
+
+            let allMatch = constantTimeEq(subCombined, storedCombined);
+            for (let i = 0; i < 3; i++) {
+              if (
+                !constantTimeEq(String(verArr[i] || ""), String(storedQuestions[i]?.verifier || ""))
+              ) {
+                allMatch = false;
+              }
+            }
+            return allMatch;
+          };
+
+          // Unauthenticated Pre-Auth Actions for "Forgot Password" on /auth
+          if (action === "security-questions-challenge") {
+            const clientIp = extractClientIp(request);
+            const body = (await request.json().catch(() => ({}))) as { email?: string };
+            const emailHash = await hashEmailIdentifier(body.email || "");
+            if (
+              !emailHash ||
+              !checkSqChallengeLimit(`ip:${clientIp}`) ||
+              !checkSqChallengeLimit(`em:${emailHash}`)
+            ) {
+              return new Response(JSON.stringify({ configured: false }), {
+                status: 200,
+                headers: JSON_SECURITY_HEADERS,
+              });
+            }
+            const record = await readSecurityQuestionsBlob(`_security_questions/${emailHash}.bin`);
+            const questions = Array.isArray(record?.questions)
+              ? (record.questions as { id?: string; question?: string; salt?: string }[])
+              : [];
+            if (
+              !record ||
+              questions.length !== 3 ||
+              typeof record.combined_salt !== "string" ||
+              typeof record.verifier_salt !== "string"
+            ) {
+              return new Response(JSON.stringify({ configured: false }), {
+                status: 200,
+                headers: JSON_SECURITY_HEADERS,
+              });
+            }
+            // Strip verifier hashes before returning challenge to unauthenticated caller
+            return new Response(
+              JSON.stringify({
+                configured: true,
+                questions: questions.map((q) => ({
+                  id: String(q.id || ""),
+                  question: String(q.question || ""),
+                  salt: String(q.salt || ""),
+                })),
+                combined_salt: record.combined_salt,
+                verifier_salt: record.verifier_salt,
+                created_at: record.created_at || new Date().toISOString(),
+                expires_at: record.expires_at || new Date().toISOString(),
+              }),
+              { status: 200, headers: JSON_SECURITY_HEADERS },
+            );
+          }
+
+          if (action === "security-questions-verify") {
+            const clientIp = extractClientIp(request);
+            const body = (await request.json().catch(() => ({}))) as {
+              email?: string;
+              verifiers?: string[];
+              combined_verifier?: string;
+            };
+            const emailHash = await hashEmailIdentifier(body.email || "");
+            if (
+              !emailHash ||
+              isSqVerifyLockedOut(`ip:${clientIp}`) ||
+              isSqVerifyLockedOut(`em:${emailHash}`)
+            ) {
+              return new Response(
+                JSON.stringify({
+                  error:
+                    "Too many failed security question attempts. Locked for 15 minutes for your protection.",
+                }),
+                { status: 429, headers: JSON_SECURITY_HEADERS },
+              );
+            }
+            const record = await readSecurityQuestionsBlob(`_security_questions/${emailHash}.bin`);
+            const allMatch = verifyRecordAgainstSubmitted(
+              record,
+              body.verifiers,
+              body.combined_verifier,
+            );
+
+            if (!allMatch) {
+              recordSqVerifyFailure(`ip:${clientIp}`);
+              recordSqVerifyFailure(`em:${emailHash}`);
+              return new Response(
+                JSON.stringify({
+                  verified: false,
+                  error: "One or more security question answers did not match.",
+                }),
+                { status: 403, headers: JSON_SECURITY_HEADERS },
+              );
+            }
+
+            clearSqVerifyFailures(`ip:${clientIp}`);
+            clearSqVerifyFailures(`em:${emailHash}`);
+
+            return new Response(JSON.stringify({ verified: true }), {
+              status: 200,
+              headers: JSON_SECURITY_HEADERS,
+            });
+          }
+
           const user = await authenticateUser(request, adminClient);
           if (!user) {
             return new Response(
@@ -725,7 +1019,198 @@ export const Route = createFileRoute("/api/storage-proxy")({
             );
           }
 
-          const b2Config = await resolveB2Config(request);
+          if (action === "security-questions-verify-authed") {
+            if (isSqVerifyLockedOut(`usr:${user.id}`)) {
+              return new Response(
+                JSON.stringify({
+                  error:
+                    "Too many failed security question attempts. Locked for 15 minutes for your protection.",
+                }),
+                { status: 429, headers: JSON_SECURITY_HEADERS },
+              );
+            }
+            const body = (await request.json().catch(() => ({}))) as {
+              verifiers?: string[];
+              combined_verifier?: string;
+            };
+            let record = await readSecurityQuestionsBlob(`${user.id}/security-questions.bin`);
+            if (!record && user.email) {
+              const emailHash = await hashEmailIdentifier(user.email);
+              if (emailHash) {
+                record = await readSecurityQuestionsBlob(`_security_questions/${emailHash}.bin`);
+              }
+            }
+            const allMatch = verifyRecordAgainstSubmitted(
+              record,
+              body.verifiers,
+              body.combined_verifier,
+            );
+            if (!allMatch) {
+              recordSqVerifyFailure(`usr:${user.id}`);
+              return new Response(
+                JSON.stringify({
+                  verified: false,
+                  error: "One or more security question answers did not match.",
+                }),
+                { status: 403, headers: JSON_SECURITY_HEADERS },
+              );
+            }
+            clearSqVerifyFailures(`usr:${user.id}`);
+            return new Response(JSON.stringify({ verified: true }), {
+              status: 200,
+              headers: JSON_SECURITY_HEADERS,
+            });
+          }
+
+          if (action === "security-questions-save") {
+            const rawText = await request.text().catch(() => "");
+            if (!rawText || rawText.length > 16_384) {
+              return new Response(
+                JSON.stringify({ error: "Security questions payload exceeds size limit" }),
+                { status: 413, headers: JSON_SECURITY_HEADERS },
+              );
+            }
+            const payload = ((): Record<string, unknown> | null => {
+              try {
+                return JSON.parse(rawText) as Record<string, unknown>;
+              } catch {
+                return null;
+              }
+            })();
+
+            const isValidB64Token = (v: unknown, minLen = 16, maxLen = 128): v is string =>
+              typeof v === "string" &&
+              v.length >= minLen &&
+              v.length <= maxLen &&
+              /^[A-Za-z0-9+/=_-]+$/.test(v);
+
+            if (
+              !payload ||
+              !Array.isArray(payload.questions) ||
+              payload.questions.length !== 3 ||
+              !isValidB64Token(payload.combined_salt, 16, 128) ||
+              !isValidB64Token(payload.verifier_salt, 16, 128) ||
+              !isValidB64Token(payload.combined_verifier, 32, 128)
+            ) {
+              return new Response(JSON.stringify({ error: "Invalid security questions payload" }), {
+                status: 400,
+                headers: JSON_SECURITY_HEADERS,
+              });
+            }
+
+            const seenIds = new Set<string>();
+            const cleanQuestions: {
+              id: string;
+              question: string;
+              salt: string;
+              verifier: string;
+            }[] = [];
+
+            for (const item of payload.questions as Record<string, unknown>[]) {
+              const qId = typeof item?.id === "string" ? item.id.trim() : "";
+              const qText = typeof item?.question === "string" ? item.question.trim() : "";
+              if (
+                !/^sq_[123]_[a-z0-9_]{2,32}$/.test(qId) ||
+                seenIds.has(qId) ||
+                qText.length < 10 ||
+                qText.length > 300 ||
+                !isValidB64Token(item?.salt, 16, 128) ||
+                !isValidB64Token(item?.verifier, 32, 128)
+              ) {
+                return new Response(
+                  JSON.stringify({ error: "Invalid security question item format" }),
+                  { status: 400, headers: JSON_SECURITY_HEADERS },
+                );
+              }
+              seenIds.add(qId);
+              cleanQuestions.push({
+                id: qId,
+                question: qText,
+                salt: item.salt,
+                verifier: item.verifier,
+              });
+            }
+
+            const nowMs = Date.now();
+            const sixMonthsMs = 180 * 24 * 60 * 60 * 1000;
+            const emailHash = user.email ? await hashEmailIdentifier(user.email) : "";
+            const sanitizedPayload: Record<string, unknown> = {
+              version: 1,
+              user_id: user.id,
+              email_hash: emailHash,
+              questions: cleanQuestions,
+              combined_salt: payload.combined_salt,
+              verifier_salt: payload.verifier_salt,
+              combined_verifier: payload.combined_verifier,
+              questions_recovery_envelope: null,
+              created_at: new Date(nowMs).toISOString(),
+              expires_at: new Date(nowMs + sixMonthsMs).toISOString(),
+            };
+
+            await writeSecurityQuestionsBlob(`${user.id}/security-questions.bin`, sanitizedPayload);
+            if (emailHash) {
+              await writeSecurityQuestionsBlob(
+                `_security_questions/${emailHash}.bin`,
+                sanitizedPayload,
+              );
+            }
+
+            return new Response(
+              JSON.stringify({
+                ok: true,
+                created_at: sanitizedPayload.created_at,
+                expires_at: sanitizedPayload.expires_at,
+              }),
+              {
+                status: 200,
+                headers: JSON_SECURITY_HEADERS,
+              },
+            );
+          }
+
+          if (action === "security-questions-get") {
+            let record = await readSecurityQuestionsBlob(`${user.id}/security-questions.bin`);
+            if (!record && user.email) {
+              const emailHash = await hashEmailIdentifier(user.email);
+              if (emailHash) {
+                const byEmail = await readSecurityQuestionsBlob(
+                  `_security_questions/${emailHash}.bin`,
+                );
+                if (byEmail && (!byEmail.user_id || byEmail.user_id === user.id)) {
+                  record = byEmail;
+                }
+              }
+            }
+            const rawQuestions = Array.isArray(record?.questions)
+              ? (record.questions as { id?: string; question?: string; salt?: string }[])
+              : [];
+            if (!record || rawQuestions.length !== 3) {
+              return new Response(JSON.stringify({ configured: false }), {
+                status: 200,
+                headers: JSON_SECURITY_HEADERS,
+              });
+            }
+            // Strip verifier and combined_verifier hashes so they never leave the server
+            const safeClientRecord = {
+              version: 1,
+              user_id: user.id,
+              questions: rawQuestions.map((q) => ({
+                id: String(q.id || ""),
+                question: String(q.question || ""),
+                salt: String(q.salt || ""),
+                verifier: "",
+              })),
+              combined_salt: String(record.combined_salt || ""),
+              verifier_salt: String(record.verifier_salt || ""),
+              combined_verifier: "",
+              created_at: String(record.created_at || new Date().toISOString()),
+              expires_at: String(record.expires_at || new Date().toISOString()),
+            };
+            return new Response(JSON.stringify({ configured: true, record: safeClientRecord }), {
+              status: 200,
+              headers: JSON_SECURITY_HEADERS,
+            });
+          }
 
           // ==================================================================
           // A. Backblaze B2 Status & Full Migration of Existing Supabase Data

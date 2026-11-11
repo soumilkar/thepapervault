@@ -1042,36 +1042,30 @@ function GalleryPage() {
                     galleryFolderOptionsList.length > 0 && (
                       <div className="flex items-center justify-between gap-2">
                         <span className="text-xs text-muted-foreground">Folder:</span>
-                        <select
-                          value={uploadTargetFolder ?? ""}
-                          onChange={(e) => setUploadTargetFolder(e.target.value || null)}
-                          className="min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-1.5 text-xs text-primary outline-none"
-                        >
-                          <option value="">Gallery Root</option>
-                          {galleryFolderOptionsList.map((opt) => (
-                            <option key={opt.value} value={opt.value}>
-                              {opt.label}
-                            </option>
-                          ))}
-                        </select>
+                        <AppSelect
+                          value={uploadTargetFolder ?? "__root__"}
+                          onValueChange={(v) => setUploadTargetFolder(v === "__root__" ? null : v)}
+                          options={[
+                            { value: "__root__", label: "Gallery Root" },
+                            ...galleryFolderOptionsList,
+                          ]}
+                          className="min-w-0 flex-1 text-xs"
+                        />
                       </div>
                     )}
 
                   {activeTab === "notes" && noteFolderOptionsList.length > 0 && (
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-xs text-muted-foreground">Folder:</span>
-                      <select
-                        value={uploadTargetFolder ?? ""}
-                        onChange={(e) => setUploadTargetFolder(e.target.value || null)}
-                        className="min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-1.5 text-xs text-primary outline-none"
-                      >
-                        <option value="">Notes Root</option>
-                        {noteFolderOptionsList.map((opt) => (
-                          <option key={opt.value} value={opt.value}>
-                            {opt.label}
-                          </option>
-                        ))}
-                      </select>
+                      <AppSelect
+                        value={uploadTargetFolder ?? "__root__"}
+                        onValueChange={(v) => setUploadTargetFolder(v === "__root__" ? null : v)}
+                        options={[
+                          { value: "__root__", label: "Notes Root" },
+                          ...noteFolderOptionsList,
+                        ]}
+                        className="min-w-0 flex-1 text-xs"
+                      />
                     </div>
                   )}
 

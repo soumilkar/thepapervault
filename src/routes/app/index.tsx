@@ -1,8 +1,16 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { memo, useState } from "react";
+import { memo, useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { BookOpen, Image as ImageIcon, PenLine, Sparkles, StickyNote, Users } from "lucide-react";
+import {
+  BookOpen,
+  Image as ImageIcon,
+  PenLine,
+  ShieldCheck,
+  Sparkles,
+  StickyNote,
+  Users,
+} from "lucide-react";
 import { WelcomeTour } from "@/components/WelcomeTour";
 import { Markdown } from "@/components/Markdown";
 import { MusicPlayer } from "@/components/MusicSearch";
@@ -11,6 +19,12 @@ import { EntryHeatmap } from "@/components/EntryHeatmap";
 import { MoodTracker } from "@/components/MoodTracker";
 import { GoalsTracker } from "@/components/GoalsTracker";
 import { useDiaryMetrics } from "@/lib/diary-metrics";
+import {
+  consumeSecurityEmailCallback,
+  SecuritySettingsDialog,
+  type SecurityTab,
+} from "@/components/SecuritySettingsDialog";
+import { toast } from "sonner";
 
 export const Route = createFileRoute("/app/")({
   component: Dashboard,
@@ -31,6 +45,38 @@ type PublicDiary = {
 function Dashboard() {
   const { user, profileDisplayName } = Route.useRouteContext();
   const diaryMetrics = useDiaryMetrics(user.id);
+  const [securityOpen, setSecurityOpen] = useState(false);
+  const [securityInitialTab, setSecurityInitialTab] = useState<SecurityTab>("account");
+
+  const openSecurityAt = (targetTab: SecurityTab) => {
+    setSecurityInitialTab(targetTab);
+    setSecurityOpen(true);
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    if (typeof window !== "undefined") {
+      void consumeSecurityEmailCallback(user.id).then((verified) => {
+        if (cancelled || !verified) return;
+        openSecurityAt("account");
+        toast.success("Email confirmed! Security panel unlocked.");
+        try {
+          const cleanUrl = new URL(window.location.href);
+          cleanUrl.searchParams.delete("security_nonce");
+          cleanUrl.searchParams.delete("security_verified");
+          cleanUrl.searchParams.delete("type");
+          cleanUrl.searchParams.delete("code");
+          cleanUrl.searchParams.delete("token_hash");
+          window.history.replaceState({}, "", cleanUrl.pathname + cleanUrl.search);
+        } catch {
+          // ignore
+        }
+      });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [user.id]);
 
   const profileQuery = useQuery({
     queryKey: ["user-profile", user.id],
@@ -126,6 +172,14 @@ function Dashboard() {
   return (
     <div className="space-y-10">
       <WelcomeTour userId={user.id} />
+      <SecuritySettingsDialog
+        open={securityOpen}
+        onOpenChange={setSecurityOpen}
+        userId={user.id}
+        userEmail={user.email}
+        initialTab={securityInitialTab}
+      />
+
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <p className="font-hand text-2xl text-sepia">hello again</p>
@@ -133,12 +187,29 @@ function Dashboard() {
             Welcome back{name ? `, ${name}` : ""}.
           </h1>
         </div>
-        <div className="flex items-center gap-3 rounded-full border border-border bg-card/70 px-4 py-2 shadow-sm">
-          <Users className="size-5 text-accent" />
-          <div className="leading-tight">
-            <div className="font-serif text-2xl text-primary">{counts.data?.totalUsers ?? "—"}</div>
-            <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
-              writers here
+        <div className="flex flex-wrap items-stretch gap-3">
+          <button
+            type="button"
+            onClick={() => openSecurityAt("account")}
+            className="flex w-[144px] items-center gap-3 rounded-full border border-border bg-card/80 px-4 py-2 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-accent/60 hover:shadow-md"
+          >
+            <ShieldCheck className="size-5 shrink-0 text-accent" />
+            <div className="leading-tight">
+              <div className="font-serif text-xl leading-[1.05] text-primary">
+                Security &amp; Vault
+              </div>
+            </div>
+          </button>
+
+          <div className="flex w-[144px] items-center gap-3 rounded-full border border-border bg-card/70 px-4 py-2 shadow-sm">
+            <Users className="size-5 text-accent" />
+            <div className="leading-tight">
+              <div className="font-serif text-2xl text-primary">
+                {counts.data?.totalUsers ?? "—"}
+              </div>
+              <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                writers here
+              </div>
             </div>
           </div>
         </div>

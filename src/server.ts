@@ -54,11 +54,17 @@ function withSecurityHeaders(response: Response): Response {
   if (!headers.has("X-Content-Type-Options")) {
     headers.set("X-Content-Type-Options", "nosniff");
   }
+  if (!headers.has("X-DNS-Prefetch-Control")) {
+    headers.set("X-DNS-Prefetch-Control", "off");
+  }
   if (!headers.has("Referrer-Policy")) {
     headers.set("Referrer-Policy", "no-referrer");
   }
   if (!headers.has("X-Permitted-Cross-Domain-Policies")) {
     headers.set("X-Permitted-Cross-Domain-Policies", "none");
+  }
+  if (!headers.has("Cross-Origin-Opener-Policy")) {
+    headers.set("Cross-Origin-Opener-Policy", "same-origin-allow-popups");
   }
   if (!headers.has("Strict-Transport-Security")) {
     headers.set("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload");
@@ -72,7 +78,7 @@ function withSecurityHeaders(response: Response): Response {
   if (!headers.has("Content-Security-Policy")) {
     headers.set(
       "Content-Security-Policy",
-      "base-uri 'self'; object-src 'none'; form-action 'self'",
+      "base-uri 'self'; object-src 'none'; form-action 'self'; frame-ancestors 'self' https://*.google.com https://*.aistudio.google.com https://*.run.app",
     );
   }
   return new Response(response.body, {

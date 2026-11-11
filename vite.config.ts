@@ -176,10 +176,23 @@ function suppressUseClientDirectiveWarnings(): Plugin {
 export default defineConfig({
   plugins: [suppressUseClientDirectiveWarnings()],
   vite: {
+    optimizeDeps: {
+      entries: ["src/router.tsx", "src/routes/**/*.tsx"],
+    },
     server: {
       host: "0.0.0.0",
       port: 3000,
       allowedHosts: true,
+      warmup: {
+        clientFiles: [
+          "./src/router.tsx",
+          "./src/routes/__root.tsx",
+          "./src/routes/index.tsx",
+          "./src/routes/auth.tsx",
+          "./src/routes/app/route.tsx",
+        ],
+        ssrFiles: ["./src/server.ts", "./src/router.tsx", "./src/routes/__root.tsx"],
+      },
     },
     preview: {
       host: "0.0.0.0",

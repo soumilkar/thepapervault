@@ -1,6 +1,0 @@
-{
-  "summary": "Fix image uploading across Notes, Diary, and Gallery using an authenticated server storage proxy with service role permissions, and revamp the Gallery tab with separate Diary and Notes folders matching Notes directories and subfolders with zero subfolders for Diary.",
-  "updatedAt": "2026-11-04T16:28:34.661377318Z",
-  "requestFeedback": true,
-  "userFacing": true
-}
