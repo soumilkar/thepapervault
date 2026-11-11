@@ -5,18 +5,44 @@ import { TASK_LINE_REGEX } from "@/lib/rich-text";
 
 const REMARK_PLUGINS = [remarkGfm];
 
+function hasControlChars(s: string): boolean {
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c <= 0x1f || c === 0x7f) return true;
+  }
+  return false;
+}
+
 function isSafeMarkdownUrl(url?: string): boolean {
-  if (!url) return false;
+  if (!url || typeof url !== "string") return false;
   const trimmed = url.trim();
-  // Safe protocols: http, https, mailto, tel, or internal relative path (#, /)
-  return /^(?:https?:|mailto:|tel:|\/|#)/i.test(trimmed);
+  if (!trimmed || hasControlChars(trimmed)) return false;
+  // Internal anchor or strict single-slash relative path (never protocol-relative // or /\)
+  if (/^(?:#|\/(?![/\\]))/.test(trimmed)) return true;
+  if (/^(?:mailto:|tel:)/i.test(trimmed)) return true;
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return false;
+    if (parsed.username || parsed.password) return false;
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function isSafeMarkdownImageSrc(url?: string): boolean {
-  if (!url) return false;
+  if (!url || typeof url !== "string") return false;
   const trimmed = url.trim();
-  // Only allow HTTPS or same-origin relative images (never unencrypted http:// tracking pixels)
-  return /^(?:https:\/\/|\/[^/])/i.test(trimmed);
+  if (!trimmed || hasControlChars(trimmed)) return false;
+  if (/^\/(?![/\\])/.test(trimmed)) return true;
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== "https:") return false;
+    if (parsed.username || parsed.password) return false;
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 const BASE_MARKDOWN_COMPONENTS: Components = {

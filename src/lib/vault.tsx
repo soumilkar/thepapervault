@@ -19,7 +19,11 @@ import {
   timingSafeEqualStr,
   toB64,
 } from "@/lib/crypto";
-import { clearOfflineBlobUrls } from "@/lib/offline-supabase";
+import {
+  clearAllOfflineUserData,
+  clearOfflineBlobUrls,
+  getFreshAccessToken,
+} from "@/lib/offline-supabase";
 import {
   createRecoveryEnvelope,
   fetchRemoteVaultMeta,
@@ -34,11 +38,392 @@ import {
 
 type VaultStatus = "loading" | "needs_setup" | "locked" | "unlocked";
 
+export const MAX_PASSPHRASE_ATTEMPTS = 5;
+const PASSPHRASE_LOCKOUT_KEY_PREFIX = "papervault:passphrase_lockout:";
+
+export function getLockoutDurationMs(tier: number): number {
+  const HOUR = 60 * 60 * 1000;
+  const t = Math.max(1, Math.floor(tier));
+  switch (t) {
+    case 1:
+      return 1 * HOUR; // 1 hour
+    case 2:
+      return 2 * HOUR; // 2 hours
+    case 3:
+      return 4 * HOUR; // 4 hours
+    case 4:
+      return 8 * HOUR; // 8 hours
+    case 5:
+      return 24 * HOUR; // 24 hours (1 day)
+    case 6:
+      return 48 * HOUR; // 48 hours (2 days)
+    default:
+      return Math.min(7 * 24 * HOUR, (t - 4) * 24 * HOUR); // 72h, 96h... up to 7 days
+  }
+}
+
+export function formatDurationLabel(ms: number): string {
+  const hours = Math.round(ms / (60 * 60 * 1000));
+  if (hours < 24) {
+    return `${hours} ${hours === 1 ? "hour" : "hours"}`;
+  }
+  const days = Math.round(hours / 24);
+  return `${days} ${days === 1 ? "day" : "days"}`;
+}
+
+export function formatLockoutRemaining(remainingMs: number): string {
+  const totalSec = Math.max(1, Math.ceil(remainingMs / 1000));
+  const days = Math.floor(totalSec / 86400);
+  const hours = Math.floor((totalSec % 86400) / 3600);
+  const mins = Math.floor((totalSec % 3600) / 60);
+  const secs = totalSec % 60;
+  if (days > 0) {
+    return `${days}d ${hours}h ${mins}m`;
+  }
+  if (hours > 0) {
+    return `${hours}h ${mins}m ${secs.toString().padStart(2, "0")}s`;
+  }
+  if (mins <= 0) return `${secs}s`;
+  return `${mins}m ${secs.toString().padStart(2, "0")}s`;
+}
+
+type LocalLockoutRecord = {
+  failures: number;
+  lockedUntil: number;
+  windowResetAt: number;
+  tier?: number;
+  userId?: string;
+  email?: string;
+};
+
+function readLockoutSlot(storageKey: string): LocalLockoutRecord | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(storageKey);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<LocalLockoutRecord>;
+    if (!parsed || typeof parsed !== "object") return null;
+    const now = Date.now();
+    const lockedUntil = Number(parsed.lockedUntil) || 0;
+    const windowResetAt = Number(parsed.windowResetAt) || 0;
+    const failures = Number(parsed.failures) || 0;
+    const tier = Number(parsed.tier) || 0;
+    if (lockedUntil > 0 && lockedUntil <= now && windowResetAt <= now) {
+      window.localStorage.removeItem(storageKey);
+      return null;
+    }
+    if (lockedUntil === 0 && windowResetAt > 0 && windowResetAt <= now) {
+      window.localStorage.removeItem(storageKey);
+      return null;
+    }
+    return {
+      failures,
+      lockedUntil,
+      windowResetAt: windowResetAt || lockedUntil,
+      tier,
+      userId: typeof parsed.userId === "string" ? parsed.userId : undefined,
+      email: typeof parsed.email === "string" ? parsed.email : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeLockoutSlot(storageKey: string, record: LocalLockoutRecord): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(storageKey, JSON.stringify(record));
+  } catch {
+    // ignore storage errors
+  }
+}
+
+export function getPassphraseLockoutStatus(
+  userId?: string,
+  email?: string,
+): {
+  locked: boolean;
+  lockedUntil: number;
+  remainingMs: number;
+  failures: number;
+  attemptsRemaining: number;
+  tier: number;
+  nextLockoutDurationMs: number;
+} {
+  const now = Date.now();
+  const cleanEmail = email?.trim().toLowerCase() || "";
+  const globalRec = readLockoutSlot(`${PASSPHRASE_LOCKOUT_KEY_PREFIX}global`);
+  const userRec = userId ? readLockoutSlot(`${PASSPHRASE_LOCKOUT_KEY_PREFIX}usr:${userId}`) : null;
+  const emailRec = cleanEmail ? readLockoutSlot(`${PASSPHSE_EMAIL_PREFIX(cleanEmail)}`) : null;
+
+  const lockedUntil = Math.max(
+    globalRec?.lockedUntil || 0,
+    userRec?.lockedUntil || 0,
+    emailRec?.lockedUntil || 0,
+  );
+  const tier = Math.max(userRec?.tier || 0, emailRec?.tier || 0, globalRec?.tier || 0);
+  const failures = Math.max(
+    userRec?.failures || 0,
+    emailRec?.failures || 0,
+    globalRec?.failures || 0,
+  );
+  const locked = lockedUntil > now;
+  const remainingMs = locked ? lockedUntil - now : 0;
+  const maxAttempts = tier > 0 ? 3 : MAX_PASSPHRASE_ATTEMPTS;
+  const nextTier = tier + 1;
+  const nextLockoutDurationMs = getLockoutDurationMs(nextTier);
+
+  return {
+    locked,
+    lockedUntil: locked ? lockedUntil : 0,
+    remainingMs,
+    failures: locked ? maxAttempts : failures,
+    attemptsRemaining: locked ? 0 : Math.max(0, maxAttempts - failures),
+    tier,
+    nextLockoutDurationMs,
+  };
+}
+
+function PASSPHSE_EMAIL_PREFIX(cleanEmail: string): string {
+  return `${PASSPHRASE_LOCKOUT_KEY_PREFIX}em:${cleanEmail}`;
+}
+
+export function setLocalPassphraseLockout(
+  lockedUntil: number,
+  userId?: string,
+  email?: string,
+  failures?: number,
+  tier?: number,
+): void {
+  const cleanEmail = email?.trim().toLowerCase() || "";
+  const existingStatus = getPassphraseLockoutStatus(userId, cleanEmail);
+  const resolvedTier = typeof tier === "number" ? tier : existingStatus.tier;
+  const resolvedFailures = typeof failures === "number" ? failures : existingStatus.failures;
+  const record: LocalLockoutRecord = {
+    failures: resolvedFailures,
+    lockedUntil,
+    windowResetAt: Math.max(lockedUntil, Date.now() + 7 * 24 * 60 * 60 * 1000),
+    tier: resolvedTier,
+    userId,
+    email: cleanEmail || undefined,
+  };
+  writeLockoutSlot(`${PASSPHRASE_LOCKOUT_KEY_PREFIX}global`, record);
+  if (userId) {
+    writeLockoutSlot(`${PASSPHRASE_LOCKOUT_KEY_PREFIX}usr:${userId}`, record);
+  }
+  if (cleanEmail) {
+    writeLockoutSlot(PASSPHSE_EMAIL_PREFIX(cleanEmail), record);
+  }
+}
+
+export function clearPassphraseFailures(userId?: string, email?: string, fullReset = false): void {
+  if (typeof window === "undefined") return;
+  const status = getPassphraseLockoutStatus(userId, email);
+  if (status.locked) return;
+  try {
+    if (fullReset) {
+      window.localStorage.removeItem(`${PASSPHRASE_LOCKOUT_KEY_PREFIX}global`);
+      if (userId) {
+        window.localStorage.removeItem(`${PASSPHRASE_LOCKOUT_KEY_PREFIX}usr:${userId}`);
+      }
+      const cleanEmail = email?.trim().toLowerCase() || "";
+      if (cleanEmail) {
+        window.localStorage.removeItem(PASSPHSE_EMAIL_PREFIX(cleanEmail));
+      }
+    } else {
+      setLocalPassphraseLockout(0, userId, email, 0, status.tier);
+    }
+  } catch {
+    // ignore
+  }
+}
+
+export async function checkServerPassphraseLockout(
+  email: string,
+): Promise<{ locked: boolean; lockedUntil: number; tier: number }> {
+  const cleanEmail = email.trim().toLowerCase();
+  if (!cleanEmail) return { locked: false, lockedUntil: 0, tier: 0 };
+  try {
+    const res = await fetch("/api/storage-proxy?action=passphrase-lockout-check", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: cleanEmail }),
+    });
+    if (!res.ok) return { locked: false, lockedUntil: 0, tier: 0 };
+    const data = (await res.json()) as { locked?: boolean; lockedUntil?: number; tier?: number };
+    const lockedUntil = Number(data?.lockedUntil) || 0;
+    const tier = Number(data?.tier) || 0;
+    const locked = Boolean(data?.locked && lockedUntil > Date.now());
+    if (locked) {
+      setLocalPassphraseLockout(lockedUntil, undefined, cleanEmail, undefined, tier);
+    }
+    return { locked, lockedUntil: locked ? lockedUntil : 0, tier };
+  } catch {
+    return { locked: false, lockedUntil: 0, tier: 0 };
+  }
+}
+
+export async function recordServerPassphraseFailure(
+  email?: string,
+  forceLockout = false,
+  userId?: string,
+  tier?: number,
+): Promise<{
+  failures: number;
+  locked: boolean;
+  lockedUntil: number;
+  tier: number;
+  attemptsRemaining: number;
+}> {
+  const cleanEmail = email?.trim().toLowerCase() || "";
+  const token = await getFreshAccessToken();
+  try {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    }
+    const res = await fetch("/api/storage-proxy?action=passphrase-lockout-record", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        email: cleanEmail,
+        forceLockout,
+        tier,
+      }),
+    });
+    if (res.ok) {
+      const data = (await res.json()) as {
+        failures?: number;
+        locked?: boolean;
+        lockedUntil?: number;
+        tier?: number;
+        attemptsRemaining?: number;
+      };
+      const lockedUntil = Number(data?.lockedUntil) || 0;
+      const resTier = Number(data?.tier) || tier || 0;
+      const resFailures = Number(data?.failures) || 0;
+      const isLocked = Boolean(data?.locked && lockedUntil > Date.now());
+      setLocalPassphraseLockout(lockedUntil, userId, cleanEmail, resFailures, resTier);
+      return {
+        failures: resFailures,
+        locked: isLocked,
+        lockedUntil: isLocked ? lockedUntil : 0,
+        tier: resTier,
+        attemptsRemaining: Number(data?.attemptsRemaining) || 0,
+      };
+    }
+  } catch {
+    // fallback
+  }
+
+  // Local fallback if offline or proxy error
+  const localStatus = getPassphraseLockoutStatus(userId, cleanEmail);
+  const currentTier = typeof tier === "number" ? tier : localStatus.tier;
+  const maxAttempts = currentTier > 0 ? 3 : MAX_PASSPHRASE_ATTEMPTS;
+  const nextFailures = forceLockout ? maxAttempts : localStatus.failures + 1;
+  const shouldLock = forceLockout || nextFailures >= maxAttempts;
+  const nextTier = shouldLock ? currentTier + 1 : currentTier;
+  const duration = getLockoutDurationMs(Math.max(1, nextTier));
+  const lockedUntil = shouldLock ? Date.now() + duration : 0;
+  setLocalPassphraseLockout(lockedUntil, userId, cleanEmail, nextFailures, nextTier);
+  return {
+    failures: nextFailures,
+    locked: shouldLock,
+    lockedUntil,
+    tier: nextTier,
+    attemptsRemaining: Math.max(0, maxAttempts - nextFailures),
+  };
+}
+
+export async function forceLogoutForPassphraseLockout(
+  userId?: string,
+  email?: string,
+  lockedUntilOverride?: number,
+  tierOverride?: number,
+): Promise<void> {
+  const currentStatus = getPassphraseLockoutStatus(userId, email);
+  const resolvedTier =
+    typeof tierOverride === "number" ? tierOverride : Math.max(1, currentStatus.tier + 1);
+  const durationMs = getLockoutDurationMs(resolvedTier);
+  const lockedUntil =
+    lockedUntilOverride && lockedUntilOverride > Date.now()
+      ? lockedUntilOverride
+      : Date.now() + durationMs;
+
+  let resolvedEmail = email;
+  let resolvedUserId = userId;
+  try {
+    const { data } = await supabase.auth.getSession();
+    if (data.session?.user) {
+      resolvedUserId = resolvedUserId || data.session.user.id;
+      resolvedEmail = resolvedEmail || data.session.user.email;
+    }
+  } catch {
+    // ignore
+  }
+
+  setLocalPassphraseLockout(
+    lockedUntil,
+    resolvedUserId,
+    resolvedEmail,
+    MAX_PASSPHRASE_ATTEMPTS,
+    resolvedTier,
+  );
+
+  try {
+    const token = await getFreshAccessToken();
+    await Promise.allSettled([
+      token
+        ? fetch("/api/storage-proxy?action=passphrase-lockout-record", {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${token}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ forceLockout: true, tier: resolvedTier }),
+          })
+        : Promise.resolve(),
+      supabase.auth.updateUser({
+        data: {
+          papervault_lockout_until: lockedUntil,
+          papervault_lockout_tier: resolvedTier,
+        },
+      }),
+    ]);
+  } catch {
+    // ignore network errors during emergency logout
+  }
+
+  clearCryptoCache();
+  clearAllOfflineUserData();
+  setLocalPassphraseLockout(
+    lockedUntil,
+    resolvedUserId,
+    resolvedEmail,
+    MAX_PASSPHRASE_ATTEMPTS,
+    resolvedTier,
+  );
+
+  try {
+    await supabase.auth.signOut();
+  } catch {
+    // ignore
+  }
+
+  if (typeof window !== "undefined") {
+    window.location.href = `/auth?locked=1&tier=${resolvedTier}`;
+  }
+}
+
 type VaultContextValue = {
   status: VaultStatus;
   key: CryptoKey | null;
   recoveryKey: string | null;
   hasRecoveryKey: boolean;
+  failedAttempts: number;
+  attemptsRemaining: number;
+  tier: number;
+  nextLockoutDurationMs: number;
   setup: (passphrase: string) => Promise<CryptoKey>;
   unlock: (passphrase: string) => Promise<CryptoKey>;
   changePassphrase: (
@@ -66,6 +451,10 @@ const FALLBACK_VAULT_CONTEXT: VaultContextValue = {
   key: null,
   recoveryKey: null,
   hasRecoveryKey: false,
+  failedAttempts: 0,
+  attemptsRemaining: MAX_PASSPHRASE_ATTEMPTS,
+  tier: 0,
+  nextLockoutDurationMs: getLockoutDurationMs(1),
   setup: async () => {
     throw new Error("Vault is still initializing");
   },
@@ -88,9 +477,6 @@ const FALLBACK_VAULT_CONTEXT: VaultContextValue = {
 };
 
 const VAULT_META_PREFIX = "papervault:vault_meta:";
-
-let failedUnlockAttempts = 0;
-let unlockLockedUntil = 0;
 
 type CachedVaultMeta = {
   kdf_salt: string;
@@ -190,6 +576,12 @@ export function VaultProvider({ userId, children }: { userId: string; children: 
   const [status, setStatus] = useState<VaultStatus>(initialCached ? "locked" : "loading");
   const [key, setKey] = useState<CryptoKey | null>(null);
   const [recoveryKey, setRecoveryKey] = useState<string | null>(null);
+  const [failedAttempts, setFailedAttempts] = useState<number>(
+    () => getPassphraseLockoutStatus(userId).failures,
+  );
+  const [lockoutTier, setLockoutTier] = useState<number>(
+    () => getPassphraseLockoutStatus(userId).tier,
+  );
   const [kdfSalt, setKdfSalt] = useState<string | null>(initialCached?.kdf_salt ?? null);
   const [verifier, setVerifier] = useState<string | null>(initialCached?.verifier ?? null);
   const [verifierSalt, setVerifierSalt] = useState<string | null>(
@@ -202,6 +594,105 @@ export function VaultProvider({ userId, children }: { userId: string; children: 
     ct: string;
     iv: string;
   } | null>(initialCached?.encrypted_recovery_key ?? null);
+
+  const registerWrongPassphraseAttempt = useCallback(async (): Promise<never> => {
+    const currentStatus = getPassphraseLockoutStatus(userId);
+    const currentTier = currentStatus.tier || 0;
+    const maxAttempts = currentTier > 0 ? 3 : MAX_PASSPHRASE_ATTEMPTS;
+    const nextLocalFailures = currentStatus.failures + 1;
+    let effectiveFailures = nextLocalFailures;
+    const shouldLock = nextLocalFailures >= maxAttempts;
+    const nextTier = shouldLock ? currentTier + 1 : currentTier;
+    const nextDurationMs = getLockoutDurationMs(Math.max(1, nextTier));
+    let lockedUntil = shouldLock ? Date.now() + nextDurationMs : 0;
+
+    setLocalPassphraseLockout(lockedUntil, userId, undefined, effectiveFailures, nextTier);
+    setFailedAttempts(effectiveFailures);
+    setLockoutTier(nextTier);
+
+    try {
+      const token = await getFreshAccessToken();
+      if (token) {
+        const res = await fetch("/api/storage-proxy?action=passphrase-lockout-record", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            forceLockout: shouldLock,
+            tier: nextTier,
+          }),
+        });
+        if (res.ok) {
+          const data = (await res.json()) as {
+            failures?: number;
+            locked?: boolean;
+            lockedUntil?: number;
+            tier?: number;
+          };
+          if (typeof data.failures === "number" && data.failures > effectiveFailures) {
+            effectiveFailures = data.failures;
+          }
+          if (typeof data.tier === "number" && data.tier > nextTier) {
+            setLockoutTier(data.tier);
+          }
+          if (
+            data.locked &&
+            typeof data.lockedUntil === "number" &&
+            data.lockedUntil > lockedUntil
+          ) {
+            lockedUntil = data.lockedUntil;
+          }
+        }
+      }
+    } catch {
+      // continue with local enforcement
+    }
+
+    if (shouldLock || lockedUntil > Date.now()) {
+      const finalLockedUntil = lockedUntil > Date.now() ? lockedUntil : Date.now() + nextDurationMs;
+      await forceLogoutForPassphraseLockout(userId, undefined, finalLockedUntil, nextTier);
+      throw new Error(
+        `Maximum passphrase attempts exceeded (${effectiveFailures}/${maxAttempts}). You have been logged out and locked out for ${formatDurationLabel(nextDurationMs)}.`,
+      );
+    }
+
+    setLocalPassphraseLockout(0, userId, undefined, effectiveFailures, currentTier);
+    setFailedAttempts(effectiveFailures);
+    const remaining = Math.max(1, maxAttempts - effectiveFailures);
+    throw new Error(
+      `Wrong passphrase. ${remaining} ${remaining === 1 ? "attempt" : "attempts"} remaining before automatic logout and ${formatDurationLabel(nextDurationMs)} lockout.`,
+    );
+  }, [userId]);
+
+  const resetPassphraseFailureCounter = useCallback(
+    (fullReset = false) => {
+      clearPassphraseFailures(userId, undefined, fullReset);
+      setFailedAttempts(0);
+      if (fullReset) {
+        setLockoutTier(0);
+      }
+      void (async () => {
+        try {
+          const token = await getFreshAccessToken();
+          if (token) {
+            await fetch("/api/storage-proxy?action=passphrase-lockout-clear", {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${token}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({ fullReset }),
+            });
+          }
+        } catch {
+          // ignore
+        }
+      })();
+    },
+    [userId],
+  );
 
   const applyResolvedMeta = useCallback(
     (meta: CachedVaultMeta) => {
@@ -360,8 +851,7 @@ export function VaultProvider({ userId, children }: { userId: string; children: 
 
       await persistVaultMetaEverywhere(userId, meta);
 
-      failedUnlockAttempts = 0;
-      unlockLockedUntil = 0;
+      resetPassphraseFailureCounter();
       setKdfSalt(newKdfSalt);
       setVerifier(newVerifier);
       setVerifierSalt(newVerifierSalt);
@@ -372,15 +862,17 @@ export function VaultProvider({ userId, children }: { userId: string; children: 
       setStatus("unlocked");
       return dataKey;
     },
-    [userId],
+    [userId, resetPassphraseFailureCounter],
   );
 
   const unlock = useCallback(
     async (passphrase: string): Promise<CryptoKey> => {
-      const now = Date.now();
-      if (unlockLockedUntil > now) {
-        const waitSec = Math.ceil((unlockLockedUntil - now) / 1000);
-        throw new Error(`Too many failed attempts. Please wait ${waitSec}s before trying again.`);
+      const lockState = getPassphraseLockoutStatus(userId);
+      if (lockState.locked) {
+        await forceLogoutForPassphraseLockout(userId, undefined, lockState.lockedUntil);
+        throw new Error(
+          `Too many failed passphrase attempts. Login is locked for ${formatLockoutRemaining(lockState.remainingMs)}.`,
+        );
       }
       if (!kdfSalt || !verifier || !verifierSalt) throw new Error("Vault not initialized");
       if (kdfSalt === verifierSalt) {
@@ -391,15 +883,9 @@ export function VaultProvider({ userId, children }: { userId: string; children: 
         deriveDataKey(passphrase, kdfSalt),
       ]);
       if (!timingSafeEqualStr(check, verifier)) {
-        failedUnlockAttempts += 1;
-        if (failedUnlockAttempts >= 5) {
-          const backoffMs = Math.min(60_000, 2000 * Math.pow(2, failedUnlockAttempts - 5));
-          unlockLockedUntil = Date.now() + backoffMs;
-        }
-        throw new Error("Wrong passphrase");
+        return await registerWrongPassphraseAttempt();
       }
-      failedUnlockAttempts = 0;
-      unlockLockedUntil = 0;
+      resetPassphraseFailureCounter();
       setKey(dataKey);
       setStatus("unlocked");
 
@@ -441,7 +927,16 @@ export function VaultProvider({ userId, children }: { userId: string; children: 
 
       return dataKey;
     },
-    [userId, kdfSalt, verifier, verifierSalt, encryptedRecoveryKey, recoveryEnvelope],
+    [
+      userId,
+      kdfSalt,
+      verifier,
+      verifierSalt,
+      encryptedRecoveryKey,
+      recoveryEnvelope,
+      registerWrongPassphraseAttempt,
+      resetPassphraseFailureCounter,
+    ],
   );
 
   const changePassphrase = useCallback(
@@ -462,8 +957,9 @@ export function VaultProvider({ userId, children }: { userId: string; children: 
         deriveDataKey(currentPassphrase, kdfSalt),
       ]);
       if (!timingSafeEqualStr(check, verifier)) {
-        throw new Error("Current passphrase is incorrect.");
+        return await registerWrongPassphraseAttempt();
       }
+      resetPassphraseFailureCounter();
 
       onProgress?.("Deriving new encryption keys...");
       const newKdfSalt = toB64(randomBytes(16));
@@ -508,7 +1004,16 @@ export function VaultProvider({ userId, children }: { userId: string; children: 
 
       return { recoveryKey: activeRecKey };
     },
-    [userId, kdfSalt, verifier, verifierSalt, recoveryKey, qc],
+    [
+      userId,
+      kdfSalt,
+      verifier,
+      verifierSalt,
+      recoveryKey,
+      qc,
+      registerWrongPassphraseAttempt,
+      resetPassphraseFailureCounter,
+    ],
   );
 
   const recoverWithRecoveryKey = useCallback(
@@ -567,8 +1072,7 @@ export function VaultProvider({ userId, children }: { userId: string; children: 
       });
 
       clearCryptoCache();
-      failedUnlockAttempts = 0;
-      unlockLockedUntil = 0;
+      resetPassphraseFailureCounter();
       setKdfSalt(newKdfSalt);
       setVerifier(newVerifier);
       setVerifierSalt(newVerifierSalt);
@@ -581,7 +1085,7 @@ export function VaultProvider({ userId, children }: { userId: string; children: 
 
       return newKey;
     },
-    [userId, recoveryEnvelope, kdfSalt, qc],
+    [userId, recoveryEnvelope, kdfSalt, qc, resetPassphraseFailureCounter],
   );
 
   const regenerateRecoveryKey = useCallback(
@@ -591,8 +1095,9 @@ export function VaultProvider({ userId, children }: { userId: string; children: 
       }
       const check = await deriveVerifier(currentPassphrase, verifierSalt);
       if (!timingSafeEqualStr(check, verifier)) {
-        throw new Error("Current passphrase is incorrect.");
+        return await registerWrongPassphraseAttempt();
       }
+      resetPassphraseFailureCounter();
       const newRecKey = generateRecoveryKey();
       const [envelope, encRecKey] = await Promise.all([
         createRecoveryEnvelope(currentPassphrase, newRecKey),
@@ -611,7 +1116,15 @@ export function VaultProvider({ userId, children }: { userId: string; children: 
       setRecoveryKey(newRecKey);
       return newRecKey;
     },
-    [userId, kdfSalt, verifier, verifierSalt, key],
+    [
+      userId,
+      kdfSalt,
+      verifier,
+      verifierSalt,
+      key,
+      registerWrongPassphraseAttempt,
+      resetPassphraseFailureCounter,
+    ],
   );
 
   const resetVaultAndSetup = useCallback(
@@ -648,8 +1161,7 @@ export function VaultProvider({ userId, children }: { userId: string; children: 
         encrypted_recovery_key: encRecKey,
       });
 
-      failedUnlockAttempts = 0;
-      unlockLockedUntil = 0;
+      resetPassphraseFailureCounter();
       setKdfSalt(newKdfSalt);
       setVerifier(newVerifier);
       setVerifierSalt(newVerifierSalt);
@@ -660,7 +1172,7 @@ export function VaultProvider({ userId, children }: { userId: string; children: 
       setStatus("unlocked");
       return { key: dataKey, recoveryKey: newRecKey };
     },
-    [userId, qc],
+    [userId, qc, resetPassphraseFailureCounter],
   );
 
   const lock = useCallback(() => {
@@ -696,6 +1208,13 @@ export function VaultProvider({ userId, children }: { userId: string; children: 
       key,
       recoveryKey,
       hasRecoveryKey: Boolean(recoveryEnvelope),
+      failedAttempts,
+      attemptsRemaining: Math.max(
+        0,
+        (lockoutTier > 0 ? 3 : MAX_PASSPHRASE_ATTEMPTS) - failedAttempts,
+      ),
+      tier: lockoutTier,
+      nextLockoutDurationMs: getLockoutDurationMs(lockoutTier + 1),
       setup,
       unlock,
       changePassphrase,
@@ -709,6 +1228,8 @@ export function VaultProvider({ userId, children }: { userId: string; children: 
       key,
       recoveryKey,
       recoveryEnvelope,
+      failedAttempts,
+      lockoutTier,
       setup,
       unlock,
       changePassphrase,

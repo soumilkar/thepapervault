@@ -113,10 +113,44 @@ function cacheVerifiedUser(token: string, user: User, expiresAt: number) {
 
 const DANGEROUS_OBJECT_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
+function isTrustedMusicCdnUrl(value: unknown): value is string {
+  if (typeof value !== "string" || !value.trim() || value.length > 1024) return false;
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "https:" || parsed.username || parsed.password) return false;
+    const host = parsed.hostname.toLowerCase();
+    return (
+      host === "apple.com" ||
+      host.endsWith(".apple.com") ||
+      host === "mzstatic.com" ||
+      host.endsWith(".mzstatic.com")
+    );
+  } catch {
+    return false;
+  }
+}
+
 function sanitizeRecord(input: Record<string, unknown>): Record<string, unknown> {
   const clean: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(input)) {
     if (DANGEROUS_OBJECT_KEYS.has(k)) continue;
+    if (k === "music_artwork_url" || k === "music_preview_url") {
+      clean[k] = isTrustedMusicCdnUrl(v) ? v : null;
+      continue;
+    }
+    if (k === "music" && v && typeof v === "object" && !Array.isArray(v)) {
+      const m = v as Record<string, unknown>;
+      clean[k] = {
+        trackId: typeof m.trackId === "number" ? m.trackId : 0,
+        trackName: typeof m.trackName === "string" ? m.trackName.slice(0, 300) : "",
+        artistName: typeof m.artistName === "string" ? m.artistName.slice(0, 300) : "",
+        collectionName:
+          typeof m.collectionName === "string" ? m.collectionName.slice(0, 300) : undefined,
+        artworkUrl: isTrustedMusicCdnUrl(m.artworkUrl) ? m.artworkUrl : "",
+        previewUrl: isTrustedMusicCdnUrl(m.previewUrl) ? m.previewUrl : null,
+      };
+      continue;
+    }
     clean[k] = v;
   }
   return clean;
@@ -276,6 +310,105 @@ type SecurityPanelChallenge = {
 };
 
 const securityPanelChallenges = new Map<string, SecurityPanelChallenge>();
+const securityQuestionsMemStore = new Map<string, Record<string, unknown>>();
+
+const MAX_PASSPHRASE_FAILURES = 5;
+
+type PassphraseLockoutEntry = {
+  failures: number;
+  lockedUntil: number;
+  windowResetAt: number;
+  tier: number;
+};
+
+function getLockoutDurationMs(tier: number): number {
+  const HOUR = 60 * 60 * 1000;
+  const t = Math.max(1, Math.floor(tier));
+  switch (t) {
+    case 1:
+      return 1 * HOUR; // 1 hour
+    case 2:
+      return 2 * HOUR; // 2 hours
+    case 3:
+      return 4 * HOUR; // 4 hours
+    case 4:
+      return 8 * HOUR; // 8 hours
+    case 5:
+      return 24 * HOUR; // 24 hours
+    case 6:
+      return 48 * HOUR; // 48 hours
+    default:
+      return Math.min(7 * 24 * HOUR, (t - 4) * 24 * HOUR);
+  }
+}
+
+const passphraseLockoutBuckets = new Map<string, PassphraseLockoutEntry>();
+
+function getPassphraseLockoutEntry(key: string): PassphraseLockoutEntry | null {
+  if (!key) return null;
+  const now = Date.now();
+  const entry = passphraseLockoutBuckets.get(key);
+  if (!entry) return null;
+  if (entry.lockedUntil > 0 && entry.lockedUntil <= now && entry.windowResetAt <= now) {
+    passphraseLockoutBuckets.delete(key);
+    return null;
+  }
+  if (entry.lockedUntil === 0 && entry.windowResetAt <= now) {
+    passphraseLockoutBuckets.delete(key);
+    return null;
+  }
+  return entry;
+}
+
+function recordPassphraseFailureInBucket(
+  key: string,
+  forceLockout = false,
+  requestedTier?: number,
+): { failures: number; lockedUntil: number; tier: number } {
+  const now = Date.now();
+  if (passphraseLockoutBuckets.size > 2000) {
+    for (const [k, v] of passphraseLockoutBuckets) {
+      if (v.lockedUntil <= now && v.windowResetAt <= now) {
+        passphraseLockoutBuckets.delete(k);
+      }
+    }
+  }
+  const existing = getPassphraseLockoutEntry(key);
+  if (existing && existing.lockedUntil > now) {
+    return {
+      failures: existing.failures,
+      lockedUntil: existing.lockedUntil,
+      tier: existing.tier || 1,
+    };
+  }
+  const currentTier = Math.max(existing?.tier || 0, requestedTier || 0);
+  const maxAttempts = currentTier > 0 ? 3 : MAX_PASSPHRASE_FAILURES;
+  const nextFailures = forceLockout ? maxAttempts : (existing ? existing.failures : 0) + 1;
+  const shouldLock = forceLockout || nextFailures >= maxAttempts;
+  const nextTier = shouldLock ? currentTier + 1 : currentTier;
+  const duration = getLockoutDurationMs(Math.max(1, nextTier));
+  const lockedUntil = shouldLock ? now + duration : 0;
+  const updated: PassphraseLockoutEntry = {
+    failures: shouldLock ? 0 : nextFailures,
+    lockedUntil,
+    windowResetAt: now + 7 * 24 * 60 * 60 * 1000,
+    tier: nextTier,
+  };
+  passphraseLockoutBuckets.set(key, updated);
+  return { failures: nextFailures, lockedUntil, tier: nextTier };
+}
+
+function clearPassphraseLockoutBucket(key: string, fullReset = false): void {
+  const existing = getPassphraseLockoutEntry(key);
+  if (existing && existing.lockedUntil > Date.now()) {
+    return;
+  }
+  if (fullReset) {
+    passphraseLockoutBuckets.delete(key);
+  } else if (existing) {
+    existing.failures = 0;
+  }
+}
 
 async function fetchLiveSupabaseAuthUser(
   request: Request,
@@ -287,6 +420,7 @@ async function fetchLiveSupabaseAuthUser(
   updated_at?: string;
   confirmation_sent_at?: string;
   recovery_sent_at?: string;
+  user_metadata?: Record<string, unknown>;
 } | null> {
   const url = getSupabaseUrl(request).replace(/\/+$/, "");
   const anonKey = getSupabaseAnonOrServiceKey(request);
@@ -313,9 +447,36 @@ async function fetchLiveSupabaseAuthUser(
         typeof data.confirmation_sent_at === "string" ? data.confirmation_sent_at : undefined,
       recovery_sent_at:
         typeof data.recovery_sent_at === "string" ? data.recovery_sent_at : undefined,
+      user_metadata:
+        data.user_metadata && typeof data.user_metadata === "object"
+          ? (data.user_metadata as Record<string, unknown>)
+          : undefined,
     };
   } catch {
     return null;
+  }
+}
+
+async function updateLiveSupabaseAuthUserMetadata(
+  request: Request,
+  bearerToken: string,
+  dataPatch: Record<string, unknown>,
+): Promise<void> {
+  const url = getSupabaseUrl(request).replace(/\/+$/, "");
+  const anonKey = getSupabaseAnonOrServiceKey(request);
+  if (!url || !anonKey || !bearerToken) return;
+  try {
+    await fetch(`${url}/auth/v1/user`, {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${bearerToken}`,
+        apikey: anonKey,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ data: dataPatch }),
+    });
+  } catch {
+    // ignore
   }
 }
 
@@ -332,7 +493,8 @@ function isAllowedStoragePath(
   if (
     path.startsWith("_") ||
     path.includes("security-questions.bin") ||
-    path.includes("_security_questions")
+    path.includes("_security_questions") ||
+    path.includes("_passphrase_lockout")
   ) {
     return false;
   }
@@ -491,7 +653,7 @@ function sanitizeAnonymousDiaryRow(r: Record<string, unknown>): Record<string, u
     updated_at: r.updated_at ?? r.created_at ?? null,
     is_public: true,
     visibility: "public_anon",
-    image_path: r.image_path ?? null,
+    image_path: null,
     music: r.music ?? null,
     iv: null,
     folder_id: null,
@@ -856,27 +1018,36 @@ export const Route = createFileRoute("/api/storage-proxy")({
           const readSecurityQuestionsBlob = async (
             objectPath: string,
           ): Promise<Record<string, unknown> | null> => {
+            const mem = securityQuestionsMemStore.get(objectPath);
+            if (mem) return mem;
+
             if (b2Config) {
               try {
                 const b2Obj = await b2GetStorageObject(b2Config, "media", objectPath);
                 if (b2Obj) {
                   const text = new TextDecoder().decode(b2Obj.buffer);
-                  return JSON.parse(text) as Record<string, unknown>;
+                  const parsed = JSON.parse(text) as Record<string, unknown>;
+                  securityQuestionsMemStore.set(objectPath, parsed);
+                  return parsed;
                 }
               } catch {
                 // fallback
               }
             }
-            try {
-              const { data: sbBlob, error: sbErr } = await adminClient.storage
-                .from("media")
-                .download(objectPath);
-              if (!sbErr && sbBlob) {
-                const text = await sbBlob.text();
-                return JSON.parse(text) as Record<string, unknown>;
+            for (const bucketName of ["gallery", "media"] as const) {
+              try {
+                const { data: sbBlob, error: sbErr } = await adminClient.storage
+                  .from(bucketName)
+                  .download(objectPath);
+                if (!sbErr && sbBlob) {
+                  const text = await sbBlob.text();
+                  const parsed = JSON.parse(text) as Record<string, unknown>;
+                  securityQuestionsMemStore.set(objectPath, parsed);
+                  return parsed;
+                }
+              } catch {
+                // ignore
               }
-            } catch {
-              // ignore
             }
             return null;
           };
@@ -885,6 +1056,7 @@ export const Route = createFileRoute("/api/storage-proxy")({
             objectPath: string,
             payloadObj: Record<string, unknown>,
           ): Promise<void> => {
+            securityQuestionsMemStore.set(objectPath, payloadObj);
             const serialized = JSON.stringify(payloadObj);
             const bytes = new TextEncoder().encode(serialized);
             const blob = new Blob([bytes], { type: "application/octet-stream" });
@@ -902,13 +1074,15 @@ export const Route = createFileRoute("/api/storage-proxy")({
                 // fallback
               }
             }
-            try {
-              await adminClient.storage.from("media").upload(objectPath, blob, {
-                contentType: "application/octet-stream",
-                upsert: true,
-              });
-            } catch {
-              // ignore
+            for (const bucketName of ["gallery", "media"] as const) {
+              try {
+                await adminClient.storage.from(bucketName).upload(objectPath, blob, {
+                  contentType: "application/octet-stream",
+                  upsert: true,
+                });
+              } catch {
+                // ignore
+              }
             }
           };
 
@@ -1053,6 +1227,150 @@ export const Route = createFileRoute("/api/storage-proxy")({
             });
           }
 
+          if (action === "passphrase-lockout-check") {
+            const clientIp = extractClientIp(request);
+            const body = (await request.json().catch(() => ({}))) as { email?: string };
+            const emailHash = await hashEmailIdentifier(body.email || "");
+            const now = Date.now();
+
+            const ipEntry = getPassphraseLockoutEntry(`ip:${clientIp}`);
+            const emEntry = emailHash ? getPassphraseLockoutEntry(`em:${emailHash}`) : null;
+            let lockedUntil = Math.max(ipEntry?.lockedUntil || 0, emEntry?.lockedUntil || 0);
+            let tier = Math.max(ipEntry?.tier || 0, emEntry?.tier || 0);
+
+            if (emailHash) {
+              const stored = await readSecurityQuestionsBlob(
+                `_passphrase_lockout/${emailHash}.bin`,
+              );
+              const storedUntil = Number(stored?.lockedUntil) || 0;
+              const storedTier = Number(stored?.tier) || 0;
+              tier = Math.max(tier, storedTier);
+              if (storedUntil > now) {
+                lockedUntil = Math.max(lockedUntil, storedUntil);
+                passphraseLockoutBuckets.set(`em:${emailHash}`, {
+                  failures: MAX_PASSPHRASE_FAILURES,
+                  lockedUntil: storedUntil,
+                  windowResetAt: storedUntil + 7 * 24 * 60 * 60 * 1000,
+                  tier,
+                });
+              }
+            }
+
+            return new Response(
+              JSON.stringify({
+                locked: lockedUntil > now,
+                lockedUntil: lockedUntil > now ? lockedUntil : 0,
+                tier,
+              }),
+              { status: 200, headers: JSON_SECURITY_HEADERS },
+            );
+          }
+
+          if (action === "passphrase-lockout-record") {
+            const clientIp = extractClientIp(request);
+            const body = (await request.json().catch(() => ({}))) as {
+              forceLockout?: boolean;
+              email?: string;
+              tier?: number;
+            };
+            const forceLock = body.forceLockout === true;
+            const requestedTier = typeof body.tier === "number" ? body.tier : 0;
+            const maybeUser = await authenticateUser(request, adminClient);
+            const rawEmail = maybeUser?.email || (typeof body.email === "string" ? body.email : "");
+            const userEmailHash = rawEmail ? await hashEmailIdentifier(rawEmail) : "";
+
+            const ipRes = recordPassphraseFailureInBucket(
+              `ip:${clientIp}`,
+              forceLock,
+              requestedTier,
+            );
+            const emRes = userEmailHash
+              ? recordPassphraseFailureInBucket(`em:${userEmailHash}`, forceLock, requestedTier)
+              : ipRes;
+            const usrRes = maybeUser
+              ? recordPassphraseFailureInBucket(`usr:${maybeUser.id}`, forceLock, requestedTier)
+              : emRes;
+
+            const failures = Math.max(usrRes.failures, emRes.failures, ipRes.failures);
+            const lockedUntil = Math.max(usrRes.lockedUntil, emRes.lockedUntil, ipRes.lockedUntil);
+            const tier = Math.max(usrRes.tier, emRes.tier, ipRes.tier);
+            const maxAttempts = tier > 1 ? 3 : MAX_PASSPHRASE_FAILURES;
+            const now = Date.now();
+
+            if (lockedUntil > now) {
+              if (bearerToken) {
+                verifiedTokenCache.delete(bearerToken);
+              }
+              const lockoutDoc = {
+                userId: maybeUser?.id || null,
+                emailHash: userEmailHash,
+                failures,
+                lockedUntil,
+                tier,
+                updatedAt: new Date(now).toISOString(),
+              };
+              const tasks: Promise<unknown>[] = [
+                userEmailHash
+                  ? writeSecurityQuestionsBlob(
+                      `_passphrase_lockout/${userEmailHash}.bin`,
+                      lockoutDoc,
+                    )
+                  : Promise.resolve(),
+              ];
+              if (maybeUser?.id) {
+                tasks.push(
+                  writeSecurityQuestionsBlob(`_passphrase_lockout/${maybeUser.id}.bin`, lockoutDoc),
+                  updateLiveSupabaseAuthUserMetadata(request, bearerToken, {
+                    papervault_lockout_until: lockedUntil,
+                    papervault_lockout_tier: tier,
+                  }),
+                );
+              }
+              await Promise.all(tasks);
+            }
+
+            return new Response(
+              JSON.stringify({
+                failures,
+                locked: lockedUntil > now,
+                lockedUntil: lockedUntil > now ? lockedUntil : 0,
+                tier,
+                attemptsRemaining: Math.max(0, maxAttempts - failures),
+              }),
+              { status: 200, headers: JSON_SECURITY_HEADERS },
+            );
+          }
+
+          if (action === "passphrase-lockout-clear") {
+            const body = (await request.json().catch(() => ({}))) as {
+              email?: string;
+              fullReset?: boolean;
+            };
+            const fullReset = body.fullReset === true;
+            const clientIp = extractClientIp(request);
+            const maybeUser = await authenticateUser(request, adminClient);
+            const rawEmail = maybeUser?.email || (typeof body.email === "string" ? body.email : "");
+            const userEmailHash = rawEmail ? await hashEmailIdentifier(rawEmail) : "";
+
+            clearPassphraseLockoutBucket(`ip:${clientIp}`, fullReset);
+            if (userEmailHash) {
+              clearPassphraseLockoutBucket(`em:${userEmailHash}`, fullReset);
+            }
+            if (maybeUser) {
+              clearPassphraseLockoutBucket(`usr:${maybeUser.id}`, fullReset);
+              if (fullReset) {
+                await updateLiveSupabaseAuthUserMetadata(request, bearerToken, {
+                  papervault_lockout_until: 0,
+                  papervault_lockout_tier: 0,
+                });
+              }
+            }
+            return new Response(JSON.stringify({ ok: true }), {
+              status: 200,
+              headers: JSON_SECURITY_HEADERS,
+            });
+          }
+
           const user = await authenticateUser(request, adminClient);
           if (!user) {
             return new Response(
@@ -1068,6 +1386,30 @@ export const Route = createFileRoute("/api/storage-proxy")({
                 status: 429,
                 headers: { ...JSON_SECURITY_HEADERS, "Retry-After": "15" },
               },
+            );
+          }
+
+          const userEmailHash = user.email ? await hashEmailIdentifier(user.email) : "";
+
+          // Reject authenticated requests if user is currently under an active 1-hour passphrase lockout
+          const activeUsrLock = getPassphraseLockoutEntry(`usr:${user.id}`)?.lockedUntil || 0;
+          const activeEmLock = userEmailHash
+            ? getPassphraseLockoutEntry(`em:${userEmailHash}`)?.lockedUntil || 0
+            : 0;
+          const activeMetaLock =
+            Number(
+              (user.user_metadata as Record<string, unknown> | undefined)?.papervault_lockout_until,
+            ) || 0;
+          const effectiveLockoutUntil = Math.max(activeUsrLock, activeEmLock, activeMetaLock);
+          if (effectiveLockoutUntil > Date.now()) {
+            return new Response(
+              JSON.stringify({
+                error:
+                  "Account temporarily locked for 1 hour due to multiple wrong passphrase attempts.",
+                locked: true,
+                lockedUntil: effectiveLockoutUntil,
+              }),
+              { status: 423, headers: JSON_SECURITY_HEADERS },
             );
           }
 
@@ -1186,6 +1528,8 @@ export const Route = createFileRoute("/api/storage-proxy")({
             const nowMs = Date.now();
             const sixMonthsMs = 180 * 24 * 60 * 60 * 1000;
             const emailHash = user.email ? await hashEmailIdentifier(user.email) : "";
+            const createdAtIso = new Date(nowMs).toISOString();
+            const expiresAtIso = new Date(nowMs + sixMonthsMs).toISOString();
             const sanitizedPayload: Record<string, unknown> = {
               version: 1,
               user_id: user.id,
@@ -1195,17 +1539,39 @@ export const Route = createFileRoute("/api/storage-proxy")({
               verifier_salt: payload.verifier_salt,
               combined_verifier: payload.combined_verifier,
               questions_recovery_envelope: null,
-              created_at: new Date(nowMs).toISOString(),
-              expires_at: new Date(nowMs + sixMonthsMs).toISOString(),
+              created_at: createdAtIso,
+              expires_at: expiresAtIso,
             };
 
-            await writeSecurityQuestionsBlob(`${user.id}/security-questions.bin`, sanitizedPayload);
-            if (emailHash) {
-              await writeSecurityQuestionsBlob(
-                `_security_questions/${emailHash}.bin`,
-                sanitizedPayload,
-              );
-            }
+            const safeMetaRecord = {
+              version: 1,
+              user_id: user.id,
+              questions: cleanQuestions.map((q) => ({
+                id: q.id,
+                question: q.question,
+                salt: q.salt,
+                verifier: "",
+              })),
+              combined_salt: payload.combined_salt,
+              verifier_salt: payload.verifier_salt,
+              combined_verifier: "",
+              created_at: createdAtIso,
+              expires_at: expiresAtIso,
+            };
+
+            await Promise.all([
+              writeSecurityQuestionsBlob(`${user.id}/security-questions.bin`, sanitizedPayload),
+              emailHash
+                ? writeSecurityQuestionsBlob(
+                    `_security_questions/${emailHash}.bin`,
+                    sanitizedPayload,
+                  )
+                : Promise.resolve(),
+              updateLiveSupabaseAuthUserMetadata(request, bearerToken, {
+                papervault_sq_onboarded: true,
+                papervault_sq_v1: safeMetaRecord,
+              }),
+            ]);
 
             return new Response(
               JSON.stringify({
@@ -1230,6 +1596,19 @@ export const Route = createFileRoute("/api/storage-proxy")({
                 );
                 if (byEmail && (!byEmail.user_id || byEmail.user_id === user.id)) {
                   record = byEmail;
+                }
+              }
+            }
+            if (!record) {
+              const metaSq = (user.user_metadata as Record<string, unknown> | undefined)
+                ?.papervault_sq_v1;
+              if (metaSq && typeof metaSq === "object") {
+                record = metaSq as Record<string, unknown>;
+              } else {
+                const liveUser = await fetchLiveSupabaseAuthUser(request, bearerToken);
+                const liveMetaSq = liveUser?.user_metadata?.papervault_sq_v1;
+                if (liveMetaSq && typeof liveMetaSq === "object") {
+                  record = liveMetaSq as Record<string, unknown>;
                 }
               }
             }
@@ -1394,85 +1773,6 @@ export const Route = createFileRoute("/api/storage-proxy")({
 
             return new Response(JSON.stringify({ verified: false }), {
               status: 200,
-              headers: JSON_SECURITY_HEADERS,
-            });
-          }
-
-          if (action === "security-panel-verify-link") {
-            const body = (await request.json().catch(() => null)) as { input?: string } | null;
-            const rawInput = typeof body?.input === "string" ? body.input.trim() : "";
-            if (!rawInput || rawInput.length > 4096) {
-              return new Response(JSON.stringify({ error: "Invalid link or code" }), {
-                status: 400,
-                headers: JSON_SECURITY_HEADERS,
-              });
-            }
-
-            const sbUrlStr = getSupabaseUrl(request).replace(/\/+$/, "");
-            let verifiedOnServer = false;
-
-            try {
-              const parsedUrl = new URL(rawInput);
-              const sbHost = sbUrlStr ? new URL(sbUrlStr).hostname : "";
-              // 1. If the user pasted the raw Supabase confirmation URL (https://<project>.supabase.co/auth/v1/verify?token=...)
-              if (
-                sbHost &&
-                parsedUrl.hostname === sbHost &&
-                parsedUrl.pathname.includes("/auth/v1/verify")
-              ) {
-                const verifyRes = await fetch(parsedUrl.toString(), {
-                  method: "GET",
-                  redirect: "manual",
-                });
-                const locationHeader = verifyRes.headers.get("location") || "";
-                if (
-                  locationHeader &&
-                  !locationHeader.includes("error=") &&
-                  (locationHeader.includes("access_token=") || locationHeader.includes("code="))
-                ) {
-                  verifiedOnServer = true;
-                }
-              }
-
-              // 2. If the user pasted the redirected URL containing #access_token=...
-              if (!verifiedOnServer && parsedUrl.hash.includes("access_token=")) {
-                const hashParams = new URLSearchParams(parsedUrl.hash.replace(/^#/, ""));
-                const pastedAccessToken = hashParams.get("access_token") || "";
-                if (pastedAccessToken) {
-                  const pastedUser = await fetchLiveSupabaseAuthUser(request, pastedAccessToken);
-                  if (pastedUser?.id === user.id) {
-                    verifiedOnServer = true;
-                  }
-                }
-              }
-            } catch {
-              // Not a full URL; handled by client or status check below
-            }
-
-            if (verifiedOnServer) {
-              const nowMs = Date.now();
-              const updated: SecurityPanelChallenge = {
-                userId: user.id,
-                startedAt: nowMs,
-                baselineLastSignInAt: new Date(nowMs).toISOString(),
-                baselineUpdatedAt: new Date(nowMs).toISOString(),
-                verifiedAt: nowMs,
-              };
-              securityPanelChallenges.set(user.id, updated);
-              if (b2Config) {
-                await writeSecurityQuestionsBlob(
-                  `_security_panel_challenge/${user.id}.bin`,
-                  updated as unknown as Record<string, unknown>,
-                ).catch(() => {});
-              }
-              return new Response(JSON.stringify({ verified: true }), {
-                status: 200,
-                headers: JSON_SECURITY_HEADERS,
-              });
-            }
-
-            return new Response(JSON.stringify({ verified: false }), {
-              status: 400,
               headers: JSON_SECURITY_HEADERS,
             });
           }
@@ -1890,6 +2190,9 @@ export const Route = createFileRoute("/api/storage-proxy")({
                   }
                   if (table === "diary_entries") {
                     normalized.visibility = normalized.is_public ? "public_anon" : "private";
+                  }
+                  if (table === "comment_votes") {
+                    normalized.value = normalized.value === -1 ? -1 : 1;
                   }
                   delete mergedDoc.deletedIds[rowId];
                   rowsById.set(rowId, normalized);

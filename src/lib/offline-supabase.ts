@@ -843,15 +843,26 @@ export function clearAllOfflineUserData() {
 
   if (typeof window !== "undefined") {
     try {
+      const preservedPrefixes = [
+        "papervault:security_questions:v1:",
+        "papervault:sq_onboarded:",
+        "papervault:sq_challenge:",
+        "papervault:welcome_tour_seen:",
+        "papervault:profile_name:",
+        "papervault:passphrase_lockout:",
+      ];
       const keysToRemove: string[] = [];
       for (let i = 0; i < window.localStorage.length; i++) {
         const k = window.localStorage.key(i);
+        if (!k) continue;
+        if (preservedPrefixes.some((prefix) => k.startsWith(prefix))) {
+          continue;
+        }
         if (
-          k &&
-          (k.startsWith("papervault:") ||
-            k.startsWith("sb-") ||
-            k.includes("auth-token") ||
-            k.includes("supabase"))
+          k.startsWith("papervault:") ||
+          k.startsWith("sb-") ||
+          k.includes("auth-token") ||
+          k.includes("supabase")
         ) {
           keysToRemove.push(k);
         }

@@ -10,7 +10,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { toast } from "sonner";
-import { useVault } from "@/lib/vault";
+import { formatDurationLabel, useVault } from "@/lib/vault";
 import { runVaultMigration } from "@/lib/vault-migrate";
 import { markFirstTimeSignup } from "@/components/WelcomeTour";
 import {
@@ -23,8 +23,17 @@ type GateView =
   "unlock" | "verify_security_questions" | "recover_key" | "reset_vault" | "show_recovery_key";
 
 export function VaultGate({ userId, children }: { userId: string; children: React.ReactNode }) {
-  const { status, setup, unlock, recoverWithRecoveryKey, resetVaultAndSetup, recoveryKey } =
-    useVault();
+  const {
+    status,
+    setup,
+    unlock,
+    recoverWithRecoveryKey,
+    resetVaultAndSetup,
+    recoveryKey,
+    failedAttempts,
+    attemptsRemaining,
+    nextLockoutDurationMs,
+  } = useVault();
   const [view, setView] = useState<GateView>("unlock");
   const [passphrase, setPassphrase] = useState("");
   const [confirm, setConfirm] = useState("");
@@ -591,6 +600,23 @@ export function VaultGate({ userId, children }: { userId: string; children: Reac
             ? "Choose a passphrase you'll remember. It end-to-end encrypts your diary, notes, folders, gallery, and companion chats."
             : "Enter your passphrase to decrypt your private diary, notes, folders, gallery, and companion chats."}
         </p>
+
+        {status === "locked" && failedAttempts > 0 && (
+          <div className="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2.5 text-xs text-destructive">
+            <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+            <div>
+              <p className="font-semibold">
+                {attemptsRemaining} passphrase {attemptsRemaining === 1 ? "attempt" : "attempts"}{" "}
+                remaining
+              </p>
+              <p className="mt-0.5 text-muted-foreground">
+                Entering a wrong passphrase {attemptsRemaining} more{" "}
+                {attemptsRemaining === 1 ? "time" : "times"} will automatically log you out and lock
+                your account for {formatDurationLabel(nextLockoutDurationMs)}.
+              </p>
+            </div>
+          </div>
+        )}
 
         <div>
           <div className="mb-1 flex items-center justify-between">

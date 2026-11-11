@@ -20,10 +20,25 @@ type Result = {
 function isSafeHttpsUrl(url: string | null | undefined): string | null {
   if (!url || typeof url !== "string") return null;
   const trimmed = url.trim();
-  if (/^https:\/\/[^\s"<>]+$/i.test(trimmed)) {
-    return trimmed;
+  if (!trimmed || trimmed.length > 1024) return null;
+  for (let i = 0; i < trimmed.length; i++) {
+    const c = trimmed.charCodeAt(i);
+    if (c <= 0x1f || c === 0x7f) return null;
   }
-  return null;
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== "https:" || parsed.username || parsed.password) return null;
+    const host = parsed.hostname.toLowerCase();
+    const isTrustedAppleHost =
+      host === "apple.com" ||
+      host.endsWith(".apple.com") ||
+      host === "mzstatic.com" ||
+      host.endsWith(".mzstatic.com");
+    if (!isTrustedAppleHost) return null;
+    return parsed.toString();
+  } catch {
+    return null;
+  }
 }
 
 export function MusicSearch({

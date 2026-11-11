@@ -88,7 +88,7 @@ function getGroqVisionModelOverride(request?: Request): string {
 }
 
 const MAX_OCR_TOKENS = 500;
-const verifiedOcrTokenCache = new Map<string, number>();
+const verifiedOcrTokenCache = new Map<string, { userId: string; expiresAt: number }>();
 
 const MAX_OCR_NONCES = 500;
 const usedOcrNonces = new Map<string, number>();
@@ -110,19 +110,21 @@ function checkAndRecordOcrNonce(nonceKey: string): boolean {
   return true;
 }
 
-function cacheVerifiedOcrToken(token: string, expiresAt: number) {
+function cacheVerifiedOcrToken(token: string, userId: string, expiresAt: number) {
   if (verifiedOcrTokenCache.size >= MAX_OCR_TOKENS) {
     const now = Date.now();
-    for (const [k, exp] of verifiedOcrTokenCache) {
-      if (exp <= now || verifiedOcrTokenCache.size >= MAX_OCR_TOKENS) {
+    for (const [k, val] of verifiedOcrTokenCache) {
+      if (val.expiresAt <= now || verifiedOcrTokenCache.size >= MAX_OCR_TOKENS) {
         verifiedOcrTokenCache.delete(k);
       }
     }
   }
-  verifiedOcrTokenCache.set(token, expiresAt);
+  verifiedOcrTokenCache.set(token, { userId, expiresAt });
 }
 
-async function authenticateAndExtractToken(request: Request): Promise<string | null> {
+async function authenticateAndExtractToken(
+  request: Request,
+): Promise<{ token: string; userId: string } | null> {
   const authorization =
     request.headers.get("authorization") || request.headers.get("Authorization");
   if (!authorization?.startsWith("Bearer ")) return null;
@@ -131,9 +133,9 @@ async function authenticateAndExtractToken(request: Request): Promise<string | n
   if (!token) return null;
 
   const now = Date.now();
-  const cachedExp = verifiedOcrTokenCache.get(token);
-  if (cachedExp && cachedExp > now) {
-    return token;
+  const cached = verifiedOcrTokenCache.get(token);
+  if (cached && cached.expiresAt > now) {
+    return { token, userId: cached.userId };
   }
 
   const url =
@@ -162,15 +164,17 @@ async function authenticateAndExtractToken(request: Request): Promise<string | n
       auth: { persistSession: false, autoRefreshToken: false },
     });
     const { data, error } = await client.auth.getClaims(token);
-    if (!error && Boolean(data?.claims?.sub)) {
-      cacheVerifiedOcrToken(token, now + 5 * 60 * 1000);
-      return token;
+    const claimSub = typeof data?.claims?.sub === "string" ? data.claims.sub : "";
+    if (!error && claimSub) {
+      cacheVerifiedOcrToken(token, claimSub, now + 5 * 60 * 1000);
+      return { token, userId: claimSub };
     }
 
     const { data: userData, error: userError } = await client.auth.getUser(token);
-    if (!userError && Boolean(userData?.user?.id)) {
-      cacheVerifiedOcrToken(token, now + 5 * 60 * 1000);
-      return token;
+    const uid = userData?.user?.id || "";
+    if (!userError && uid) {
+      cacheVerifiedOcrToken(token, uid, now + 5 * 60 * 1000);
+      return { token, userId: uid };
     }
     return null;
   } catch {
@@ -254,17 +258,16 @@ const OCR_RATE_WINDOW_MS = 60_000;
 const OCR_RATE_MAX_REQUESTS = 20;
 const ocrRateBuckets = new Map<string, { count: number; resetAt: number }>();
 
-function checkOcrRateLimit(tokenKey: string): boolean {
+function checkOcrRateLimit(userId: string): boolean {
   const now = Date.now();
   if (ocrRateBuckets.size > 1000) {
     for (const [k, v] of ocrRateBuckets) {
       if (v.resetAt <= now) ocrRateBuckets.delete(k);
     }
   }
-  const bucketKey = tokenKey.slice(-32);
-  const existing = ocrRateBuckets.get(bucketKey);
+  const existing = ocrRateBuckets.get(userId);
   if (!existing || existing.resetAt <= now) {
-    ocrRateBuckets.set(bucketKey, { count: 1, resetAt: now + OCR_RATE_WINDOW_MS });
+    ocrRateBuckets.set(userId, { count: 1, resetAt: now + OCR_RATE_WINDOW_MS });
     return true;
   }
   existing.count += 1;
@@ -278,8 +281,8 @@ export const Route = createFileRoute("/api/handwriting-ocr")({
     handlers: {
       POST: async ({ request }) => {
         try {
-          const accessToken = await authenticateAndExtractToken(request);
-          if (!accessToken) {
+          const auth = await authenticateAndExtractToken(request);
+          if (!auth) {
             return new Response(
               JSON.stringify({ error: "Please sign in to transcribe handwriting." }),
               {
@@ -289,7 +292,7 @@ export const Route = createFileRoute("/api/handwriting-ocr")({
             );
           }
 
-          if (!checkOcrRateLimit(accessToken)) {
+          if (!checkOcrRateLimit(auth.userId)) {
             return new Response(
               JSON.stringify({
                 error: "Too many handwriting scan requests. Please wait a moment.",
@@ -327,7 +330,7 @@ export const Route = createFileRoute("/api/handwriting-ocr")({
           let unwrappedPayload: unknown;
           let encryptionCtx: { transportKey: CryptoKey; ts: number };
           try {
-            const decrypted = await decryptCompanionRequest(accessToken, env);
+            const decrypted = await decryptCompanionRequest(auth.token, env);
             unwrappedPayload = decrypted.payload;
             encryptionCtx = { transportKey: decrypted.transportKey, ts: decrypted.ts };
           } catch (err) {
@@ -349,7 +352,7 @@ export const Route = createFileRoute("/api/handwriting-ocr")({
             );
           }
 
-          const nonceKey = `${env.epk}:${env.salt}:${env.iv}`;
+          const nonceKey = `${auth.userId}:${env.epk}:${env.salt}:${env.iv}`;
           if (!checkAndRecordOcrNonce(nonceKey)) {
             return new Response(JSON.stringify({ error: "Replay request rejected." }), {
               status: 400,

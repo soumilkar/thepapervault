@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { ShieldAlert, ShieldCheck, Lock } from "lucide-react";
 import { toast } from "sonner";
+import { supabase } from "@/integrations/supabase/client";
 import {
   buildSecurityQuestionsRecord,
   consumePendingSignupSecurityQuestions,
   fetchUserSecurityQuestions,
+  hasCompletedSecurityQuestionsOnboarding,
   isSecurityQuestionsExpired,
+  markSecurityQuestionsOnboarded,
   saveSecurityQuestionsToServer,
   SECURITY_QUESTION_POOL,
   type SecurityQuestionsRecord,
@@ -143,12 +146,13 @@ export function SecurityQuestionsOnboardingModal({
       // 1. If user just completed sign-up on /auth with security questions, persist them immediately
       const pending = consumePendingSignupSecurityQuestions();
       if (pending) {
+        markSecurityQuestionsOnboarded(userId);
         try {
           await saveSecurityQuestionsToServer(userId, { ...pending, user_id: userId });
           onSaved?.({ ...pending, user_id: userId });
           return;
         } catch {
-          // continue to check
+          return;
         }
       }
 
@@ -156,20 +160,58 @@ export function SecurityQuestionsOnboardingModal({
       const existing = await fetchUserSecurityQuestions(userId);
       if (cancelled) return;
 
-      if (!existing) {
-        setIsRenewal(false);
-        setSlots(getDefaultQuestionSlots());
-        setOpen(true);
+      if (existing) {
+        markSecurityQuestionsOnboarded(userId);
+        if (isSecurityQuestionsExpired(existing)) {
+          const oldSet = new Set(existing.questions.map((q) => q.id));
+          setPreviousIds(oldSet);
+          setIsRenewal(true);
+          setSlots(getDefaultQuestionSlots(oldSet));
+          setOpen(true);
+        }
         return;
       }
 
-      if (isSecurityQuestionsExpired(existing)) {
-        const oldSet = new Set(existing.questions.map((q) => q.id));
-        setPreviousIds(oldSet);
-        setIsRenewal(true);
-        setSlots(getDefaultQuestionSlots(oldSet));
-        setOpen(true);
+      // 3. If the user has already been onboarded or already has an established account/vault,
+      // never nag them with the onboarding popup on subsequent logins.
+      if (hasCompletedSecurityQuestionsOnboarding(userId)) {
+        return;
       }
+
+      try {
+        const [{ data: sessionData }, { data: profileData }, { data: vaultData }] =
+          await Promise.all([
+            supabase.auth.getSession(),
+            supabase.from("profiles").select("tour_completed").eq("id", userId).maybeSingle(),
+            supabase.from("vault_keys").select("user_id").eq("user_id", userId).maybeSingle(),
+          ]);
+        if (cancelled) return;
+
+        const meta = sessionData.session?.user?.user_metadata as
+          Record<string, unknown> | undefined;
+        const alreadyEstablished =
+          Boolean(meta?.papervault_sq_onboarded) ||
+          Boolean(meta?.papervault_sq_v1) ||
+          Boolean(profileData?.tour_completed) ||
+          Boolean(vaultData?.user_id) ||
+          (typeof window !== "undefined" &&
+            window.localStorage.getItem(`papervault:welcome_tour_seen:${userId}`) === "1");
+
+        if (alreadyEstablished) {
+          markSecurityQuestionsOnboarded(userId);
+          return;
+        }
+      } catch {
+        markSecurityQuestionsOnboarded(userId);
+        return;
+      }
+
+      // Mark as shown once so it never repeats on future logins
+      markSecurityQuestionsOnboarded(userId);
+      void supabase.auth.updateUser({ data: { papervault_sq_onboarded: true } }).catch(() => {});
+      setIsRenewal(false);
+      setSlots(getDefaultQuestionSlots());
+      setOpen(true);
     })();
 
     return () => {
@@ -194,6 +236,7 @@ export function SecurityQuestionsOnboardingModal({
         selectedQuestions: slots,
       });
       await saveSecurityQuestionsToServer(userId, record);
+      markSecurityQuestionsOnboarded(userId);
       setOpen(false);
       onSaved?.(record);
       toast.success(
@@ -212,16 +255,13 @@ export function SecurityQuestionsOnboardingModal({
     <Dialog
       open={open}
       onOpenChange={(nextOpen) => {
-        // Keep open until completed so every account is protected once
-        if (!nextOpen && !busy) return;
+        if (!nextOpen) {
+          markSecurityQuestionsOnboarded(userId);
+        }
         setOpen(nextOpen);
       }}
     >
-      <DialogContent
-        className="max-h-[90vh] overflow-y-auto sm:max-w-lg"
-        onInteractOutside={(e) => e.preventDefault()}
-        onEscapeKeyDown={(e) => e.preventDefault()}
-      >
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 font-serif text-2xl text-primary">
             {isRenewal ? (

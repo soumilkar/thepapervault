@@ -127,7 +127,7 @@ ${context || "(no entries shared yet)"}
 }
 
 const MAX_COMPANION_TOKENS = 500;
-const verifiedCompanionTokenCache = new Map<string, number>();
+const verifiedCompanionTokenCache = new Map<string, { userId: string; expiresAt: number }>();
 
 const MAX_REPLAY_NONCES = 1000;
 const usedCompanionNonces = new Map<string, number>();
@@ -149,19 +149,21 @@ function checkAndRecordReplayNonce(nonceKey: string): boolean {
   return true;
 }
 
-function cacheVerifiedCompanionToken(token: string, expiresAt: number) {
+function cacheVerifiedCompanionToken(token: string, userId: string, expiresAt: number) {
   if (verifiedCompanionTokenCache.size >= MAX_COMPANION_TOKENS) {
     const now = Date.now();
-    for (const [k, exp] of verifiedCompanionTokenCache) {
-      if (exp <= now || verifiedCompanionTokenCache.size >= MAX_COMPANION_TOKENS) {
+    for (const [k, val] of verifiedCompanionTokenCache) {
+      if (val.expiresAt <= now || verifiedCompanionTokenCache.size >= MAX_COMPANION_TOKENS) {
         verifiedCompanionTokenCache.delete(k);
       }
     }
   }
-  verifiedCompanionTokenCache.set(token, expiresAt);
+  verifiedCompanionTokenCache.set(token, { userId, expiresAt });
 }
 
-async function authenticateAndExtractToken(request: Request): Promise<string | null> {
+async function authenticateAndExtractToken(
+  request: Request,
+): Promise<{ token: string; userId: string } | null> {
   const authorization =
     request.headers.get("authorization") || request.headers.get("Authorization");
   if (!authorization?.startsWith("Bearer ")) return null;
@@ -170,9 +172,9 @@ async function authenticateAndExtractToken(request: Request): Promise<string | n
   if (!token) return null;
 
   const now = Date.now();
-  const cachedExp = verifiedCompanionTokenCache.get(token);
-  if (cachedExp && cachedExp > now) {
-    return token;
+  const cached = verifiedCompanionTokenCache.get(token);
+  if (cached && cached.expiresAt > now) {
+    return { token, userId: cached.userId };
   }
 
   const url =
@@ -201,15 +203,17 @@ async function authenticateAndExtractToken(request: Request): Promise<string | n
       auth: { persistSession: false, autoRefreshToken: false },
     });
     const { data, error } = await client.auth.getClaims(token);
-    if (!error && Boolean(data?.claims?.sub)) {
-      cacheVerifiedCompanionToken(token, now + 5 * 60 * 1000);
-      return token;
+    const claimSub = typeof data?.claims?.sub === "string" ? data.claims.sub : "";
+    if (!error && claimSub) {
+      cacheVerifiedCompanionToken(token, claimSub, now + 5 * 60 * 1000);
+      return { token, userId: claimSub };
     }
 
     const { data: userData, error: userError } = await client.auth.getUser(token);
-    if (!userError && Boolean(userData?.user?.id)) {
-      cacheVerifiedCompanionToken(token, now + 5 * 60 * 1000);
-      return token;
+    const uid = userData?.user?.id || "";
+    if (!userError && uid) {
+      cacheVerifiedCompanionToken(token, uid, now + 5 * 60 * 1000);
+      return { token, userId: uid };
     }
     return null;
   } catch {
@@ -341,17 +345,16 @@ const COMPANION_RATE_WINDOW_MS = 60_000;
 const COMPANION_RATE_MAX_REQUESTS = 30;
 const companionRateBuckets = new Map<string, { count: number; resetAt: number }>();
 
-function checkCompanionRateLimit(tokenKey: string): boolean {
+function checkCompanionRateLimit(userId: string): boolean {
   const now = Date.now();
   if (companionRateBuckets.size > 1000) {
     for (const [k, v] of companionRateBuckets) {
       if (v.resetAt <= now) companionRateBuckets.delete(k);
     }
   }
-  const bucketKey = tokenKey.slice(-32);
-  const existing = companionRateBuckets.get(bucketKey);
+  const existing = companionRateBuckets.get(userId);
   if (!existing || existing.resetAt <= now) {
-    companionRateBuckets.set(bucketKey, { count: 1, resetAt: now + COMPANION_RATE_WINDOW_MS });
+    companionRateBuckets.set(userId, { count: 1, resetAt: now + COMPANION_RATE_WINDOW_MS });
     return true;
   }
   existing.count += 1;
@@ -375,15 +378,15 @@ export const Route = createFileRoute("/api/companion-stream")({
       },
       POST: async ({ request }) => {
         try {
-          const accessToken = await authenticateAndExtractToken(request);
-          if (!accessToken) {
+          const auth = await authenticateAndExtractToken(request);
+          if (!auth) {
             return new Response("Please sign in again to continue", {
               status: 401,
               headers: SECURITY_HEADERS,
             });
           }
 
-          if (!checkCompanionRateLimit(accessToken)) {
+          if (!checkCompanionRateLimit(auth.userId)) {
             return new Response("Too many requests. Please wait a moment before sending again.", {
               status: 429,
               headers: {
@@ -413,7 +416,7 @@ export const Route = createFileRoute("/api/companion-stream")({
           let unwrappedPayload: unknown;
           let encryptionCtx: { transportKey: CryptoKey; ts: number };
           try {
-            const decrypted = await decryptCompanionRequest(accessToken, env);
+            const decrypted = await decryptCompanionRequest(auth.token, env);
             unwrappedPayload = decrypted.payload;
             encryptionCtx = { transportKey: decrypted.transportKey, ts: decrypted.ts };
           } catch (err) {
@@ -432,7 +435,7 @@ export const Route = createFileRoute("/api/companion-stream")({
             });
           }
 
-          const nonceKey = `${env.epk}:${env.salt}:${env.iv}`;
+          const nonceKey = `${auth.userId}:${env.epk}:${env.salt}:${env.iv}`;
           if (!checkAndRecordReplayNonce(nonceKey)) {
             return new Response("Replay request rejected", {
               status: 400,

@@ -7,6 +7,7 @@ import {
   timingSafeEqualStr,
   toB64,
 } from "@/lib/crypto";
+import { supabase } from "@/integrations/supabase/client";
 import { getFreshAccessToken } from "@/lib/offline-supabase";
 
 export type SecurityQuestionOption = {
@@ -153,7 +154,33 @@ export type SecurityQuestionsChallenge = {
 };
 
 const LOCAL_SQ_KEY_PREFIX = "papervault:security_questions:v1:";
+const ONBOARDED_SQ_KEY_PREFIX = "papervault:sq_onboarded:";
 const PENDING_SIGNUP_SQ_KEY = "papervault:pending_signup_sq:v1";
+
+export function markSecurityQuestionsOnboarded(userId: string): void {
+  if (typeof window === "undefined" || !userId) return;
+  try {
+    window.localStorage.setItem(`${ONBOARDED_SQ_KEY_PREFIX}${userId}`, "1");
+  } catch {
+    // ignore
+  }
+}
+
+export function hasCompletedSecurityQuestionsOnboarding(userId: string): boolean {
+  if (typeof window === "undefined" || !userId) return false;
+  try {
+    if (window.localStorage.getItem(`${ONBOARDED_SQ_KEY_PREFIX}${userId}`) === "1") {
+      return true;
+    }
+    if (getCachedSecurityQuestions(userId)) {
+      window.localStorage.setItem(`${ONBOARDED_SQ_KEY_PREFIX}${userId}`, "1");
+      return true;
+    }
+  } catch {
+    // ignore
+  }
+  return false;
+}
 
 export function normalizeSecurityAnswer(raw: string): string {
   return raw
@@ -379,6 +406,7 @@ export function cacheSecurityQuestions(userId: string, record: SecurityQuestions
       })),
     };
     window.localStorage.setItem(`${LOCAL_SQ_KEY_PREFIX}${userId}`, JSON.stringify(sanitized));
+    markSecurityQuestionsOnboarded(userId);
   } catch {
     // ignore
   }
@@ -413,6 +441,34 @@ export function consumePendingSignupSecurityQuestions(): SecurityQuestionsRecord
   return null;
 }
 
+function parseMetadataSecurityRecord(
+  userId: string,
+  metaRaw: unknown,
+): SecurityQuestionsRecord | null {
+  if (!metaRaw || typeof metaRaw !== "object") return null;
+  const rec = metaRaw as Record<string, unknown>;
+  if (!Array.isArray(rec.questions) || rec.questions.length !== 3) return null;
+  if (typeof rec.combined_salt !== "string" || typeof rec.verifier_salt !== "string") return null;
+  return {
+    version: 1,
+    user_id: userId,
+    questions: (rec.questions as Record<string, unknown>[]).map((q) => ({
+      id: String(q.id || ""),
+      question: String(q.question || ""),
+      salt: String(q.salt || ""),
+      verifier: "",
+    })),
+    combined_salt: rec.combined_salt,
+    verifier_salt: rec.verifier_salt,
+    combined_verifier: "",
+    created_at: typeof rec.created_at === "string" ? rec.created_at : new Date().toISOString(),
+    expires_at:
+      typeof rec.expires_at === "string"
+        ? rec.expires_at
+        : new Date(Date.now() + SIX_MONTHS_MS).toISOString(),
+  };
+}
+
 export async function saveSecurityQuestionsToServer(
   userId: string,
   record: SecurityQuestionsRecord,
@@ -422,8 +478,29 @@ export async function saveSecurityQuestionsToServer(
     user_id: userId,
   };
   cacheSecurityQuestions(userId, payload);
+  markSecurityQuestionsOnboarded(userId);
 
   if (typeof navigator !== "undefined" && !navigator.onLine) return;
+
+  // Also persist directly in Supabase Auth user_metadata so it survives logout/login on every device
+  void supabase.auth
+    .updateUser({
+      data: {
+        papervault_sq_onboarded: true,
+        papervault_sq_v1: {
+          version: 1,
+          user_id: userId,
+          questions: payload.questions,
+          combined_salt: payload.combined_salt,
+          verifier_salt: payload.verifier_salt,
+          combined_verifier: payload.combined_verifier,
+          created_at: payload.created_at,
+          expires_at: payload.expires_at,
+        },
+      },
+    })
+    .catch(() => {});
+
   const token = await getFreshAccessToken();
   if (!token) return;
 
@@ -455,7 +532,24 @@ export async function saveSecurityQuestionsToServer(
 export async function fetchUserSecurityQuestions(
   userId: string,
 ): Promise<SecurityQuestionsRecord | null> {
-  const local = getCachedSecurityQuestions(userId);
+  let local = getCachedSecurityQuestions(userId);
+
+  // Check active Supabase session user_metadata (available in 0ms right after login)
+  try {
+    const { data: sessionData } = await supabase.auth.getSession();
+    const meta = sessionData.session?.user?.user_metadata as Record<string, unknown> | undefined;
+    if (meta?.papervault_sq_onboarded) {
+      markSecurityQuestionsOnboarded(userId);
+    }
+    const metaRecord = parseMetadataSecurityRecord(userId, meta?.papervault_sq_v1);
+    if (metaRecord) {
+      cacheSecurityQuestions(userId, metaRecord);
+      local = metaRecord;
+    }
+  } catch {
+    // ignore
+  }
+
   if (typeof navigator !== "undefined" && !navigator.onLine) {
     return local;
   }
@@ -476,14 +570,13 @@ export async function fetchUserSecurityQuestions(
           record?: SecurityQuestionsRecord;
         };
         if (data?.configured && data.record && Array.isArray(data.record.questions)) {
-          // Always prefer server-authoritative record to prevent localStorage timestamp tampering
           cacheSecurityQuestions(userId, data.record);
           return data.record;
         }
       }
     }
   } catch {
-    // fallback to local only on network error
+    // fallback to local / session metadata
   }
   return local;
 }
