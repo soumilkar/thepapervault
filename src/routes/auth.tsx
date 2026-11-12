@@ -38,7 +38,6 @@ import {
   formatLockoutRemaining,
   getLockoutDurationMs,
   getPassphraseLockoutStatus,
-  recordServerPassphraseFailure,
   setLocalPassphraseLockout,
 } from "@/lib/vault";
 import { clearAllOfflineUserData } from "@/lib/offline-supabase";
@@ -271,7 +270,7 @@ function AuthPage() {
           setLockoutRemainingMs(localLock.remainingMs);
           const durLabel = formatDurationLabel(getLockoutDurationMs(localLock.tier));
           throw new Error(
-            `Login is locked for ${durLabel} due to multiple wrong attempts. Please wait ${formatLockoutRemaining(localLock.remainingMs)}.`,
+            `Account access is locked for ${durLabel} due to multiple wrong vault passphrase attempts. Please wait ${formatLockoutRemaining(localLock.remainingMs)}.`,
           );
         }
 
@@ -281,7 +280,7 @@ function AuthPage() {
           setLockoutRemainingMs(rem);
           const durLabel = formatDurationLabel(getLockoutDurationMs(serverLock.tier));
           throw new Error(
-            `Login is locked for ${durLabel} due to multiple wrong attempts. Please wait ${formatLockoutRemaining(rem)}.`,
+            `Account access is locked for ${durLabel} due to multiple wrong vault passphrase attempts. Please wait ${formatLockoutRemaining(rem)}.`,
           );
         }
 
@@ -289,26 +288,7 @@ function AuthPage() {
           email,
           password,
         });
-        if (error) {
-          const failRes = await recordServerPassphraseFailure(cleanEmail, false);
-          if (failRes.locked) {
-            setLocalPassphraseLockout(failRes.lockedUntil, undefined, cleanEmail, failRes.tier);
-            const rem = Math.max(0, failRes.lockedUntil - Date.now());
-            setLockoutRemainingMs(rem);
-            const durLabel = formatDurationLabel(getLockoutDurationMs(failRes.tier));
-            throw new Error(
-              `Too many wrong password attempts. Your login is locked for ${durLabel}. Please wait ${formatLockoutRemaining(rem)}. Repeated failures after unlock will lock you out for even longer.`,
-            );
-          } else {
-            const nextDurationLabel = formatDurationLabel(
-              getLockoutDurationMs((failRes.tier || 0) + 1),
-            );
-            const attemptsLeft = Math.max(1, 5 - (failRes.failures % 5));
-            throw new Error(
-              `Invalid login credentials. ${attemptsLeft} wrong attempt(s) remaining before an escalating ${nextDurationLabel} lockout.`,
-            );
-          }
-        }
+        if (error) throw error;
 
         if (signInData.user) {
           const u = signInData.user;
@@ -331,7 +311,7 @@ function AuthPage() {
             setLockoutRemainingMs(rem);
             const durLabel = formatDurationLabel(getLockoutDurationMs(resolvedTier));
             throw new Error(
-              `Login is locked for ${durLabel} due to multiple wrong attempts. Please wait ${formatLockoutRemaining(rem)}.`,
+              `Account access is locked for ${durLabel} due to multiple wrong vault passphrase attempts. Please wait ${formatLockoutRemaining(rem)}.`,
             );
           }
         }
@@ -377,12 +357,13 @@ function AuthPage() {
             <AlertTriangle className="mt-0.5 size-4 shrink-0 text-destructive" />
             <div>
               <p className="font-semibold text-destructive">
-                Login Locked · {formatLockoutRemaining(lockoutRemainingMs)} remaining
+                Vault Lockout Active · {formatLockoutRemaining(lockoutRemainingMs)} remaining
               </p>
               <p className="mt-0.5 text-muted-foreground">
-                Multiple wrong password or passphrase attempts were entered. For your security, you
-                were automatically locked out. When this timer expires, any further wrong attempts
-                will escalate the lockout time to an even longer duration (up to 7 days).
+                Multiple wrong vault passphrase attempts were entered. For your security, the
+                account was automatically locked out. (Note: account login password attempts never
+                lock you out to protect against spam). When this timer expires, any further wrong
+                vault passphrase attempts will escalate the lockout duration.
               </p>
             </div>
           </div>
