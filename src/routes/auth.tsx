@@ -10,15 +10,7 @@ import {
 import { ThemeToggleButton } from "@/lib/theme";
 import { markFirstTimeSignup } from "@/components/WelcomeTour";
 import { toast } from "sonner";
-import {
-  ArrowLeft,
-  AlertTriangle,
-  CheckCircle2,
-  KeyRound,
-  Lock,
-  Mail,
-  ShieldCheck,
-} from "lucide-react";
+import { ArrowLeft, CheckCircle2, KeyRound, Lock, Mail, ShieldCheck } from "lucide-react";
 import {
   buildSecurityQuestionsRecord,
   fetchEmailSecurityChallenge,
@@ -32,15 +24,6 @@ import {
   type QuestionDraftSlot,
   SecurityQuestionsPicker,
 } from "@/components/SecurityQuestionsOnboardingModal";
-import {
-  checkServerPassphraseLockout,
-  formatDurationLabel,
-  formatLockoutRemaining,
-  getLockoutDurationMs,
-  getPassphraseLockoutStatus,
-  setLocalPassphraseLockout,
-} from "@/lib/vault";
-import { clearAllOfflineUserData } from "@/lib/offline-supabase";
 
 function isPasswordRecoveryUrl(): boolean {
   if (typeof window === "undefined") return false;
@@ -66,26 +49,7 @@ export const Route = createFileRoute("/auth")({
     if (peekEmailCallbackIntent(data.session) === "password_reset") {
       return;
     }
-    if (data.session?.user) {
-      const u = data.session.user;
-      const metaLock =
-        Number(
-          (u.user_metadata as Record<string, unknown> | undefined)?.papervault_lockout_until,
-        ) || 0;
-      const metaTier =
-        Number((u.user_metadata as Record<string, unknown> | undefined)?.papervault_lockout_tier) ||
-        1;
-      const localStatus = getPassphraseLockoutStatus(u.id, u.email);
-      const lockedUntil = Math.max(metaLock, localStatus.lockedUntil);
-      const resolvedTier = Math.max(metaTier, localStatus.tier);
-      if (lockedUntil > Date.now()) {
-        setLocalPassphraseLockout(lockedUntil, u.id, u.email, resolvedTier);
-        clearAllOfflineUserData();
-        await supabase.auth.signOut().catch(() => {});
-        return;
-      }
-      throw redirect({ to: "/app" });
-    }
+    if (data.session?.user) throw redirect({ to: "/app" });
   },
   head: () => ({ meta: [{ title: "Sign in · The PaperVault" }] }),
   component: AuthPage,
@@ -102,9 +66,6 @@ function AuthPage() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [loading, setLoading] = useState(false);
-  const [lockoutRemainingMs, setLockoutRemainingMs] = useState<number>(
-    () => getPassphraseLockoutStatus().remainingMs,
-  );
 
   // First-time Sign-Up Security Questions state
   const [signupQuestionSlots, setSignupQuestionSlots] = useState<
@@ -117,27 +78,6 @@ function AuthPage() {
   const [challengeAnswers, setChallengeAnswers] = useState<[string, string, string]>(["", "", ""]);
 
   useEffect(() => {
-    const syncCountdown = () => {
-      const st = getPassphraseLockoutStatus(undefined, email);
-      setLockoutRemainingMs(st.remainingMs);
-    };
-    syncCountdown();
-    const timer = window.setInterval(syncCountdown, 1000);
-    return () => window.clearInterval(timer);
-  }, [email]);
-
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      const params = new URLSearchParams(window.location.search);
-      if (params.get("locked") === "1") {
-        const tierParam = Math.max(1, parseInt(params.get("tier") || "1", 10) || 1);
-        const durLabel = formatDurationLabel(getLockoutDurationMs(tierParam));
-        toast.error(
-          `You were automatically logged out and locked for ${durLabel} due to multiple wrong passphrase attempts. Repeated failures will lock you out for even longer.`,
-          { id: "passphrase-lockout-toast", duration: 7000 },
-        );
-      }
-    }
     if (isPasswordRecoveryUrl()) {
       consumeEmailCallbackIntent();
       setMode("reset");
@@ -264,57 +204,8 @@ function AuthPage() {
         }
         toast.success("Welcome! Check your email if confirmation is required.");
       } else {
-        const cleanEmail = email.trim().toLowerCase();
-        const localLock = getPassphraseLockoutStatus(undefined, cleanEmail);
-        if (localLock.locked) {
-          setLockoutRemainingMs(localLock.remainingMs);
-          const durLabel = formatDurationLabel(getLockoutDurationMs(localLock.tier));
-          throw new Error(
-            `Account access is locked for ${durLabel} due to multiple wrong vault passphrase attempts. Please wait ${formatLockoutRemaining(localLock.remainingMs)}.`,
-          );
-        }
-
-        const serverLock = await checkServerPassphraseLockout(cleanEmail);
-        if (serverLock.locked && serverLock.lockedUntil > Date.now()) {
-          const rem = serverLock.lockedUntil - Date.now();
-          setLockoutRemainingMs(rem);
-          const durLabel = formatDurationLabel(getLockoutDurationMs(serverLock.tier));
-          throw new Error(
-            `Account access is locked for ${durLabel} due to multiple wrong vault passphrase attempts. Please wait ${formatLockoutRemaining(rem)}.`,
-          );
-        }
-
-        const { data: signInData, error } = await supabase.auth.signInWithPassword({
-          email,
-          password,
-        });
+        const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
-
-        if (signInData.user) {
-          const u = signInData.user;
-          const metaLock =
-            Number(
-              (u.user_metadata as Record<string, unknown> | undefined)?.papervault_lockout_until,
-            ) || 0;
-          const metaTier =
-            Number(
-              (u.user_metadata as Record<string, unknown> | undefined)?.papervault_lockout_tier,
-            ) || 1;
-          const userLocalLock = getPassphraseLockoutStatus(u.id, u.email);
-          const activeLockUntil = Math.max(metaLock, userLocalLock.lockedUntil);
-          const resolvedTier = Math.max(metaTier, userLocalLock.tier);
-          if (activeLockUntil > Date.now()) {
-            setLocalPassphraseLockout(activeLockUntil, u.id, u.email, resolvedTier);
-            clearAllOfflineUserData();
-            await supabase.auth.signOut().catch(() => {});
-            const rem = activeLockUntil - Date.now();
-            setLockoutRemainingMs(rem);
-            const durLabel = formatDurationLabel(getLockoutDurationMs(resolvedTier));
-            throw new Error(
-              `Account access is locked for ${durLabel} due to multiple wrong vault passphrase attempts. Please wait ${formatLockoutRemaining(rem)}.`,
-            );
-          }
-        }
       }
       router.navigate({ to: "/app", replace: true });
     } catch (err: unknown) {
@@ -351,23 +242,6 @@ function AuthPage() {
                 ? "Reset your password"
                 : "Set new password"}
         </h1>
-
-        {lockoutRemainingMs > 0 && (
-          <div className="mt-5 flex items-start gap-2.5 rounded-lg border border-destructive/40 bg-destructive/10 p-3.5 text-xs leading-relaxed text-foreground">
-            <AlertTriangle className="mt-0.5 size-4 shrink-0 text-destructive" />
-            <div>
-              <p className="font-semibold text-destructive">
-                Vault Lockout Active · {formatLockoutRemaining(lockoutRemainingMs)} remaining
-              </p>
-              <p className="mt-0.5 text-muted-foreground">
-                Multiple wrong vault passphrase attempts were entered. For your security, the
-                account was automatically locked out. (Note: account login password attempts never
-                lock you out to protect against spam). When this timer expires, any further wrong
-                vault passphrase attempts will escalate the lockout duration.
-              </p>
-            </div>
-          </div>
-        )}
 
         {mode === "forgot" && forgotStep === "email_sent" ? (
           <div className="mt-6 space-y-4">
@@ -546,7 +420,7 @@ function AuthPage() {
 
             <button
               type="submit"
-              disabled={loading || (mode === "signin" && lockoutRemainingMs > 0)}
+              disabled={loading}
               className="flex w-full items-center justify-center gap-2 rounded-md bg-primary px-4 py-2.5 text-primary-foreground hover:opacity-90 disabled:opacity-60"
             >
               {mode === "forgot" && <Mail className="size-4" />}
@@ -554,17 +428,15 @@ function AuthPage() {
               <span>
                 {loading
                   ? "Please wait..."
-                  : mode === "signin" && lockoutRemainingMs > 0
-                    ? `Locked (${formatLockoutRemaining(lockoutRemainingMs)})`
-                    : mode === "signin"
-                      ? "Sign in"
-                      : mode === "signup"
-                        ? "Create account"
-                        : mode === "forgot"
-                          ? forgotStep === "enter_email"
-                            ? "Continue to security questions"
-                            : "Verify answers & send reset link"
-                          : "Save new password"}
+                  : mode === "signin"
+                    ? "Sign in"
+                    : mode === "signup"
+                      ? "Create account"
+                      : mode === "forgot"
+                        ? forgotStep === "enter_email"
+                          ? "Continue to security questions"
+                          : "Verify answers & send reset link"
+                        : "Save new password"}
               </span>
             </button>
           </form>

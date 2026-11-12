@@ -849,7 +849,6 @@ export function clearAllOfflineUserData() {
         "papervault:sq_challenge:",
         "papervault:welcome_tour_seen:",
         "papervault:profile_name:",
-        "papervault:passphrase_lockout:",
       ];
       const keysToRemove: string[] = [];
       for (let i = 0; i < window.localStorage.length; i++) {

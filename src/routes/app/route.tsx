@@ -22,12 +22,7 @@ import {
   Moon,
   Sun,
 } from "lucide-react";
-import {
-  getPassphraseLockoutStatus,
-  setLocalPassphraseLockout,
-  VaultProvider,
-  useVault,
-} from "@/lib/vault";
+import { VaultProvider, useVault } from "@/lib/vault";
 import { ThemeToggleButton, useTheme } from "@/lib/theme";
 import { clearCryptoCache } from "@/lib/crypto";
 import { VaultGate } from "@/components/VaultGate";
@@ -61,24 +56,6 @@ import type { User } from "@supabase/supabase-js";
 let memAuthedUser: User | null = null;
 let memProfileDisplayName: string | null = null;
 
-function isUserLockedOutForPassphrase(user: User): number {
-  const now = Date.now();
-  const metaLockout =
-    Number((user.user_metadata as Record<string, unknown> | undefined)?.papervault_lockout_until) ||
-    0;
-  const metaTier =
-    Number((user.user_metadata as Record<string, unknown> | undefined)?.papervault_lockout_tier) ||
-    1;
-  const localStatus = getPassphraseLockoutStatus(user.id, user.email);
-  const lockedUntil = Math.max(metaLockout, localStatus.lockedUntil);
-  const resolvedTier = Math.max(metaTier, localStatus.tier);
-  if (lockedUntil > now) {
-    setLocalPassphraseLockout(lockedUntil, user.id, user.email, resolvedTier);
-    return lockedUntil;
-  }
-  return 0;
-}
-
 function getStoredProfileName(userId: string): string | null {
   if (memProfileDisplayName) return memProfileDisplayName;
   if (typeof window === "undefined") return null;
@@ -104,20 +81,8 @@ function setStoredProfileName(userId: string, name: string | null) {
 export const Route = createFileRoute("/app")({
   ssr: false,
   beforeLoad: async () => {
-    const enforceNotLockedOut = async (u: User) => {
-      if (isUserLockedOutForPassphrase(u) > 0) {
-        memAuthedUser = null;
-        memProfileDisplayName = null;
-        clearCryptoCache();
-        clearAllOfflineUserData();
-        await supabase.auth.signOut().catch(() => {});
-        throw redirect({ to: "/auth" });
-      }
-    };
-
     // Fast path: use in-memory or cached session for 0ms route transitions
     if (memAuthedUser) {
-      await enforceNotLockedOut(memAuthedUser);
       return {
         user: memAuthedUser,
         profileDisplayName: getStoredProfileName(memAuthedUser.id),
@@ -126,7 +91,6 @@ export const Route = createFileRoute("/app")({
 
     const cached = getCachedAuthSession() as { user?: User } | null;
     if (cached?.user) {
-      await enforceNotLockedOut(cached.user);
       memAuthedUser = cached.user;
       return {
         user: cached.user,
@@ -137,7 +101,6 @@ export const Route = createFileRoute("/app")({
     const { data, error } = await supabase.auth.getSession();
     if (error || !data.session?.user) throw redirect({ to: "/auth" });
     const user = data.session.user;
-    await enforceNotLockedOut(user);
     memAuthedUser = user;
     return {
       user,
