@@ -215,7 +215,19 @@
     border-color: var(--color-border);
   }
 
-  /* Custom thin styled scrollbars across the viewport and all scrollable containers */
+  /* Custom thin styled scrollbars across the viewport and all scrollable containers.
+     Keep a constant 6px transparent track at all times so layout never shifts,
+     and only show the thumb while actively scrolling or dragging. */
+  :root,
+  .dark {
+    --root-scrollbar-thumb: transparent;
+  }
+
+  html[data-scrolling="true"],
+  body[data-scrolling="true"] {
+    --root-scrollbar-thumb: var(--scrollbar-thumb);
+  }
+
   ::-webkit-scrollbar,
   *::-webkit-scrollbar {
     width: 6px;
@@ -231,18 +243,29 @@
 
   ::-webkit-scrollbar-track,
   *::-webkit-scrollbar-track {
-    background: var(--scrollbar-track);
+    background: transparent;
     border-radius: 9999px;
   }
 
-  ::-webkit-scrollbar-thumb,
+  ::-webkit-scrollbar-thumb {
+    background-color: var(--root-scrollbar-thumb);
+    border-radius: 9999px;
+  }
+
   *::-webkit-scrollbar-thumb {
-    background-color: var(--scrollbar-thumb);
+    background-color: transparent;
     border-radius: 9999px;
   }
 
-  ::-webkit-scrollbar-thumb:hover,
-  *::-webkit-scrollbar-thumb:hover {
+  html[data-scrolling="true"]::-webkit-scrollbar-thumb,
+  body[data-scrolling="true"]::-webkit-scrollbar-thumb,
+  [data-scrolling="true"]::-webkit-scrollbar-thumb {
+    background-color: var(--scrollbar-thumb);
+  }
+
+  html[data-scrolling="true"]::-webkit-scrollbar-thumb:hover,
+  body[data-scrolling="true"]::-webkit-scrollbar-thumb:hover,
+  [data-scrolling="true"]::-webkit-scrollbar-thumb:hover {
     background-color: var(--scrollbar-thumb-hover);
   }
 
@@ -261,7 +284,13 @@
     body,
     * {
       scrollbar-width: thin;
-      scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+      scrollbar-color: transparent transparent;
+    }
+
+    html[data-scrolling="true"],
+    body[data-scrolling="true"],
+    [data-scrolling="true"] {
+      scrollbar-color: var(--scrollbar-thumb) transparent;
     }
   }
 

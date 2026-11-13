@@ -191,6 +191,46 @@ function RootComponent() {
   }, []);
 
   useEffect(() => {
+    if (typeof window === "undefined" || typeof document === "undefined") return;
+    let docTimer: number | null = null;
+    const elemTimers = new WeakMap<Element, number>();
+
+    const handleScroll = (e: Event) => {
+      const target = e.target;
+      if (
+        !target ||
+        target === document ||
+        target === document.documentElement ||
+        target === document.body
+      ) {
+        document.documentElement.setAttribute("data-scrolling", "true");
+        document.body?.setAttribute("data-scrolling", "true");
+        if (docTimer !== null) window.clearTimeout(docTimer);
+        docTimer = window.setTimeout(() => {
+          document.documentElement.removeAttribute("data-scrolling");
+          document.body?.removeAttribute("data-scrolling");
+          docTimer = null;
+        }, 750);
+      } else if (target instanceof Element) {
+        target.setAttribute("data-scrolling", "true");
+        const prev = elemTimers.get(target);
+        if (prev !== undefined) window.clearTimeout(prev);
+        const next = window.setTimeout(() => {
+          target.removeAttribute("data-scrolling");
+          elemTimers.delete(target);
+        }, 750);
+        elemTimers.set(target, next);
+      }
+    };
+
+    window.addEventListener("scroll", handleScroll, { capture: true, passive: true });
+    return () => {
+      window.removeEventListener("scroll", handleScroll, { capture: true });
+      if (docTimer !== null) window.clearTimeout(docTimer);
+    };
+  }, []);
+
+  useEffect(() => {
     const { data: sub } = supabase.auth.onAuthStateChange((event) => {
       if (event !== "SIGNED_IN" && event !== "SIGNED_OUT" && event !== "USER_UPDATED") return;
       router.invalidate();
