@@ -199,7 +199,7 @@ function AuthedLayout() {
           detail.syncedCount === 1
             ? "Offline change synced"
             : `Synced ${detail.syncedCount} offline changes`,
-          { id: "offline-sync-toast", duration: 3000 },
+          { id: "offline-sync-toast", duration: 2200 },
         );
       }
     };

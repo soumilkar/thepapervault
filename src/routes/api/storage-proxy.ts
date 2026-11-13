@@ -1363,30 +1363,6 @@ export const Route = createFileRoute("/api/storage-proxy")({
               userClient,
             });
 
-            const { record: sqRecord } = await readLatestSecurityQuestionsRecord({
-              userId: authedUser.id,
-              emailHash,
-              userScopedClient: userClient,
-            });
-
-            const rawQuestions = Array.isArray(sqRecord?.questions)
-              ? (sqRecord.questions as {
-                  id?: string;
-                  question?: string;
-                  salt?: string;
-                  verifier?: string;
-                }[])
-              : [];
-            const hasValidSq = Boolean(
-              sqRecord &&
-              rawQuestions.length === 3 &&
-              typeof sqRecord.combined_salt === "string" &&
-              typeof sqRecord.verifier_salt === "string" &&
-              typeof sqRecord.combined_verifier === "string" &&
-              sqRecord.combined_verifier.length > 0 &&
-              rawQuestions.every((q) => typeof q.verifier === "string" && q.verifier.length > 0),
-            );
-
             const nowMs = Date.now();
             const lockoutSummary = {
               isLocked: lockoutState.lockedUntil > nowMs,
@@ -1396,35 +1372,58 @@ export const Route = createFileRoute("/api/storage-proxy")({
               lastLockDurationMs: lockoutState.lastLockDurationMs,
             };
 
-            if (lockoutState.requireSecurityQuestionsOnSignIn && hasValidSq && sqRecord) {
-              return new Response(
-                JSON.stringify({
-                  requireSecurityQuestions: true,
-                  challenge: {
-                    configured: true,
-                    questions: rawQuestions.map((q) => ({
-                      id: String(q.id || ""),
-                      question: String(q.question || ""),
-                      salt: String(q.salt || ""),
-                    })),
-                    combined_salt: sqRecord.combined_salt,
-                    verifier_salt: sqRecord.verifier_salt,
-                    created_at: sqRecord.created_at || new Date().toISOString(),
-                    expires_at: sqRecord.expires_at || new Date().toISOString(),
-                  },
-                  lockout: lockoutSummary,
-                }),
-                { status: 200, headers: JSON_SECURITY_HEADERS },
+            if (lockoutState.requireSecurityQuestionsOnSignIn) {
+              const { record: sqRecord } = await readLatestSecurityQuestionsRecord({
+                userId: authedUser.id,
+                emailHash,
+                userScopedClient: userClient,
+              });
+
+              const rawQuestions = Array.isArray(sqRecord?.questions)
+                ? (sqRecord.questions as {
+                    id?: string;
+                    question?: string;
+                    salt?: string;
+                    verifier?: string;
+                  }[])
+                : [];
+              const hasValidSq = Boolean(
+                sqRecord &&
+                rawQuestions.length === 3 &&
+                typeof sqRecord.combined_salt === "string" &&
+                typeof sqRecord.verifier_salt === "string" &&
+                typeof sqRecord.combined_verifier === "string" &&
+                sqRecord.combined_verifier.length > 0 &&
+                rawQuestions.every((q) => typeof q.verifier === "string" && q.verifier.length > 0),
               );
+
+              if (hasValidSq && sqRecord) {
+                return new Response(
+                  JSON.stringify({
+                    requireSecurityQuestions: true,
+                    challenge: {
+                      configured: true,
+                      questions: rawQuestions.map((q) => ({
+                        id: String(q.id || ""),
+                        question: String(q.question || ""),
+                        salt: String(q.salt || ""),
+                      })),
+                      combined_salt: sqRecord.combined_salt,
+                      verifier_salt: sqRecord.verifier_salt,
+                      created_at: sqRecord.created_at || new Date().toISOString(),
+                      expires_at: sqRecord.expires_at || new Date().toISOString(),
+                    },
+                    lockout: lockoutSummary,
+                  }),
+                  { status: 200, headers: JSON_SECURITY_HEADERS },
+                );
+              }
             }
 
             return new Response(
               JSON.stringify({
                 requireSecurityQuestions: false,
-                session: {
-                  access_token: authData.session.access_token,
-                  refresh_token: authData.session.refresh_token,
-                },
+                session: authData.session,
                 lockout: lockoutSummary,
               }),
               { status: 200, headers: JSON_SECURITY_HEADERS },
@@ -1540,10 +1539,7 @@ export const Route = createFileRoute("/api/storage-proxy")({
             return new Response(
               JSON.stringify({
                 verified: true,
-                session: {
-                  access_token: authData.session.access_token,
-                  refresh_token: authData.session.refresh_token,
-                },
+                session: authData.session,
                 lockout: {
                   isLocked: lockoutState.lockedUntil > nowMs,
                   lockedUntil: lockoutState.lockedUntil,
@@ -1644,29 +1640,30 @@ export const Route = createFileRoute("/api/storage-proxy")({
           if (action === "vault-lockout-status") {
             const emailHash = user.email ? await hashEmailIdentifier(user.email) : "";
             const userClient = bearerToken ? getUserScopedClient(request, bearerToken) : null;
-            const [lockoutState, latestSq] = await Promise.all([
-              readVaultLockoutState({
-                userId: user.id,
-                emailHash,
-                userMetadata: user.user_metadata as Record<string, unknown> | undefined,
-                b2Config,
-                adminClient,
-                userClient,
-              }),
-              readLatestSecurityQuestionsRecord({
+            const lockoutState = await readVaultLockoutState({
+              userId: user.id,
+              emailHash,
+              userMetadata: user.user_metadata as Record<string, unknown> | undefined,
+              b2Config,
+              adminClient,
+              userClient,
+            });
+            let hasSq = false;
+            if (lockoutState.requireSecurityQuestionsOnSignIn) {
+              const latestSq = await readLatestSecurityQuestionsRecord({
                 userId: user.id,
                 emailHash,
                 userScopedClient: userClient,
-              }),
-            ]);
-            const sqRecord = latestSq.record;
-            const hasSq = Boolean(
-              sqRecord &&
-              Array.isArray(sqRecord.questions) &&
-              sqRecord.questions.length === 3 &&
-              typeof sqRecord.combined_verifier === "string" &&
-              sqRecord.combined_verifier.length > 0,
-            );
+              });
+              const sqRecord = latestSq.record;
+              hasSq = Boolean(
+                sqRecord &&
+                Array.isArray(sqRecord.questions) &&
+                sqRecord.questions.length === 3 &&
+                typeof sqRecord.combined_verifier === "string" &&
+                sqRecord.combined_verifier.length > 0,
+              );
+            }
             return new Response(JSON.stringify(toClientLockoutStatus(lockoutState, hasSq)), {
               status: 200,
               headers: JSON_SECURITY_HEADERS,
@@ -1860,6 +1857,21 @@ export const Route = createFileRoute("/api/storage-proxy")({
                   headers: JSON_SECURITY_HEADERS,
                 });
               }
+            }
+
+            if (
+              state.failedAttempts === 0 &&
+              state.escalationStage === 0 &&
+              !state.requireSecurityQuestionsOnSignIn &&
+              state.lockedUntil <= nowMs
+            ) {
+              return new Response(
+                JSON.stringify({
+                  ok: true,
+                  ...toClientLockoutStatus(state, false, nowMs),
+                }),
+                { status: 200, headers: JSON_SECURITY_HEADERS },
+              );
             }
 
             const cleared = createEmptyLockoutState(user.id, emailHash);

@@ -42,7 +42,14 @@ export type VaultLockoutFailureResult = VaultLockoutStatus & {
 export type SigninPreflightResult = {
   requireSecurityQuestions: boolean;
   challenge?: SecurityQuestionsChallenge;
-  session?: { access_token: string; refresh_token: string };
+  session?: {
+    access_token: string;
+    refresh_token: string;
+    expires_in?: number;
+    expires_at?: number;
+    token_type?: string;
+    user?: unknown;
+  };
   lockout: {
     isLocked: boolean;
     lockedUntil: number;
@@ -54,7 +61,14 @@ export type SigninPreflightResult = {
 
 export type SigninVerifyResult = {
   verified: boolean;
-  session?: { access_token: string; refresh_token: string };
+  session?: {
+    access_token: string;
+    refresh_token: string;
+    expires_in?: number;
+    expires_at?: number;
+    token_type?: string;
+    user?: unknown;
+  };
   lockout?: {
     isLocked: boolean;
     lockedUntil: number;

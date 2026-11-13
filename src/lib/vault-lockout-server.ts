@@ -25,7 +25,11 @@ export type VaultLockoutState = {
   updatedAt: string;
 };
 
-const vaultLockoutMemStore = new Map<string, VaultLockoutState>();
+const LOCKOUT_MEM_CACHE_TTL_MS = 5 * 60 * 1000;
+const vaultLockoutMemStore = new Map<
+  string,
+  { state: VaultLockoutState | null; cachedAt: number }
+>();
 
 export function createEmptyLockoutState(userId?: string, emailHash?: string): VaultLockoutState {
   return {
@@ -96,46 +100,58 @@ async function readLockoutBlob(params: {
   userClient?: SupabaseClient<Database> | null;
 }): Promise<VaultLockoutState | null> {
   const mem = vaultLockoutMemStore.get(params.objectPath);
-  if (mem) return mem;
+  if (mem && Date.now() - mem.cachedAt < LOCKOUT_MEM_CACHE_TTL_MS) {
+    return mem.state;
+  }
+
+  const candidates: (VaultLockoutState | null)[] = [];
+  const tasks: Promise<void>[] = [];
 
   if (params.b2Config) {
+    const b2 = params.b2Config;
+    tasks.push(
+      b2GetStorageObject(b2, "media", params.objectPath)
+        .then((b2Obj) => {
+          if (!b2Obj) return;
+          const parsed = normalizeState(JSON.parse(new TextDecoder().decode(b2Obj.buffer)));
+          if (parsed) candidates.push(parsed);
+        })
+        .catch(() => {}),
+    );
+  }
+
+  tasks.push(
+    params.adminClient.storage
+      .from("media")
+      .download(params.objectPath)
+      .then(async ({ data: blob, error }) => {
+        if (error || !blob) return;
+        const parsed = normalizeState(JSON.parse(await blob.text()));
+        if (parsed) candidates.push(parsed);
+      })
+      .catch(() => {}),
+  );
+
+  await Promise.allSettled(tasks);
+
+  let found: VaultLockoutState | null = null;
+  if (candidates.length > 0) {
+    found = pickFresherState(candidates);
+  } else if (params.userClient) {
     try {
-      const b2Obj = await b2GetStorageObject(params.b2Config, "media", params.objectPath);
-      if (b2Obj) {
-        const parsed = normalizeState(JSON.parse(new TextDecoder().decode(b2Obj.buffer)));
-        if (parsed) {
-          vaultLockoutMemStore.set(params.objectPath, parsed);
-          return parsed;
-        }
+      const { data: blob, error } = await params.userClient.storage
+        .from("media")
+        .download(params.objectPath);
+      if (!error && blob) {
+        found = normalizeState(JSON.parse(await blob.text()));
       }
     } catch {
-      // fallback
+      // ignore
     }
   }
 
-  const clients: SupabaseClient<Database>[] = [params.adminClient];
-  if (params.userClient) clients.push(params.userClient);
-
-  for (const client of clients) {
-    for (const bucketName of ["media", "gallery"] as const) {
-      try {
-        const { data: blob, error } = await client.storage
-          .from(bucketName)
-          .download(params.objectPath);
-        if (!error && blob) {
-          const parsed = normalizeState(JSON.parse(await blob.text()));
-          if (parsed) {
-            vaultLockoutMemStore.set(params.objectPath, parsed);
-            return parsed;
-          }
-        }
-      } catch {
-        // ignore
-      }
-    }
-  }
-
-  return null;
+  vaultLockoutMemStore.set(params.objectPath, { state: found, cachedAt: Date.now() });
+  return found;
 }
 
 async function writeLockoutBlob(params: {
@@ -145,7 +161,7 @@ async function writeLockoutBlob(params: {
   adminClient: SupabaseClient<Database>;
   userClient?: SupabaseClient<Database> | null;
 }): Promise<void> {
-  vaultLockoutMemStore.set(params.objectPath, params.state);
+  vaultLockoutMemStore.set(params.objectPath, { state: params.state, cachedAt: Date.now() });
   const serialized = JSON.stringify(params.state);
   const bytes = new TextEncoder().encode(serialized);
   const blob = new Blob([bytes], { type: "application/octet-stream" });

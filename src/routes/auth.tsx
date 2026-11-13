@@ -7,6 +7,7 @@ import {
   setPendingEmailIntent,
   supabase,
 } from "@/integrations/supabase/client";
+import { cacheAuthSession } from "@/lib/offline-supabase";
 import { ThemeToggleButton } from "@/lib/theme";
 import { markFirstTimeSignup } from "@/components/WelcomeTour";
 import { toast } from "sonner";
@@ -329,6 +330,7 @@ function AuthPage() {
             return;
           }
           if (preflight.session) {
+            cacheAuthSession(preflight.session);
             const { error: setErr } = await supabase.auth.setSession(preflight.session);
             if (setErr) throw setErr;
           } else {
@@ -353,6 +355,7 @@ function AuthPage() {
           if (!verifiedRes.verified || !verifiedRes.session) {
             throw new Error("One or more security question answers did not match.");
           }
+          cacheAuthSession(verifiedRes.session);
           const { error: setErr } = await supabase.auth.setSession(verifiedRes.session);
           if (setErr) throw setErr;
         }

@@ -264,17 +264,49 @@ export function VaultProvider({ userId, children }: { userId: string; children: 
       }
 
       try {
-        const [remoteMeta, dbRes] = await Promise.all([
-          fetchRemoteVaultMeta(userId),
-          supabase.from("vault_keys").select("*").eq("user_id", userId).maybeSingle(),
-        ]);
+        const dbPromise = supabase
+          .from("vault_keys")
+          .select("*")
+          .eq("user_id", userId)
+          .maybeSingle()
+          .then((res) => {
+            if (!cancelled && res.data && isValidVaultMeta(res.data)) {
+              const quickMeta: CachedVaultMeta = {
+                kdf_salt: res.data.kdf_salt,
+                verifier: res.data.verifier,
+                verifier_salt: res.data.verifier_salt,
+                updated_at: res.data.updated_at,
+                recovery_envelope:
+                  cached?.kdf_salt === res.data.kdf_salt
+                    ? (cached.recovery_envelope ?? null)
+                    : null,
+                encrypted_recovery_key:
+                  cached?.kdf_salt === res.data.kdf_salt
+                    ? (cached.encrypted_recovery_key ?? null)
+                    : null,
+              };
+              applyResolvedMeta(quickMeta);
+              setStatus((prev) => (prev === "unlocked" ? "unlocked" : "locked"));
+            }
+            return res;
+          });
+
+        const remotePromise = fetchRemoteVaultMeta(userId).then((remote) => {
+          if (!cancelled && remote && isValidVaultMeta(remote)) {
+            applyResolvedMeta(remote);
+            setStatus((prev) => (prev === "unlocked" ? "unlocked" : "locked"));
+          }
+          return remote;
+        });
+
+        const [remoteMeta, dbRes] = await Promise.all([remotePromise, dbPromise]);
         if (cancelled) return;
 
         let dbData = dbRes.data;
         let dbError = dbRes.error;
 
         if (dbError && !remoteMeta && !cached) {
-          await new Promise((r) => setTimeout(r, 1500));
+          await new Promise((r) => setTimeout(r, 800));
           if (cancelled) return;
           const retry = await supabase
             .from("vault_keys")
@@ -390,7 +422,7 @@ export function VaultProvider({ userId, children }: { userId: string; children: 
       };
 
       await persistVaultMetaEverywhere(userId, meta);
-      await reportVaultUnlockSucceeded(userId, newVerifier).catch(() => {});
+      void reportVaultUnlockSucceeded(userId, newVerifier).catch(() => {});
       clearCachedLocalLockoutStatus(userId);
       setLockoutStatus(createDefaultLockoutStatus());
 
@@ -409,12 +441,11 @@ export function VaultProvider({ userId, children }: { userId: string; children: 
 
   const unlock = useCallback(
     async (passphrase: string): Promise<CryptoKey> => {
-      const latestLockout = await fetchVaultLockoutStatus(userId);
-      setLockoutStatus(latestLockout);
-
+      const activeLockout =
+        lockoutStatus ?? getCachedLocalLockoutStatus(userId) ?? createDefaultLockoutStatus();
       const now = Date.now();
-      if (latestLockout.lockedUntil > now) {
-        const waitLabel = formatLockoutCountdown(latestLockout.lockedUntil - now);
+      if (activeLockout.lockedUntil > now) {
+        const waitLabel = formatLockoutCountdown(activeLockout.lockedUntil - now);
         throw new Error(`Your vault is temporarily locked. Try again in ${waitLabel}.`);
       }
       if (!kdfSalt || !verifier || !verifierSalt) throw new Error("Vault not initialized");
@@ -476,51 +507,68 @@ export function VaultProvider({ userId, children }: { userId: string; children: 
         );
       }
 
-      await reportVaultUnlockSucceeded(userId, check);
       clearCachedLocalLockoutStatus(userId);
       setLockoutStatus(createDefaultLockoutStatus());
       setKey(dataKey);
       setStatus("unlocked");
 
-      // Load or automatically enroll a Vault Recovery Key for this user
-      void (async () => {
-        try {
-          if (encryptedRecoveryKey?.ct && encryptedRecoveryKey?.iv && recoveryEnvelope) {
-            const plainRecKey = await decryptText(
-              dataKey,
-              encryptedRecoveryKey.ct,
-              encryptedRecoveryKey.iv,
-            );
-            if (plainRecKey) {
-              setRecoveryKey(plainRecKey);
-              return;
+      if (
+        activeLockout.failedAttempts > 0 ||
+        activeLockout.escalationStage > 0 ||
+        activeLockout.requireSecurityQuestionsOnSignIn
+      ) {
+        void reportVaultUnlockSucceeded(userId, check).catch(() => {});
+      }
+
+      // Load or automatically enroll a Vault Recovery Key for this user in the background
+      window.setTimeout(() => {
+        void (async () => {
+          try {
+            if (encryptedRecoveryKey?.ct && encryptedRecoveryKey?.iv && recoveryEnvelope) {
+              const plainRecKey = await decryptText(
+                dataKey,
+                encryptedRecoveryKey.ct,
+                encryptedRecoveryKey.iv,
+              );
+              if (plainRecKey) {
+                setRecoveryKey(plainRecKey);
+                return;
+              }
             }
+            // Auto-enroll a Recovery Key for accounts that didn't have one yet
+            const newRecKey = generateRecoveryKey();
+            const [envelope, encRecKey] = await Promise.all([
+              createRecoveryEnvelope(passphrase, newRecKey),
+              encryptText(dataKey, newRecKey),
+            ]);
+            setRecoveryEnvelope(envelope);
+            setEncryptedRecoveryKey(encRecKey);
+            setRecoveryKey(newRecKey);
+            await persistVaultMetaEverywhere(userId, {
+              kdf_salt: kdfSalt,
+              verifier,
+              verifier_salt: verifierSalt,
+              updated_at: new Date().toISOString(),
+              recovery_envelope: envelope,
+              encrypted_recovery_key: encRecKey,
+            });
+          } catch {
+            // ignore background enrollment errors
           }
-          // Auto-enroll a Recovery Key for accounts that didn't have one yet
-          const newRecKey = generateRecoveryKey();
-          const [envelope, encRecKey] = await Promise.all([
-            createRecoveryEnvelope(passphrase, newRecKey),
-            encryptText(dataKey, newRecKey),
-          ]);
-          setRecoveryEnvelope(envelope);
-          setEncryptedRecoveryKey(encRecKey);
-          setRecoveryKey(newRecKey);
-          await persistVaultMetaEverywhere(userId, {
-            kdf_salt: kdfSalt,
-            verifier,
-            verifier_salt: verifierSalt,
-            updated_at: new Date().toISOString(),
-            recovery_envelope: envelope,
-            encrypted_recovery_key: encRecKey,
-          });
-        } catch {
-          // ignore background enrollment errors
-        }
-      })();
+        })();
+      }, 600);
 
       return dataKey;
     },
-    [userId, kdfSalt, verifier, verifierSalt, encryptedRecoveryKey, recoveryEnvelope],
+    [
+      userId,
+      lockoutStatus,
+      kdfSalt,
+      verifier,
+      verifierSalt,
+      encryptedRecoveryKey,
+      recoveryEnvelope,
+    ],
   );
 
   const changePassphrase = useCallback(

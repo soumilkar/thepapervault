@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Send } from "lucide-react";
 import { toast } from "sonner";
 import { Markdown } from "@/components/Markdown";
@@ -180,21 +180,178 @@ function SessionChat() {
   const latestAssistantRef = useRef<HTMLDivElement>(null);
   const incomingReplySlotRef = useRef<HTMLParagraphElement>(null);
 
-  const scrollAssistantStartToMiddle = useCallback((behavior: ScrollBehavior = "smooth") => {
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        const el = incomingReplySlotRef.current ?? latestAssistantRef.current;
-        if (!el) return;
-        const rect = el.getBoundingClientRect();
-        const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
-        const targetY = viewportHeight / 2;
-        const desiredScrollTop = Math.max(0, window.scrollY + rect.top - targetY);
-        if (desiredScrollTop > window.scrollY) {
-          window.scrollTo({ top: desiredScrollTop, behavior });
-        }
-      });
-    });
+  const formRef = useRef<HTMLFormElement>(null);
+  const pendingMiddleAlignRef = useRef(false);
+  const scrollAnimFrameRef = useRef<number | null>(null);
+
+  const stopScrollAnimation = useCallback(() => {
+    if (scrollAnimFrameRef.current !== null && typeof window !== "undefined") {
+      window.cancelAnimationFrame(scrollAnimFrameRef.current);
+      scrollAnimFrameRef.current = null;
+    }
   }, []);
+
+  const updateBottomSpacer = useCallback(() => {
+    const spacerEl = bottomRef.current;
+    if (!spacerEl || typeof window === "undefined") return;
+
+    const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+    const layoutHeight = document.documentElement.clientHeight || window.innerHeight;
+    const messageGap = 16.5;
+    const formRect = formRef.current?.getBoundingClientRect();
+    const inputClearance = formRect
+      ? Math.max(72.5, layoutHeight - formRect.top + messageGap)
+      : 88.5;
+
+    const mainEl = spacerEl.closest("main");
+    const currentSpacerHeight = spacerEl.getBoundingClientRect().height;
+    const activeEl = incomingReplySlotRef.current ?? latestAssistantRef.current;
+
+    let desiredBelowActive = inputClearance;
+    let fixedTailBelowActive = 40;
+
+    if (activeEl && mainEl) {
+      const activeRect = activeEl.getBoundingClientRect();
+      const mainRect = mainEl.getBoundingClientRect();
+      fixedTailBelowActive = Math.max(0, mainRect.bottom - currentSpacerHeight - activeRect.bottom);
+
+      const targetY = Math.round(viewportHeight / 2);
+      const neededForMiddle = Math.ceil(layoutHeight - targetY - activeRect.height);
+      desiredBelowActive = Math.max(inputClearance, neededForMiddle);
+    } else if (mainEl) {
+      fixedTailBelowActive =
+        Math.round(parseFloat(window.getComputedStyle(mainEl).paddingBottom) || 0) || 40;
+    }
+
+    const spacerHeight = Math.max(
+      0,
+      Math.round((desiredBelowActive - fixedTailBelowActive) * 2) / 2,
+    );
+    spacerEl.style.height = `${spacerHeight}px`;
+  }, []);
+
+  const getDesiredMiddleScrollTop = useCallback((): number | null => {
+    if (typeof window === "undefined") return null;
+    const activeEl = incomingReplySlotRef.current ?? latestAssistantRef.current;
+    if (!activeEl) return null;
+    const rect = activeEl.getBoundingClientRect();
+    const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+    const targetY = Math.round(viewportHeight / 2);
+    return Math.max(0, Math.round(window.scrollY + rect.top - targetY));
+  }, []);
+
+  const startMiddleAlignScroll = useCallback(() => {
+    if (typeof window === "undefined") return;
+    pendingMiddleAlignRef.current = true;
+    stopScrollAnimation();
+
+    scrollAnimFrameRef.current = window.requestAnimationFrame(() => {
+      updateBottomSpacer();
+      const initialTarget = getDesiredMiddleScrollTop();
+      if (initialTarget === null) {
+        scrollAnimFrameRef.current = null;
+        return;
+      }
+      const startY = window.scrollY;
+      if (Math.abs(initialTarget - startY) <= 1) {
+        scrollAnimFrameRef.current = null;
+        return;
+      }
+      const startTime = performance.now();
+      const durationMs = 260;
+
+      const step = (now: number) => {
+        if (!pendingMiddleAlignRef.current) {
+          scrollAnimFrameRef.current = null;
+          return;
+        }
+        updateBottomSpacer();
+        const liveTarget = getDesiredMiddleScrollTop() ?? initialTarget;
+        const elapsed = now - startTime;
+        const progress = Math.min(1, Math.max(0, elapsed / durationMs));
+        const eased = 1 - Math.pow(1 - progress, 3);
+        const nextY = Math.round(startY + (liveTarget - startY) * eased);
+        window.scrollTo(0, nextY);
+
+        if (progress < 1) {
+          scrollAnimFrameRef.current = window.requestAnimationFrame(step);
+        } else {
+          window.scrollTo(0, liveTarget);
+          scrollAnimFrameRef.current = null;
+        }
+      };
+
+      scrollAnimFrameRef.current = window.requestAnimationFrame(step);
+    });
+  }, [getDesiredMiddleScrollTop, stopScrollAnimation, updateBottomSpacer]);
+
+  const useIsomorphicLayoutEffect = typeof window !== "undefined" ? useLayoutEffect : useEffect;
+
+  useIsomorphicLayoutEffect(() => {
+    updateBottomSpacer();
+
+    if (pendingMiddleAlignRef.current && scrollAnimFrameRef.current === null) {
+      const desiredTop = getDesiredMiddleScrollTop();
+      if (desiredTop !== null && Math.abs(window.scrollY - desiredTop) > 1) {
+        window.scrollTo(0, desiredTop);
+      }
+      const lastMsg = messages.at(-1);
+      if (lastMsg?.role === "assistant" && lastMsg.content.trim().length > 0) {
+        pendingMiddleAlignRef.current = false;
+      }
+    }
+  }, [getDesiredMiddleScrollTop, updateBottomSpacer, messages, loading, hydrating]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const ro =
+      typeof ResizeObserver !== "undefined"
+        ? new ResizeObserver(() => {
+            updateBottomSpacer();
+          })
+        : null;
+    if (ro) {
+      if (formRef.current) ro.observe(formRef.current);
+      if (incomingReplySlotRef.current) ro.observe(incomingReplySlotRef.current);
+      if (latestAssistantRef.current) ro.observe(latestAssistantRef.current);
+    }
+    const handleViewportChange = () => {
+      updateBottomSpacer();
+      if (pendingMiddleAlignRef.current && scrollAnimFrameRef.current === null) {
+        const desiredTop = getDesiredMiddleScrollTop();
+        if (desiredTop !== null && Math.abs(window.scrollY - desiredTop) > 1) {
+          window.scrollTo(0, desiredTop);
+        }
+      }
+    };
+    const cancelMiddleAlign = () => {
+      pendingMiddleAlignRef.current = false;
+      stopScrollAnimation();
+    };
+    window.addEventListener("resize", handleViewportChange);
+    window.visualViewport?.addEventListener("resize", handleViewportChange);
+    window.addEventListener("wheel", cancelMiddleAlign, { passive: true });
+    window.addEventListener("touchmove", cancelMiddleAlign, { passive: true });
+    return () => {
+      ro?.disconnect();
+      window.removeEventListener("resize", handleViewportChange);
+      window.visualViewport?.removeEventListener("resize", handleViewportChange);
+      window.removeEventListener("wheel", cancelMiddleAlign);
+      window.removeEventListener("touchmove", cancelMiddleAlign);
+    };
+  }, [
+    getDesiredMiddleScrollTop,
+    stopScrollAnimation,
+    updateBottomSpacer,
+    messages.length,
+    loading,
+  ]);
+
+  useEffect(() => {
+    return () => {
+      stopScrollAnimation();
+    };
+  }, [stopScrollAnimation]);
 
   const focusCompanionInputIfHardwareKeyboard = useCallback(() => {
     if (!shouldKeepCompanionInputFocused()) return;
@@ -285,15 +442,19 @@ function SessionChat() {
     };
   }, [focusCompanionInputIfHardwareKeyboard, sessionId]);
 
-  const scrollToBottom = (behavior: ScrollBehavior = "smooth") => {
-    requestAnimationFrame(() => {
-      const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
-      const maxTop = Math.max(0, document.documentElement.scrollHeight - viewportHeight);
-      if (maxTop > 0) {
-        window.scrollTo({ top: maxTop, behavior });
-      }
-    });
-  };
+  const scrollToBottom = useCallback(
+    (behavior: ScrollBehavior = "smooth") => {
+      requestAnimationFrame(() => {
+        updateBottomSpacer();
+        const layoutHeight = document.documentElement.clientHeight || window.innerHeight;
+        const maxTop = Math.max(0, document.documentElement.scrollHeight - layoutHeight);
+        if (maxTop > 0) {
+          window.scrollTo({ top: maxTop, behavior });
+        }
+      });
+    },
+    [updateBottomSpacer],
+  );
 
   const today = useMemo(() => new Date(), []);
   const monthAgo = useMemo(() => new Date(today.getTime() - 30 * 24 * 3600 * 1000), [today]);
@@ -304,7 +465,9 @@ function SessionChat() {
   const didInitialScrollRef = useRef(false);
   useEffect(() => {
     didInitialScrollRef.current = false;
-  }, [sessionId]);
+    pendingMiddleAlignRef.current = false;
+    stopScrollAnimation();
+  }, [sessionId, stopScrollAnimation]);
 
   useEffect(() => {
     if (hydrating || didInitialScrollRef.current) return;
@@ -312,7 +475,7 @@ function SessionChat() {
     if (messages.length > 0) {
       scrollToBottom("auto");
     }
-  }, [hydrating, messages.length]);
+  }, [hydrating, messages.length, scrollToBottom]);
 
   const loadingRef = useRef(false);
   useEffect(() => {
@@ -392,7 +555,7 @@ function SessionChat() {
           setMessages((prev) => {
             if (JSON.stringify(prev) === JSON.stringify(fresh)) return prev;
             if (fresh.length > prev.length && fresh.at(-1)?.role === "assistant") {
-              scrollAssistantStartToMiddle("smooth");
+              startMiddleAlignScroll();
             }
             return fresh;
           });
@@ -404,7 +567,7 @@ function SessionChat() {
       active = false;
       window.removeEventListener(CHAT_MESSAGES_UPDATED, handleRemoteMessagesUpdate);
     };
-  }, [fetchSessionMessages, scrollAssistantStartToMiddle]);
+  }, [fetchSessionMessages, startMiddleAlignScroll]);
 
   const send = async (rawQuestion: string) => {
     const question = rawQuestion.trim();
@@ -422,9 +585,11 @@ function SessionChat() {
     const sentSnap = getBrowserNow();
     const priorHistory = messages.filter((m) => !isCorruptedWarmupMessage(m.content));
     const userMsg: Msg = { role: "user", content: question, createdAt: sentSnap.iso };
+    loadingRef.current = true;
+    pendingMiddleAlignRef.current = true;
     setMessages((m) => [...m, userMsg]);
     setLoading(true);
-    scrollAssistantStartToMiddle("smooth");
+    startMiddleAlignScroll();
     try {
       if (!key) throw new Error("Unlock your vault to continue");
       // Persist parent session first (guarantees FK exists on server) and then insert user message
@@ -546,13 +711,11 @@ function SessionChat() {
       let answer = "";
       let frameBuffer = "";
       let expectedSeq = 0;
-      let didScrollReplyStartToMiddle = false;
       const streamStartSnap = getBrowserNow();
       setMessages((current) => [
         ...current,
         { role: "assistant", content: "", createdAt: streamStartSnap.iso },
       ]);
-      scrollAssistantStartToMiddle("smooth");
 
       const processEncryptedLines = async (lines: string[]) => {
         for (const rawLine of lines) {
@@ -588,10 +751,6 @@ function SessionChat() {
           ...current.slice(0, -1),
           { role: "assistant", content: answer, createdAt: streamStartSnap.iso },
         ]);
-        if (!didScrollReplyStartToMiddle && answer.trim().length > 0) {
-          didScrollReplyStartToMiddle = true;
-          scrollAssistantStartToMiddle("smooth");
-        }
       }
 
       const tail = decoder.decode();
@@ -613,9 +772,6 @@ function SessionChat() {
         ...current.slice(0, -1),
         { role: "assistant", content: answer, createdAt: replySnap.iso },
       ]);
-      if (!didScrollReplyStartToMiddle) {
-        scrollAssistantStartToMiddle("smooth");
-      }
 
       const encA = await encryptText(key, answer);
       await supabase.from("chat_messages").insert({
@@ -661,14 +817,6 @@ function SessionChat() {
       focusCompanionInputIfHardwareKeyboard();
     }, 0);
   };
-
-  let lastAssistantIdx = -1;
-  for (let idx = messages.length - 1; idx >= 0; idx--) {
-    if (messages[idx]?.role === "assistant") {
-      lastAssistantIdx = idx;
-      break;
-    }
-  }
 
   return (
     <div className="space-y-4">
@@ -747,7 +895,7 @@ function SessionChat() {
                   </div>
                 ) : (
                   <div
-                    ref={i === lastAssistantIdx ? latestAssistantRef : undefined}
+                    ref={i === messages.length - 1 ? latestAssistantRef : undefined}
                     className="paper-card max-w-[90%] p-4"
                   >
                     <p className="mb-2 font-hand text-lg leading-none text-sepia">companion</p>
@@ -765,8 +913,9 @@ function SessionChat() {
         )}
       </div>
 
-      <div ref={bottomRef} className="h-8" aria-hidden />
+      <div ref={bottomRef} className="m-0 h-0 [overflow-anchor:none]" aria-hidden />
       <form
+        ref={formRef}
         onSubmit={(e) => {
           e.preventDefault();
           send(input);

@@ -844,6 +844,7 @@ export function clearAllOfflineUserData() {
   if (typeof window !== "undefined") {
     try {
       const preservedPrefixes = [
+        "papervault:vault_meta:",
         "papervault:security_questions:v1:",
         "papervault:sq_onboarded:",
         "papervault:sq_challenge:",
@@ -910,16 +911,19 @@ export function clearAllOfflineUserData() {
 }
 
 let memActiveSession: Record<string, unknown> | null = null;
+let memActiveSessionCachedAt = 0;
 
 export function cacheAuthSession(session: unknown) {
   if (typeof window === "undefined") return;
   try {
     if (!session || typeof session !== "object") {
       memActiveSession = null;
+      memActiveSessionCachedAt = 0;
       clearAllOfflineUserData();
     } else {
       const s = session as Record<string, unknown>;
       memActiveSession = s;
+      memActiveSessionCachedAt = Date.now();
       const userObj = s.user as
         { id?: string; email?: string; user_metadata?: unknown } | undefined;
       const newUserId = userObj?.id;
@@ -931,6 +935,7 @@ export function cacheAuthSession(session: unknown) {
           if (prevUserId && newUserId && prevUserId !== newUserId) {
             clearAllOfflineUserData();
             memActiveSession = s;
+            memActiveSessionCachedAt = Date.now();
           }
         }
       } catch {
@@ -1357,6 +1362,21 @@ export const offlineAwareSupabaseFetch: typeof fetch = async (input, init) => {
 
   // 1. Auth Endpoints (/auth/v1/*)
   if (url.pathname.includes("/auth/v1/")) {
+    if (
+      method === "GET" &&
+      url.pathname.endsWith("/user") &&
+      memActiveSession?.user &&
+      typeof memActiveSession.access_token === "string" &&
+      Date.now() - memActiveSessionCachedAt < 15_000
+    ) {
+      const reqAuth = req.headers.get("authorization") || req.headers.get("Authorization") || "";
+      if (reqAuth.includes(memActiveSession.access_token)) {
+        return new Response(JSON.stringify(memActiveSession.user), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+    }
     if (navigator.onLine) {
       try {
         const res = await nativeFetch(input, init);

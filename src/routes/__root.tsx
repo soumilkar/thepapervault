@@ -167,7 +167,17 @@ function RootShell({ children }: { children: ReactNode }) {
 
 function ThemedToaster() {
   const { theme } = useTheme();
-  return <Toaster theme={theme} richColors position="top-center" />;
+  return (
+    <Toaster
+      theme={theme}
+      richColors
+      position="top-center"
+      offset={{ top: 92 }}
+      mobileOffset={{ top: 82 }}
+      duration={2200}
+      toastOptions={{ duration: 2200 }}
+    />
+  );
 }
 
 function RootComponent() {
