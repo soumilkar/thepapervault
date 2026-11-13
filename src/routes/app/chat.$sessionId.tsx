@@ -287,7 +287,11 @@ function SessionChat() {
 
   const scrollToBottom = (behavior: ScrollBehavior = "smooth") => {
     requestAnimationFrame(() => {
-      bottomRef.current?.scrollIntoView({ behavior, block: "end" });
+      const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+      const maxTop = Math.max(0, document.documentElement.scrollHeight - viewportHeight);
+      if (maxTop > 0) {
+        window.scrollTo({ top: maxTop, behavior });
+      }
     });
   };
 
@@ -761,8 +765,7 @@ function SessionChat() {
         )}
       </div>
 
-      <div ref={bottomRef} className="scroll-mb-24" aria-hidden />
-      <div className={messages.length > 0 ? "h-[55vh]" : "h-32"} aria-hidden />
+      <div ref={bottomRef} className="h-8" aria-hidden />
       <form
         onSubmit={(e) => {
           e.preventDefault();
