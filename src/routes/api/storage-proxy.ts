@@ -21,6 +21,18 @@ import {
   verifySignedProxyDownloadUrl,
   withUserTableLock,
 } from "@/lib/b2-storage";
+import { sendVaultLockoutEmail } from "@/lib/security-email";
+import {
+  computeVaultLockoutDurationMs,
+  formatLockoutCountdown,
+  INITIAL_MAX_PASSPHRASE_ATTEMPTS,
+} from "@/lib/vault-lockout";
+import {
+  createEmptyLockoutState,
+  readVaultLockoutState,
+  saveVaultLockoutState,
+  toClientLockoutStatus,
+} from "@/lib/vault-lockout-server";
 
 function getSupabaseUrl(request: Request): string {
   return (
@@ -391,11 +403,13 @@ function isAllowedStoragePath(
   const path = normalizeStoragePath(rawPath);
   if (!path) return false;
 
-  // Hard block internal system prefixes and raw security-questions records from generic file access
+  // Hard block internal system prefixes and raw security-questions / vault-lockout records from generic file access
   if (
     path.startsWith("_") ||
     path.includes("security-questions.bin") ||
-    path.includes("_security_questions")
+    path.includes("_security_questions") ||
+    path.includes("_vault_lockout") ||
+    path.includes("vault-lockout")
   ) {
     return false;
   }
@@ -918,6 +932,7 @@ export const Route = createFileRoute("/api/storage-proxy")({
 
           const readSecurityQuestionsBlob = async (
             objectPath: string,
+            userScopedClient?: ReturnType<typeof getUserScopedClient> | null,
           ): Promise<Record<string, unknown> | null> => {
             const mem = securityQuestionsMemStore.get(objectPath);
             if (mem) return mem;
@@ -935,19 +950,22 @@ export const Route = createFileRoute("/api/storage-proxy")({
                 // fallback
               }
             }
-            for (const bucketName of ["gallery", "media"] as const) {
-              try {
-                const { data: sbBlob, error: sbErr } = await adminClient.storage
-                  .from(bucketName)
-                  .download(objectPath);
-                if (!sbErr && sbBlob) {
-                  const text = await sbBlob.text();
-                  const parsed = JSON.parse(text) as Record<string, unknown>;
-                  securityQuestionsMemStore.set(objectPath, parsed);
-                  return parsed;
+            const clients = userScopedClient ? [adminClient, userScopedClient] : [adminClient];
+            for (const client of clients) {
+              for (const bucketName of ["gallery", "media"] as const) {
+                try {
+                  const { data: sbBlob, error: sbErr } = await client.storage
+                    .from(bucketName)
+                    .download(objectPath);
+                  if (!sbErr && sbBlob) {
+                    const text = await sbBlob.text();
+                    const parsed = JSON.parse(text) as Record<string, unknown>;
+                    securityQuestionsMemStore.set(objectPath, parsed);
+                    return parsed;
+                  }
+                } catch {
+                  // ignore
                 }
-              } catch {
-                // ignore
               }
             }
             return null;
@@ -1128,6 +1146,274 @@ export const Route = createFileRoute("/api/storage-proxy")({
             });
           }
 
+          // Unauthenticated Pre-Auth Actions for Escalated Sign-In Security Gate on /auth
+          if (action === "signin-security-preflight") {
+            const clientIp = extractClientIp(request);
+            const body = (await request.json().catch(() => ({}))) as {
+              email?: string;
+              password?: string;
+            };
+            const cleanEmail = (body.email || "").trim().toLowerCase();
+            const password = typeof body.password === "string" ? body.password : "";
+            const emailHash = await hashEmailIdentifier(cleanEmail);
+
+            if (!cleanEmail || !password || !emailHash) {
+              return new Response(JSON.stringify({ error: "Email and password are required." }), {
+                status: 400,
+                headers: JSON_SECURITY_HEADERS,
+              });
+            }
+
+            if (
+              !checkSqChallengeLimit(`si-ip:${clientIp}`) ||
+              !checkSqChallengeLimit(`si-em:${emailHash}`)
+            ) {
+              return new Response(
+                JSON.stringify({ error: "Too many sign-in attempts. Please wait a moment." }),
+                { status: 429, headers: JSON_SECURITY_HEADERS },
+              );
+            }
+
+            const sbUrl = getSupabaseUrl(request);
+            const sbKey = getSupabaseAnonOrServiceKey(request);
+            if (!sbUrl || !sbKey) {
+              return new Response(
+                JSON.stringify({ error: "Authentication service unavailable." }),
+                {
+                  status: 500,
+                  headers: JSON_SECURITY_HEADERS,
+                },
+              );
+            }
+
+            const authClient = createClient<Database>(sbUrl, sbKey, {
+              auth: { persistSession: false, autoRefreshToken: false },
+            });
+            const { data: authData, error: authErr } = await authClient.auth.signInWithPassword({
+              email: cleanEmail,
+              password,
+            });
+            if (authErr || !authData?.user || !authData?.session) {
+              return new Response(
+                JSON.stringify({ error: authErr?.message || "Invalid login credentials" }),
+                { status: 401, headers: JSON_SECURITY_HEADERS },
+              );
+            }
+
+            const authedUser = authData.user;
+            const userClient = getUserScopedClient(request, authData.session.access_token);
+            const lockoutState = await readVaultLockoutState({
+              userId: authedUser.id,
+              emailHash,
+              userMetadata: authedUser.user_metadata as Record<string, unknown> | undefined,
+              b2Config,
+              adminClient,
+              userClient,
+            });
+
+            let sqRecord = await readSecurityQuestionsBlob(
+              `${authedUser.id}/security-questions.bin`,
+              userClient,
+            );
+            if (!sqRecord) {
+              sqRecord = await readSecurityQuestionsBlob(
+                `_security_questions/${emailHash}.bin`,
+                userClient,
+              );
+            }
+
+            const rawQuestions = Array.isArray(sqRecord?.questions)
+              ? (sqRecord.questions as {
+                  id?: string;
+                  question?: string;
+                  salt?: string;
+                  verifier?: string;
+                }[])
+              : [];
+            const hasValidSq = Boolean(
+              sqRecord &&
+              rawQuestions.length === 3 &&
+              typeof sqRecord.combined_salt === "string" &&
+              typeof sqRecord.verifier_salt === "string" &&
+              typeof sqRecord.combined_verifier === "string" &&
+              sqRecord.combined_verifier.length > 0 &&
+              rawQuestions.every((q) => typeof q.verifier === "string" && q.verifier.length > 0),
+            );
+
+            const nowMs = Date.now();
+            const lockoutSummary = {
+              isLocked: lockoutState.lockedUntil > nowMs,
+              lockedUntil: lockoutState.lockedUntil,
+              lockoutCount: lockoutState.lockoutCount,
+              escalationStage: lockoutState.escalationStage,
+              lastLockDurationMs: lockoutState.lastLockDurationMs,
+            };
+
+            if (lockoutState.requireSecurityQuestionsOnSignIn && hasValidSq && sqRecord) {
+              return new Response(
+                JSON.stringify({
+                  requireSecurityQuestions: true,
+                  challenge: {
+                    configured: true,
+                    questions: rawQuestions.map((q) => ({
+                      id: String(q.id || ""),
+                      question: String(q.question || ""),
+                      salt: String(q.salt || ""),
+                    })),
+                    combined_salt: sqRecord.combined_salt,
+                    verifier_salt: sqRecord.verifier_salt,
+                    created_at: sqRecord.created_at || new Date().toISOString(),
+                    expires_at: sqRecord.expires_at || new Date().toISOString(),
+                  },
+                  lockout: lockoutSummary,
+                }),
+                { status: 200, headers: JSON_SECURITY_HEADERS },
+              );
+            }
+
+            return new Response(
+              JSON.stringify({
+                requireSecurityQuestions: false,
+                session: {
+                  access_token: authData.session.access_token,
+                  refresh_token: authData.session.refresh_token,
+                },
+                lockout: lockoutSummary,
+              }),
+              { status: 200, headers: JSON_SECURITY_HEADERS },
+            );
+          }
+
+          if (action === "signin-security-verify") {
+            const clientIp = extractClientIp(request);
+            const body = (await request.json().catch(() => ({}))) as {
+              email?: string;
+              password?: string;
+              verifiers?: string[];
+              combined_verifier?: string;
+            };
+            const cleanEmail = (body.email || "").trim().toLowerCase();
+            const password = typeof body.password === "string" ? body.password : "";
+            const emailHash = await hashEmailIdentifier(cleanEmail);
+
+            if (!cleanEmail || !password || !emailHash) {
+              return new Response(
+                JSON.stringify({ error: "Email, password, and security answers are required." }),
+                { status: 400, headers: JSON_SECURITY_HEADERS },
+              );
+            }
+
+            if (isSqVerifyLockedOut(`ip:${clientIp}`) || isSqVerifyLockedOut(`em:${emailHash}`)) {
+              return new Response(
+                JSON.stringify({
+                  error:
+                    "Too many failed security question attempts. Locked for 15 minutes for your protection.",
+                }),
+                { status: 429, headers: JSON_SECURITY_HEADERS },
+              );
+            }
+
+            const sbUrl = getSupabaseUrl(request);
+            const sbKey = getSupabaseAnonOrServiceKey(request);
+            if (!sbUrl || !sbKey) {
+              return new Response(
+                JSON.stringify({ error: "Authentication service unavailable." }),
+                {
+                  status: 500,
+                  headers: JSON_SECURITY_HEADERS,
+                },
+              );
+            }
+
+            const authClient = createClient<Database>(sbUrl, sbKey, {
+              auth: { persistSession: false, autoRefreshToken: false },
+            });
+            const { data: authData, error: authErr } = await authClient.auth.signInWithPassword({
+              email: cleanEmail,
+              password,
+            });
+            if (authErr || !authData?.user || !authData?.session) {
+              return new Response(
+                JSON.stringify({ error: authErr?.message || "Invalid login credentials" }),
+                { status: 401, headers: JSON_SECURITY_HEADERS },
+              );
+            }
+
+            const authedUser = authData.user;
+            const userClient = getUserScopedClient(request, authData.session.access_token);
+            let sqRecord = await readSecurityQuestionsBlob(
+              `${authedUser.id}/security-questions.bin`,
+              userClient,
+            );
+            if (!sqRecord) {
+              sqRecord = await readSecurityQuestionsBlob(
+                `_security_questions/${emailHash}.bin`,
+                userClient,
+              );
+            }
+
+            const allMatch = verifyRecordAgainstSubmitted(
+              sqRecord,
+              body.verifiers,
+              body.combined_verifier,
+            );
+
+            if (!allMatch) {
+              recordSqVerifyFailure(`ip:${clientIp}`);
+              recordSqVerifyFailure(`em:${emailHash}`);
+              return new Response(
+                JSON.stringify({
+                  verified: false,
+                  error: "One or more security question answers did not match.",
+                }),
+                { status: 403, headers: JSON_SECURITY_HEADERS },
+              );
+            }
+
+            clearSqVerifyFailures(`ip:${clientIp}`);
+            clearSqVerifyFailures(`em:${emailHash}`);
+
+            const nowMs = Date.now();
+            const lockoutState = await readVaultLockoutState({
+              userId: authedUser.id,
+              emailHash,
+              userMetadata: authedUser.user_metadata as Record<string, unknown> | undefined,
+              b2Config,
+              adminClient,
+              userClient,
+            });
+
+            lockoutState.sqSignInVerifiedAt = nowMs;
+            await saveVaultLockoutState({
+              state: lockoutState,
+              userId: authedUser.id,
+              emailHash,
+              b2Config,
+              adminClient,
+              userClient,
+              updateMetadata: (patch) =>
+                updateLiveSupabaseAuthUserMetadata(request, authData.session.access_token, patch),
+            });
+
+            return new Response(
+              JSON.stringify({
+                verified: true,
+                session: {
+                  access_token: authData.session.access_token,
+                  refresh_token: authData.session.refresh_token,
+                },
+                lockout: {
+                  isLocked: lockoutState.lockedUntil > nowMs,
+                  lockedUntil: lockoutState.lockedUntil,
+                  lockoutCount: lockoutState.lockoutCount,
+                  escalationStage: lockoutState.escalationStage,
+                  lastLockDurationMs: lockoutState.lastLockDurationMs,
+                },
+              }),
+              { status: 200, headers: JSON_SECURITY_HEADERS },
+            );
+          }
+
           const user = await authenticateUser(request, adminClient);
           if (!user) {
             return new Response(
@@ -1160,11 +1446,18 @@ export const Route = createFileRoute("/api/storage-proxy")({
               verifiers?: string[];
               combined_verifier?: string;
             };
-            let record = await readSecurityQuestionsBlob(`${user.id}/security-questions.bin`);
+            const userClient = bearerToken ? getUserScopedClient(request, bearerToken) : null;
+            let record = await readSecurityQuestionsBlob(
+              `${user.id}/security-questions.bin`,
+              userClient,
+            );
             if (!record && user.email) {
               const emailHash = await hashEmailIdentifier(user.email);
               if (emailHash) {
-                record = await readSecurityQuestionsBlob(`_security_questions/${emailHash}.bin`);
+                record = await readSecurityQuestionsBlob(
+                  `_security_questions/${emailHash}.bin`,
+                  userClient,
+                );
               }
             }
             const allMatch = verifyRecordAgainstSubmitted(
@@ -1183,10 +1476,274 @@ export const Route = createFileRoute("/api/storage-proxy")({
               );
             }
             clearSqVerifyFailures(`usr:${user.id}`);
+
+            const emailHash = user.email ? await hashEmailIdentifier(user.email) : "";
+            const lockoutState = await readVaultLockoutState({
+              userId: user.id,
+              emailHash,
+              userMetadata: user.user_metadata as Record<string, unknown> | undefined,
+              b2Config,
+              adminClient,
+              userClient,
+            });
+            if (lockoutState.requireSecurityQuestionsOnSignIn) {
+              lockoutState.sqSignInVerifiedAt = Date.now();
+              await saveVaultLockoutState({
+                state: lockoutState,
+                userId: user.id,
+                emailHash,
+                b2Config,
+                adminClient,
+                userClient,
+                updateMetadata: (patch) =>
+                  updateLiveSupabaseAuthUserMetadata(request, bearerToken, patch),
+              });
+            }
+
             return new Response(JSON.stringify({ verified: true }), {
               status: 200,
               headers: JSON_SECURITY_HEADERS,
             });
+          }
+
+          if (action === "vault-lockout-status") {
+            const emailHash = user.email ? await hashEmailIdentifier(user.email) : "";
+            const userClient = bearerToken ? getUserScopedClient(request, bearerToken) : null;
+            const [lockoutState, sqUserBlob, sqEmailBlob] = await Promise.all([
+              readVaultLockoutState({
+                userId: user.id,
+                emailHash,
+                userMetadata: user.user_metadata as Record<string, unknown> | undefined,
+                b2Config,
+                adminClient,
+                userClient,
+              }),
+              readSecurityQuestionsBlob(`${user.id}/security-questions.bin`, userClient),
+              emailHash
+                ? readSecurityQuestionsBlob(`_security_questions/${emailHash}.bin`, userClient)
+                : Promise.resolve(null),
+            ]);
+            const sqRecord = sqUserBlob || sqEmailBlob;
+            const hasSq = Boolean(
+              sqRecord &&
+              Array.isArray(sqRecord.questions) &&
+              sqRecord.questions.length === 3 &&
+              typeof sqRecord.combined_verifier === "string" &&
+              sqRecord.combined_verifier.length > 0,
+            );
+            return new Response(JSON.stringify(toClientLockoutStatus(lockoutState, hasSq)), {
+              status: 200,
+              headers: JSON_SECURITY_HEADERS,
+            });
+          }
+
+          if (action === "vault-unlock-failed") {
+            const body = (await request.json().catch(() => ({}))) as {
+              clientFailedAttempts?: number;
+              clientEscalationStage?: number;
+              clientLockoutCount?: number;
+            };
+            const nowMs = Date.now();
+            const emailHash = user.email ? await hashEmailIdentifier(user.email) : "";
+            const userClient = bearerToken ? getUserScopedClient(request, bearerToken) : null;
+
+            const [state, sqUserBlob, sqEmailBlob] = await Promise.all([
+              readVaultLockoutState({
+                userId: user.id,
+                emailHash,
+                userMetadata: user.user_metadata as Record<string, unknown> | undefined,
+                b2Config,
+                adminClient,
+                userClient,
+              }),
+              readSecurityQuestionsBlob(`${user.id}/security-questions.bin`, userClient),
+              emailHash
+                ? readSecurityQuestionsBlob(`_security_questions/${emailHash}.bin`, userClient)
+                : Promise.resolve(null),
+            ]);
+            const sqRecord = sqUserBlob || sqEmailBlob;
+            const hasSq = Boolean(
+              sqRecord &&
+              Array.isArray(sqRecord.questions) &&
+              sqRecord.questions.length === 3 &&
+              typeof sqRecord.combined_verifier === "string" &&
+              sqRecord.combined_verifier.length > 0,
+            );
+
+            if (state.lockedUntil > nowMs) {
+              return new Response(
+                JSON.stringify({
+                  ...toClientLockoutStatus(state, hasSq, nowMs),
+                  action: "locked",
+                  reason: "vault_locked",
+                  emailSent: false,
+                }),
+                { status: 423, headers: JSON_SECURITY_HEADERS },
+              );
+            }
+
+            // Reconcile any offline attempts recorded by the client before reconnecting
+            const clientFailed = Math.max(0, Number(body.clientFailedAttempts) || 0);
+            if (clientFailed > state.failedAttempts && state.escalationStage === 0) {
+              state.failedAttempts = Math.min(INITIAL_MAX_PASSPHRASE_ATTEMPTS - 1, clientFailed);
+            }
+
+            state.failedAttempts += 1;
+            state.lastFailedAt = nowMs;
+
+            let actionResult: "warn" | "sign_out" | "lock_and_sign_out" = "warn";
+            let reason: "wrong_passphrase" | "too_many_attempts" | "vault_locked" =
+              "wrong_passphrase";
+            let emailSent = false;
+            let emailMethod: string = "none";
+
+            if (state.escalationStage === 0) {
+              if (state.failedAttempts >= INITIAL_MAX_PASSPHRASE_ATTEMPTS) {
+                state.escalationStage = 1;
+                state.requireSecurityQuestionsOnSignIn = true;
+                state.lastEscalatedAt = nowMs;
+                state.sqSignInVerifiedAt = 0;
+                actionResult = "sign_out";
+                reason = "too_many_attempts";
+              }
+            } else {
+              // User already signed out once, signed back in, and entered wrong passphrase again:
+              // Sign them out again, lock the vault for 1 hour (doubling on subsequent failed attempts), and email them.
+              state.lockoutCount += 1;
+              state.escalationStage += 1;
+              const lockDurationMs = computeVaultLockoutDurationMs(state.lockoutCount);
+              state.lockedUntil = nowMs + lockDurationMs;
+              state.lastLockDurationMs = lockDurationMs;
+              state.requireSecurityQuestionsOnSignIn = true;
+              state.lastEscalatedAt = nowMs;
+              state.sqSignInVerifiedAt = 0;
+              actionResult = "lock_and_sign_out";
+              reason = "vault_locked";
+
+              if (user.email) {
+                const dispatch = await sendVaultLockoutEmail({
+                  request,
+                  toEmail: user.email,
+                  lockDurationMs,
+                  lockedUntil: state.lockedUntil,
+                  lockoutCount: state.lockoutCount,
+                  supabaseUrl: getSupabaseUrl(request),
+                  supabaseAnonKey: getSupabaseAnonOrServiceKey(request),
+                });
+                emailSent = dispatch.sent;
+                emailMethod = dispatch.method;
+                if (dispatch.sent) {
+                  state.lastEmailSentAt = nowMs;
+                }
+              }
+            }
+
+            const savedState = await saveVaultLockoutState({
+              state,
+              userId: user.id,
+              emailHash,
+              b2Config,
+              adminClient,
+              userClient,
+              updateMetadata: (patch) =>
+                updateLiveSupabaseAuthUserMetadata(request, bearerToken, patch),
+            });
+
+            return new Response(
+              JSON.stringify({
+                ...toClientLockoutStatus(savedState, hasSq, nowMs),
+                action: actionResult,
+                reason,
+                emailSent,
+                emailMethod,
+              }),
+              { status: 200, headers: JSON_SECURITY_HEADERS },
+            );
+          }
+
+          if (action === "vault-unlock-succeeded") {
+            const body = (await request.json().catch(() => ({}))) as { verifier?: string };
+            const nowMs = Date.now();
+            const emailHash = user.email ? await hashEmailIdentifier(user.email) : "";
+            const userClient = bearerToken ? getUserScopedClient(request, bearerToken) : null;
+
+            const state = await readVaultLockoutState({
+              userId: user.id,
+              emailHash,
+              userMetadata: user.user_metadata as Record<string, unknown> | undefined,
+              b2Config,
+              adminClient,
+              userClient,
+            });
+
+            if (state.lockedUntil > nowMs) {
+              return new Response(
+                JSON.stringify({
+                  error: `Your vault is locked. Try again in ${formatLockoutCountdown(state.lockedUntil - nowMs)}.`,
+                  lockedUntil: state.lockedUntil,
+                }),
+                { status: 423, headers: JSON_SECURITY_HEADERS },
+              );
+            }
+
+            // If a verifier is stored server-side, verify the submitted verifier matches before clearing lockout
+            if (state.escalationStage > 0 || state.failedAttempts > 0) {
+              let storedVerifier = "";
+              if (userClient) {
+                const { data: vk } = await userClient
+                  .from("vault_keys")
+                  .select("verifier")
+                  .eq("user_id", user.id)
+                  .maybeSingle();
+                if (vk?.verifier) storedVerifier = vk.verifier;
+              }
+              if (!storedVerifier && b2Config) {
+                const metaObj = await b2GetStorageObject(
+                  b2Config,
+                  "media",
+                  `${user.id}/vault-meta.bin`,
+                ).catch(() => null);
+                if (metaObj) {
+                  try {
+                    const parsedMeta = JSON.parse(new TextDecoder().decode(metaObj.buffer)) as {
+                      verifier?: string;
+                    };
+                    if (parsedMeta?.verifier) storedVerifier = parsedMeta.verifier;
+                  } catch {
+                    // ignore
+                  }
+                }
+              }
+              if (
+                storedVerifier &&
+                (!body.verifier || !constantTimeEq(body.verifier, storedVerifier))
+              ) {
+                return new Response(JSON.stringify({ error: "Invalid vault verifier" }), {
+                  status: 403,
+                  headers: JSON_SECURITY_HEADERS,
+                });
+              }
+            }
+
+            const cleared = createEmptyLockoutState(user.id, emailHash);
+            const saved = await saveVaultLockoutState({
+              state: cleared,
+              userId: user.id,
+              emailHash,
+              b2Config,
+              adminClient,
+              userClient,
+              updateMetadata: (patch) =>
+                updateLiveSupabaseAuthUserMetadata(request, bearerToken, patch),
+            });
+
+            return new Response(
+              JSON.stringify({
+                ok: true,
+                ...toClientLockoutStatus(saved, false, nowMs),
+              }),
+              { status: 200, headers: JSON_SECURITY_HEADERS },
+            );
           }
 
           if (action === "security-questions-save") {

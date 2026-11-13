@@ -26,6 +26,7 @@ import { VaultProvider, useVault } from "@/lib/vault";
 import { ThemeToggleButton, useTheme } from "@/lib/theme";
 import { clearCryptoCache } from "@/lib/crypto";
 import { VaultGate } from "@/components/VaultGate";
+import { SIGN_OUT_TO_AUTH_EVENT, type ForceSignOutDetail } from "@/lib/vault-lockout";
 import { SecurityQuestionsOnboardingModal } from "@/components/SecurityQuestionsOnboardingModal";
 import {
   clearSecurityPanelEmailVerified,
@@ -291,16 +292,49 @@ function AuthedLayout() {
     };
   }, [qc]);
 
-  const handleSignOut = async () => {
+  const forcingSignOutRef = useRef(false);
+
+  const handleSignOut = async (noticeDetail?: ForceSignOutDetail) => {
     clearSecurityPanelEmailVerified(user.id);
     memAuthedUser = null;
     memProfileDisplayName = null;
     clearCryptoCache();
     clearAllOfflineUserData();
     qc.clear();
-    await supabase.auth.signOut();
+    await supabase.auth.signOut().catch(() => {});
+    if (noticeDetail && typeof window !== "undefined") {
+      try {
+        window.sessionStorage.setItem("papervault:auth_notice", JSON.stringify(noticeDetail));
+      } catch {
+        // ignore
+      }
+      const params = new URLSearchParams();
+      params.set("notice", noticeDetail.notice);
+      if (noticeDetail.lockedUntil) params.set("until", String(noticeDetail.lockedUntil));
+      if (noticeDetail.durationMs) params.set("duration", String(noticeDetail.durationMs));
+      if (noticeDetail.lockoutCount) params.set("lockoutCount", String(noticeDetail.lockoutCount));
+      if (noticeDetail.emailSent !== undefined) {
+        params.set("emailSent", noticeDetail.emailSent ? "1" : "0");
+      }
+      window.location.href = `/auth?${params.toString()}`;
+      return;
+    }
     window.location.href = "/auth";
   };
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onForceSignOut = (e: Event) => {
+      if (forcingSignOutRef.current) return;
+      forcingSignOutRef.current = true;
+      const detail = (e as CustomEvent<ForceSignOutDetail>).detail;
+      void handleSignOut(detail ?? { notice: "vault_attempts_signout" });
+    };
+    window.addEventListener(SIGN_OUT_TO_AUTH_EVENT, onForceSignOut);
+    return () => {
+      window.removeEventListener(SIGN_OUT_TO_AUTH_EVENT, onForceSignOut);
+    };
+  });
 
   return (
     <VaultProvider userId={user.id}>
@@ -326,7 +360,7 @@ function AuthedLayout() {
               <ThemeToggleButton />
               <VaultLockButton />
               <button
-                onClick={handleSignOut}
+                onClick={() => void handleSignOut()}
                 className="ml-1 flex items-center gap-1.5 rounded-md px-3 py-2 text-muted-foreground hover:text-primary"
               >
                 <LogOut className="size-4" /> Sign out
@@ -351,7 +385,10 @@ function AuthedLayout() {
                   <DropdownMenuSeparator />
                   <ThemeMenuItem />
                   <VaultLockMenuItem />
-                  <DropdownMenuItem onClick={handleSignOut} className="text-muted-foreground">
+                  <DropdownMenuItem
+                    onClick={() => void handleSignOut()}
+                    className="text-muted-foreground"
+                  >
                     <LogOut className="size-4" /> Sign out
                   </DropdownMenuItem>
                 </DropdownMenuContent>
@@ -362,7 +399,7 @@ function AuthedLayout() {
         <main className="mx-auto max-w-6xl px-4 pb-10 pt-28 sm:px-6 sm:pt-32">
           <VaultOfflineWarmer userId={user.id} />
           <GlobalSecurityDialogHost userId={user.id} userEmail={user.email} />
-          <VaultGate userId={user.id}>
+          <VaultGate userId={user.id} userEmail={user.email}>
             <SecurityQuestionsOnboardingModal userId={user.id} />
             <Outlet />
           </VaultGate>

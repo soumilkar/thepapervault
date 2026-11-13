@@ -18,6 +18,9 @@ function suppressUseClientDirectiveWarnings(): Plugin {
   let resolvedB2Endpoint = "";
   let resolvedB2KeyId = "";
   let resolvedB2AppKey = "";
+  let resolvedResendApiKey = "";
+  let resolvedResendFromEmail = "";
+  let resolvedEmailWebhookUrl = "";
 
   return {
     name: "suppress-use-client-directives",
@@ -60,6 +63,9 @@ function suppressUseClientDirectiveWarnings(): Plugin {
         env.VITE_B2_APPLICATION_KEY ||
         env.R2_SECRET_ACCESS_KEY ||
         "";
+      resolvedResendApiKey = env.RESEND_API_KEY || process.env.RESEND_API_KEY || "";
+      resolvedResendFromEmail = env.RESEND_FROM_EMAIL || process.env.RESEND_FROM_EMAIL || "";
+      resolvedEmailWebhookUrl = env.EMAIL_WEBHOOK_URL || process.env.EMAIL_WEBHOOK_URL || "";
 
       if (resolvedGroqKey && !process.env.GROQ_API_KEY) {
         process.env.GROQ_API_KEY = resolvedGroqKey;
@@ -87,6 +93,15 @@ function suppressUseClientDirectiveWarnings(): Plugin {
       }
       if (resolvedB2AppKey && !process.env.B2_APPLICATION_KEY) {
         process.env.B2_APPLICATION_KEY = resolvedB2AppKey;
+      }
+      if (resolvedResendApiKey && !process.env.RESEND_API_KEY) {
+        process.env.RESEND_API_KEY = resolvedResendApiKey;
+      }
+      if (resolvedResendFromEmail && !process.env.RESEND_FROM_EMAIL) {
+        process.env.RESEND_FROM_EMAIL = resolvedResendFromEmail;
+      }
+      if (resolvedEmailWebhookUrl && !process.env.EMAIL_WEBHOOK_URL) {
+        process.env.EMAIL_WEBHOOK_URL = resolvedEmailWebhookUrl;
       }
 
       return {
@@ -133,6 +148,15 @@ function suppressUseClientDirectiveWarnings(): Plugin {
         }
         if (resolvedB2AppKey) {
           serverDefines["process.env.B2_APPLICATION_KEY"] = JSON.stringify(resolvedB2AppKey);
+        }
+        if (resolvedResendApiKey) {
+          serverDefines["process.env.RESEND_API_KEY"] = JSON.stringify(resolvedResendApiKey);
+        }
+        if (resolvedResendFromEmail) {
+          serverDefines["process.env.RESEND_FROM_EMAIL"] = JSON.stringify(resolvedResendFromEmail);
+        }
+        if (resolvedEmailWebhookUrl) {
+          serverDefines["process.env.EMAIL_WEBHOOK_URL"] = JSON.stringify(resolvedEmailWebhookUrl);
         }
       }
 

@@ -31,6 +31,18 @@ import {
   wipeAndResetUserVault,
   writeRemoteVaultMeta,
 } from "@/lib/vault-rekey";
+import {
+  clearCachedLocalLockoutStatus,
+  createDefaultLockoutStatus,
+  fetchVaultLockoutStatus,
+  formatLockoutCountdown,
+  formatLockoutDuration,
+  getCachedLocalLockoutStatus,
+  reportVaultUnlockFailed,
+  reportVaultUnlockSucceeded,
+  requestForceSignOut,
+  type VaultLockoutStatus,
+} from "@/lib/vault-lockout";
 
 type VaultStatus = "loading" | "needs_setup" | "locked" | "unlocked";
 
@@ -39,6 +51,8 @@ type VaultContextValue = {
   key: CryptoKey | null;
   recoveryKey: string | null;
   hasRecoveryKey: boolean;
+  lockoutStatus: VaultLockoutStatus | null;
+  refreshLockoutStatus: () => Promise<void>;
   setup: (passphrase: string) => Promise<CryptoKey>;
   unlock: (passphrase: string) => Promise<CryptoKey>;
   changePassphrase: (
@@ -66,6 +80,8 @@ const FALLBACK_VAULT_CONTEXT: VaultContextValue = {
   key: null,
   recoveryKey: null,
   hasRecoveryKey: false,
+  lockoutStatus: null,
+  refreshLockoutStatus: async () => {},
   setup: async () => {
     throw new Error("Vault is still initializing");
   },
@@ -88,9 +104,6 @@ const FALLBACK_VAULT_CONTEXT: VaultContextValue = {
 };
 
 const VAULT_META_PREFIX = "papervault:vault_meta:";
-
-let failedUnlockAttempts = 0;
-let unlockLockedUntil = 0;
 
 type CachedVaultMeta = {
   kdf_salt: string;
@@ -202,6 +215,24 @@ export function VaultProvider({ userId, children }: { userId: string; children: 
     ct: string;
     iv: string;
   } | null>(initialCached?.encrypted_recovery_key ?? null);
+  const [lockoutStatus, setLockoutStatus] = useState<VaultLockoutStatus | null>(
+    () => getCachedLocalLockoutStatus(userId) ?? createDefaultLockoutStatus(),
+  );
+
+  const refreshLockoutStatus = useCallback(async () => {
+    const fresh = await fetchVaultLockoutStatus(userId);
+    setLockoutStatus(fresh);
+  }, [userId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchVaultLockoutStatus(userId).then((fresh) => {
+      if (!cancelled) setLockoutStatus(fresh);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [userId]);
 
   const applyResolvedMeta = useCallback(
     (meta: CachedVaultMeta) => {
@@ -359,9 +390,10 @@ export function VaultProvider({ userId, children }: { userId: string; children: 
       };
 
       await persistVaultMetaEverywhere(userId, meta);
+      await reportVaultUnlockSucceeded(userId, newVerifier).catch(() => {});
+      clearCachedLocalLockoutStatus(userId);
+      setLockoutStatus(createDefaultLockoutStatus());
 
-      failedUnlockAttempts = 0;
-      unlockLockedUntil = 0;
       setKdfSalt(newKdfSalt);
       setVerifier(newVerifier);
       setVerifierSalt(newVerifierSalt);
@@ -377,10 +409,13 @@ export function VaultProvider({ userId, children }: { userId: string; children: 
 
   const unlock = useCallback(
     async (passphrase: string): Promise<CryptoKey> => {
+      const latestLockout = await fetchVaultLockoutStatus(userId);
+      setLockoutStatus(latestLockout);
+
       const now = Date.now();
-      if (unlockLockedUntil > now) {
-        const waitSec = Math.ceil((unlockLockedUntil - now) / 1000);
-        throw new Error(`Too many failed attempts. Please wait ${waitSec}s before trying again.`);
+      if (latestLockout.lockedUntil > now) {
+        const waitLabel = formatLockoutCountdown(latestLockout.lockedUntil - now);
+        throw new Error(`Your vault is temporarily locked. Try again in ${waitLabel}.`);
       }
       if (!kdfSalt || !verifier || !verifierSalt) throw new Error("Vault not initialized");
       if (kdfSalt === verifierSalt) {
@@ -391,15 +426,59 @@ export function VaultProvider({ userId, children }: { userId: string; children: 
         deriveDataKey(passphrase, kdfSalt),
       ]);
       if (!timingSafeEqualStr(check, verifier)) {
-        failedUnlockAttempts += 1;
-        if (failedUnlockAttempts >= 5) {
-          const backoffMs = Math.min(60_000, 2000 * Math.pow(2, failedUnlockAttempts - 5));
-          unlockLockedUntil = Date.now() + backoffMs;
+        const failureResult = await reportVaultUnlockFailed(userId);
+        setLockoutStatus({
+          failedAttempts: failureResult.failedAttempts,
+          maxAttemptsBeforeSignOut: failureResult.maxAttemptsBeforeSignOut,
+          remainingAttempts: failureResult.remainingAttempts,
+          escalationStage: failureResult.escalationStage,
+          requireSecurityQuestionsOnSignIn: failureResult.requireSecurityQuestionsOnSignIn,
+          needsSecurityQuestionsInGate: failureResult.needsSecurityQuestionsInGate,
+          lockoutCount: failureResult.lockoutCount,
+          lockedUntil: failureResult.lockedUntil,
+          isLocked: failureResult.lockedUntil > Date.now(),
+          lastLockDurationMs: failureResult.lastLockDurationMs,
+          nextLockDurationMs: failureResult.nextLockDurationMs,
+          lastEmailSentAt: failureResult.lastEmailSentAt,
+        });
+
+        if (failureResult.action === "sign_out") {
+          requestForceSignOut({ notice: "vault_attempts_signout" });
+          throw new Error(
+            "Too many incorrect passphrase attempts. You have been signed out for your protection.",
+          );
         }
-        throw new Error("Wrong passphrase");
+
+        if (failureResult.action === "lock_and_sign_out") {
+          const durationLabel = formatLockoutDuration(failureResult.lastLockDurationMs);
+          requestForceSignOut({
+            notice: "vault_locked",
+            lockedUntil: failureResult.lockedUntil,
+            durationMs: failureResult.lastLockDurationMs,
+            lockoutCount: failureResult.lockoutCount,
+            emailSent: failureResult.emailSent,
+          });
+          throw new Error(
+            `Incorrect passphrase. Your vault has been locked for ${durationLabel} and you have been signed out.${
+              failureResult.emailSent ? " A security alert has been emailed to you." : ""
+            }`,
+          );
+        }
+
+        if (failureResult.action === "locked") {
+          const waitLabel = formatLockoutCountdown(failureResult.lockedUntil - Date.now());
+          throw new Error(`Your vault is locked. Try again in ${waitLabel}.`);
+        }
+
+        const rem = failureResult.remainingAttempts;
+        throw new Error(
+          `Wrong passphrase (${rem} attempt${rem === 1 ? "" : "s"} remaining before sign-out).`,
+        );
       }
-      failedUnlockAttempts = 0;
-      unlockLockedUntil = 0;
+
+      await reportVaultUnlockSucceeded(userId, check);
+      clearCachedLocalLockoutStatus(userId);
+      setLockoutStatus(createDefaultLockoutStatus());
       setKey(dataKey);
       setStatus("unlocked");
 
@@ -517,6 +596,12 @@ export function VaultProvider({ userId, children }: { userId: string; children: 
       newPassphrase: string,
       onProgress?: (step: string) => void,
     ): Promise<CryptoKey> => {
+      const latestLockout = await fetchVaultLockoutStatus(userId);
+      setLockoutStatus(latestLockout);
+      if (latestLockout.lockedUntil > Date.now()) {
+        const waitLabel = formatLockoutCountdown(latestLockout.lockedUntil - Date.now());
+        throw new Error(`Your vault is temporarily locked. Try again in ${waitLabel}.`);
+      }
       if (newPassphrase.length < 8) {
         throw new Error("New passphrase must be at least 8 characters.");
       }
@@ -567,8 +652,9 @@ export function VaultProvider({ userId, children }: { userId: string; children: 
       });
 
       clearCryptoCache();
-      failedUnlockAttempts = 0;
-      unlockLockedUntil = 0;
+      await reportVaultUnlockSucceeded(userId, newVerifier).catch(() => {});
+      clearCachedLocalLockoutStatus(userId);
+      setLockoutStatus(createDefaultLockoutStatus());
       setKdfSalt(newKdfSalt);
       setVerifier(newVerifier);
       setVerifierSalt(newVerifierSalt);
@@ -616,6 +702,12 @@ export function VaultProvider({ userId, children }: { userId: string; children: 
 
   const resetVaultAndSetup = useCallback(
     async (newPassphrase: string): Promise<{ key: CryptoKey; recoveryKey: string }> => {
+      const latestLockout = await fetchVaultLockoutStatus(userId);
+      setLockoutStatus(latestLockout);
+      if (latestLockout.lockedUntil > Date.now()) {
+        const waitLabel = formatLockoutCountdown(latestLockout.lockedUntil - Date.now());
+        throw new Error(`Your vault is temporarily locked. Try again in ${waitLabel}.`);
+      }
       if (newPassphrase.length < 8) {
         throw new Error("New passphrase must be at least 8 characters.");
       }
@@ -648,8 +740,9 @@ export function VaultProvider({ userId, children }: { userId: string; children: 
         encrypted_recovery_key: encRecKey,
       });
 
-      failedUnlockAttempts = 0;
-      unlockLockedUntil = 0;
+      await reportVaultUnlockSucceeded(userId, newVerifier).catch(() => {});
+      clearCachedLocalLockoutStatus(userId);
+      setLockoutStatus(createDefaultLockoutStatus());
       setKdfSalt(newKdfSalt);
       setVerifier(newVerifier);
       setVerifierSalt(newVerifierSalt);
@@ -696,6 +789,8 @@ export function VaultProvider({ userId, children }: { userId: string; children: 
       key,
       recoveryKey,
       hasRecoveryKey: Boolean(recoveryEnvelope),
+      lockoutStatus,
+      refreshLockoutStatus,
       setup,
       unlock,
       changePassphrase,
@@ -709,6 +804,8 @@ export function VaultProvider({ userId, children }: { userId: string; children: 
       key,
       recoveryKey,
       recoveryEnvelope,
+      lockoutStatus,
+      refreshLockoutStatus,
       setup,
       unlock,
       changePassphrase,

@@ -1,12 +1,16 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
   ArrowLeft,
   Check,
+  Clock,
   Copy,
   Download,
   KeyRound,
   Lock,
+  LogOut,
+  Mail,
+  ShieldAlert,
   ShieldCheck,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -18,13 +22,34 @@ import {
   verifyAuthedSecurityQuestionsOnServer,
   type SecurityQuestionsRecord,
 } from "@/lib/security-questions";
+import {
+  formatLockoutCountdown,
+  formatLockoutDuration,
+  requestForceSignOut,
+} from "@/lib/vault-lockout";
 
 type GateView =
   "unlock" | "verify_security_questions" | "recover_key" | "reset_vault" | "show_recovery_key";
 
-export function VaultGate({ userId, children }: { userId: string; children: React.ReactNode }) {
-  const { status, setup, unlock, recoverWithRecoveryKey, resetVaultAndSetup, recoveryKey } =
-    useVault();
+export function VaultGate({
+  userId,
+  userEmail,
+  children,
+}: {
+  userId: string;
+  userEmail?: string;
+  children: React.ReactNode;
+}) {
+  const {
+    status,
+    setup,
+    unlock,
+    recoverWithRecoveryKey,
+    resetVaultAndSetup,
+    recoveryKey,
+    lockoutStatus,
+    refreshLockoutStatus,
+  } = useVault();
   const [view, setView] = useState<GateView>("unlock");
   const [passphrase, setPassphrase] = useState("");
   const [confirm, setConfirm] = useState("");
@@ -40,6 +65,73 @@ export function VaultGate({ userId, children }: { userId: string; children: Reac
   const [sqAnswers, setSqAnswers] = useState<[string, string, string]>(["", "", ""]);
   const [sqVerified, setSqVerified] = useState(false);
   const [loadingSq, setLoadingSq] = useState(false);
+
+  // Defense-in-depth Security Questions gate state when signed in after escalation
+  const [gateSqRecord, setGateSqRecord] = useState<SecurityQuestionsRecord | null>(null);
+  const [gateSqLoading, setGateSqLoading] = useState(false);
+  const [gateSqFailedLoad, setGateSqFailedLoad] = useState(false);
+  const [gateSqAnswers, setGateSqAnswers] = useState<[string, string, string]>(["", "", ""]);
+  const [gateSqBusy, setGateSqBusy] = useState(false);
+
+  // Live countdown ticker when temporarily locked
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const expiredRefreshedForRef = useRef<number>(0);
+
+  const lockedUntil = lockoutStatus?.lockedUntil ?? 0;
+  const isTemporarilyLocked = Boolean(status === "locked" && lockoutStatus && lockedUntil > nowMs);
+
+  useEffect(() => {
+    if (status !== "locked" || !lockedUntil || lockedUntil <= Date.now()) return;
+    setNowMs(Date.now());
+    const id = window.setInterval(() => {
+      const next = Date.now();
+      setNowMs(next);
+      if (next >= lockedUntil && expiredRefreshedForRef.current !== lockedUntil) {
+        expiredRefreshedForRef.current = lockedUntil;
+        void refreshLockoutStatus();
+      }
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, [status, lockedUntil, refreshLockoutStatus]);
+
+  useEffect(() => {
+    if (
+      status !== "locked" ||
+      isTemporarilyLocked ||
+      !lockoutStatus?.needsSecurityQuestionsInGate ||
+      gateSqRecord ||
+      gateSqFailedLoad
+    ) {
+      return;
+    }
+    let cancelled = false;
+    setGateSqLoading(true);
+    void fetchUserSecurityQuestions(userId)
+      .then((rec) => {
+        if (cancelled) return;
+        if (rec && Array.isArray(rec.questions) && rec.questions.length === 3) {
+          setGateSqRecord(rec);
+        } else {
+          setGateSqFailedLoad(true);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setGateSqFailedLoad(true);
+      })
+      .finally(() => {
+        if (!cancelled) setGateSqLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    status,
+    isTemporarilyLocked,
+    lockoutStatus?.needsSecurityQuestionsInGate,
+    gateSqRecord,
+    gateSqFailedLoad,
+    userId,
+  ]);
 
   if (status === "loading") {
     return (
@@ -147,6 +239,10 @@ export function VaultGate({ userId, children }: { userId: string; children: Reac
   }
 
   const handleStartForgotPassphrase = async () => {
+    if (isTemporarilyLocked) {
+      toast.error("Your vault is temporarily locked. Please wait until the cooldown ends.");
+      return;
+    }
     setPassphrase("");
     setConfirm("");
     setResetConfirmationText("");
@@ -301,6 +397,169 @@ export function VaultGate({ userId, children }: { userId: string; children: Reac
       setProgressText("");
     }
   };
+
+  const onVerifyGateSecurityQuestions = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!gateSqRecord) return;
+    setGateSqBusy(true);
+    try {
+      const { verified } = await verifyAuthedSecurityQuestionsOnServer(gateSqRecord, gateSqAnswers);
+      if (!verified) {
+        throw new Error("One or more security question answers did not match.");
+      }
+      setGateSqAnswers(["", "", ""]);
+      await refreshLockoutStatus();
+      toast.success("Security questions verified. You may now enter your passphrase.");
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Incorrect security question answers.");
+    } finally {
+      setGateSqBusy(false);
+    }
+  };
+
+  if (status === "locked" && isTemporarilyLocked && lockoutStatus) {
+    const remainingMs = Math.max(0, lockoutStatus.lockedUntil - nowMs);
+    const unlockAtLabel = new Date(lockoutStatus.lockedUntil).toLocaleString([], {
+      dateStyle: "medium",
+      timeStyle: "short",
+    });
+    const currentLockDurationLabel = formatLockoutDuration(
+      lockoutStatus.lastLockDurationMs || lockoutStatus.nextLockDurationMs,
+    );
+    const nextTierLabel = formatLockoutDuration(lockoutStatus.nextLockDurationMs);
+
+    return (
+      <div className="flex min-h-[60vh] items-center justify-center px-4">
+        <div className="paper-card w-full max-w-md space-y-5 p-8">
+          <div className="flex items-center gap-2 text-destructive">
+            <ShieldAlert className="size-5 shrink-0" />
+            <p className="font-hand text-2xl text-sepia">vault temporarily locked</p>
+          </div>
+
+          <h2 className="font-serif text-2xl text-primary">Too many incorrect attempts</h2>
+
+          <p className="text-sm leading-relaxed text-muted-foreground">
+            Your vault has been temporarily locked for{" "}
+            <strong className="text-foreground">{currentLockDurationLabel}</strong> to protect your
+            encrypted entries.
+          </p>
+
+          <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-center space-y-1.5">
+            <div className="flex items-center justify-center gap-1.5 text-xs font-medium uppercase tracking-wider text-destructive">
+              <Clock className="size-3.5" />
+              <span>Lockout Tier #{Math.max(1, lockoutStatus.lockoutCount)}</span>
+            </div>
+            <p className="font-mono text-2xl font-semibold tracking-tight text-primary">
+              {formatLockoutCountdown(remainingMs)}
+            </p>
+            <p className="text-xs text-muted-foreground">Unlocks at {unlockAtLabel}</p>
+          </div>
+
+          <div className="flex items-start gap-2.5 rounded-lg border border-border/80 bg-secondary/35 p-3 text-xs text-muted-foreground">
+            <Mail className="mt-0.5 size-4 shrink-0 text-accent" />
+            <p className="leading-relaxed">
+              {lockoutStatus.lastEmailSentAt > 0
+                ? `A security lockout alert has been sent to ${userEmail || "your account email"}. `
+                : `A security notice was triggered for ${userEmail || "your account email"}. `}
+              Entering an incorrect passphrase again after the timer ends will increase the next
+              lockout to <strong className="text-foreground">{nextTierLabel}</strong>.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={() =>
+              requestForceSignOut({
+                notice: "vault_locked",
+                lockedUntil: lockoutStatus.lockedUntil,
+                durationMs: lockoutStatus.lastLockDurationMs,
+                lockoutCount: lockoutStatus.lockoutCount,
+                emailSent: lockoutStatus.lastEmailSentAt > 0,
+              })
+            }
+            className="flex w-full items-center justify-center gap-2 rounded-md border border-border bg-card px-4 py-2.5 text-sm font-medium text-primary hover:bg-secondary"
+          >
+            <LogOut className="size-4" />
+            <span>Sign out</span>
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (
+    status === "locked" &&
+    !isTemporarilyLocked &&
+    lockoutStatus?.needsSecurityQuestionsInGate &&
+    !gateSqFailedLoad
+  ) {
+    if (gateSqLoading || !gateSqRecord) {
+      return (
+        <div className="flex min-h-[40vh] items-center justify-center">
+          <p className="font-hand text-sepia text-lg">loading security verification...</p>
+        </div>
+      );
+    }
+
+    return (
+      <div className="flex min-h-[60vh] items-center justify-center px-4">
+        <div className="paper-card w-full max-w-md space-y-5 p-8">
+          <div className="flex items-center gap-2 text-accent">
+            <ShieldCheck className="size-5" />
+            <p className="font-hand text-2xl text-sepia">security verification required</p>
+          </div>
+          <h2 className="font-serif text-2xl text-primary">Answer your security questions</h2>
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            Because of previous failed vault passphrase attempts, please verify your 3 security
+            questions before attempting to unlock your vault.
+          </p>
+
+          <form onSubmit={onVerifyGateSecurityQuestions} className="space-y-3.5">
+            {gateSqRecord.questions.map((q, idx) => (
+              <label
+                key={q.id}
+                className="block rounded-lg border border-border/80 bg-secondary/25 p-3 space-y-1.5"
+              >
+                <span className="block text-[11px] font-semibold uppercase tracking-wide text-accent">
+                  Question {idx + 1}
+                </span>
+                <span className="block text-xs font-medium text-foreground">{q.question}</span>
+                <input
+                  type="password"
+                  required
+                  value={gateSqAnswers[idx] ?? ""}
+                  onChange={(e) => {
+                    const next = [...gateSqAnswers] as [string, string, string];
+                    next[idx] = e.target.value;
+                    setGateSqAnswers(next);
+                  }}
+                  placeholder="Your answer"
+                  className="w-full rounded-md border border-input bg-card px-3 py-1.5 text-sm outline-none focus:border-ring focus:ring-1 focus:ring-ring"
+                />
+              </label>
+            ))}
+
+            <button
+              type="submit"
+              disabled={gateSqBusy}
+              className="w-full rounded-md bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-60"
+            >
+              {gateSqBusy ? "Verifying answers..." : "Verify & continue to passphrase"}
+            </button>
+          </form>
+
+          <button
+            type="button"
+            onClick={() => requestForceSignOut({ notice: "vault_attempts_signout" })}
+            className="flex w-full items-center justify-center gap-1.5 text-xs text-muted-foreground hover:text-primary"
+          >
+            <LogOut className="size-3.5" />
+            <span>Sign out instead</span>
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (status === "locked" && view === "verify_security_questions" && sqRecord) {
     return (
@@ -591,6 +850,40 @@ export function VaultGate({ userId, children }: { userId: string; children: Reac
             ? "Choose a passphrase you'll remember. It end-to-end encrypts your diary, notes, folders, gallery, and companion chats."
             : "Enter your passphrase to decrypt your private diary, notes, folders, gallery, and companion chats."}
         </p>
+
+        {status === "locked" && lockoutStatus && lockoutStatus.escalationStage >= 1 && (
+          <div className="flex items-start gap-2.5 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-xs leading-relaxed text-foreground">
+            <ShieldAlert className="mt-0.5 size-4 shrink-0 text-destructive" />
+            <div>
+              <p className="font-semibold text-destructive">Strict lockout warning</p>
+              <p className="mt-0.5 text-muted-foreground">
+                Entering an incorrect passphrase again will immediately sign you out, lock your
+                vault for{" "}
+                <strong className="text-foreground">
+                  {formatLockoutDuration(lockoutStatus.nextLockDurationMs)}
+                </strong>
+                , and email you a security alert.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {status === "locked" &&
+          lockoutStatus &&
+          lockoutStatus.escalationStage === 0 &&
+          lockoutStatus.failedAttempts > 0 && (
+            <div className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs leading-relaxed text-foreground">
+              <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-400" />
+              <p className="text-muted-foreground">
+                <strong className="text-foreground">
+                  {lockoutStatus.remainingAttempts} attempt
+                  {lockoutStatus.remainingAttempts === 1 ? "" : "s"} remaining
+                </strong>{" "}
+                before you are automatically signed out and required to answer your security
+                questions.
+              </p>
+            </div>
+          )}
 
         <div>
           <div className="mb-1 flex items-center justify-between">

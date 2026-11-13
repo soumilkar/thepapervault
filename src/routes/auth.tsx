@@ -10,15 +10,34 @@ import {
 import { ThemeToggleButton } from "@/lib/theme";
 import { markFirstTimeSignup } from "@/components/WelcomeTour";
 import { toast } from "sonner";
-import { ArrowLeft, CheckCircle2, KeyRound, Lock, Mail, ShieldCheck } from "lucide-react";
+import {
+  AlertTriangle,
+  ArrowLeft,
+  CheckCircle2,
+  Clock,
+  KeyRound,
+  Lock,
+  Mail,
+  ShieldAlert,
+  ShieldCheck,
+} from "lucide-react";
 import {
   buildSecurityQuestionsRecord,
+  computeSecurityAnswerVerifiers,
   fetchEmailSecurityChallenge,
   saveSecurityQuestionsToServer,
   type SecurityQuestionsChallenge,
   stashPendingSignupSecurityQuestions,
   verifyEmailSecurityChallengeOnServer,
 } from "@/lib/security-questions";
+import {
+  formatLockoutCountdown,
+  formatLockoutDuration,
+  signinSecurityPreflight,
+  signinSecurityVerify,
+  type ForceSignOutDetail,
+  type SigninPreflightResult,
+} from "@/lib/vault-lockout";
 import {
   getDefaultQuestionSlots,
   type QuestionDraftSlot,
@@ -57,6 +76,55 @@ export const Route = createFileRoute("/auth")({
 
 type AuthMode = "signin" | "signup" | "forgot" | "reset";
 type ForgotStep = "enter_email" | "answer_questions" | "email_sent";
+type SigninStep = "credentials" | "security_questions";
+
+function readInitialAuthNotice(): ForceSignOutDetail | null {
+  if (typeof window === "undefined") return null;
+  let fromStorage: ForceSignOutDetail | null = null;
+  try {
+    const raw = window.sessionStorage.getItem("papervault:auth_notice");
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<ForceSignOutDetail>;
+      if (parsed.notice === "vault_attempts_signout" || parsed.notice === "vault_locked") {
+        fromStorage = {
+          notice: parsed.notice,
+          lockedUntil: typeof parsed.lockedUntil === "number" ? parsed.lockedUntil : undefined,
+          durationMs: typeof parsed.durationMs === "number" ? parsed.durationMs : undefined,
+          lockoutCount: typeof parsed.lockoutCount === "number" ? parsed.lockoutCount : undefined,
+          emailSent: typeof parsed.emailSent === "boolean" ? parsed.emailSent : undefined,
+        };
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  try {
+    const search = new URLSearchParams(window.location.search);
+    const noticeParam = search.get("notice");
+    if (noticeParam === "vault_attempts_signout" || noticeParam === "vault_locked") {
+      const untilNum = Number(search.get("until") || "");
+      const durationNum = Number(search.get("duration") || "");
+      const countNum = Number(search.get("lockoutCount") || "");
+      const emailSentParam = search.get("emailSent");
+      return {
+        notice: noticeParam,
+        lockedUntil:
+          Number.isFinite(untilNum) && untilNum > 0 ? untilNum : fromStorage?.lockedUntil,
+        durationMs:
+          Number.isFinite(durationNum) && durationNum > 0 ? durationNum : fromStorage?.durationMs,
+        lockoutCount:
+          Number.isFinite(countNum) && countNum > 0 ? countNum : fromStorage?.lockoutCount,
+        emailSent:
+          emailSentParam === "1" ? true : emailSentParam === "0" ? false : fromStorage?.emailSent,
+      };
+    }
+  } catch {
+    // ignore
+  }
+
+  return fromStorage;
+}
 
 function AuthPage() {
   const router = useRouter();
@@ -67,6 +135,18 @@ function AuthPage() {
   const [displayName, setDisplayName] = useState("");
   const [loading, setLoading] = useState(false);
 
+  // Forced sign-out / lockout notice state
+  const [authNotice] = useState<ForceSignOutDetail | null>(() => readInitialAuthNotice());
+  const [nowMs, setNowMs] = useState(() => Date.now());
+
+  // Escalated sign-in Security Questions challenge state
+  const [signinStep, setSigninStep] = useState<SigninStep>("credentials");
+  const [signinChallenge, setSigninChallenge] = useState<SecurityQuestionsChallenge | null>(null);
+  const [signinSqAnswers, setSigninSqAnswers] = useState<[string, string, string]>(["", "", ""]);
+  const [signinLockoutInfo, setSigninLockoutInfo] = useState<
+    SigninPreflightResult["lockout"] | null
+  >(null);
+
   // First-time Sign-Up Security Questions state
   const [signupQuestionSlots, setSignupQuestionSlots] = useState<
     [QuestionDraftSlot, QuestionDraftSlot, QuestionDraftSlot]
@@ -76,6 +156,38 @@ function AuthPage() {
   const [forgotStep, setForgotStep] = useState<ForgotStep>("enter_email");
   const [challenge, setChallenge] = useState<SecurityQuestionsChallenge | null>(null);
   const [challengeAnswers, setChallengeAnswers] = useState<[string, string, string]>(["", "", ""]);
+
+  const switchMode = (nextMode: AuthMode) => {
+    setMode(nextMode);
+    setSigninStep("credentials");
+    setSigninChallenge(null);
+    setSigninSqAnswers(["", "", ""]);
+    setSigninLockoutInfo(null);
+  };
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      try {
+        window.sessionStorage.removeItem("papervault:auth_notice");
+      } catch {
+        // ignore
+      }
+    }
+  }, []);
+
+  const activeLockedUntil = Math.max(
+    authNotice?.lockedUntil ?? 0,
+    signinLockoutInfo?.lockedUntil ?? 0,
+  );
+
+  useEffect(() => {
+    if (!activeLockedUntil || activeLockedUntil <= Date.now()) return;
+    setNowMs(Date.now());
+    const id = window.setInterval(() => {
+      setNowMs(Date.now());
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, [activeLockedUntil]);
 
   useEffect(() => {
     if (isPasswordRecoveryUrl()) {
@@ -204,8 +316,46 @@ function AuthPage() {
         }
         toast.success("Welcome! Check your email if confirmation is required.");
       } else {
-        const { error } = await supabase.auth.signInWithPassword({ email, password });
-        if (error) throw error;
+        if (signinStep === "credentials") {
+          const preflight = await signinSecurityPreflight(email, password);
+          if (preflight.requireSecurityQuestions && preflight.challenge) {
+            setSigninChallenge(preflight.challenge);
+            setSigninSqAnswers(["", "", ""]);
+            setSigninLockoutInfo(preflight.lockout);
+            setSigninStep("security_questions");
+            toast.info(
+              "Security verification required: please answer your 3 security questions to sign in.",
+            );
+            return;
+          }
+          if (preflight.session) {
+            const { error: setErr } = await supabase.auth.setSession(preflight.session);
+            if (setErr) throw setErr;
+          } else {
+            const { error } = await supabase.auth.signInWithPassword({ email, password });
+            if (error) throw error;
+          }
+        } else {
+          if (!signinChallenge) {
+            setSigninStep("credentials");
+            throw new Error("Security challenge expired. Please sign in again.");
+          }
+          const { verifiers, combinedVerifier } = await computeSecurityAnswerVerifiers(
+            signinChallenge,
+            signinSqAnswers,
+          );
+          const verifiedRes = await signinSecurityVerify({
+            email,
+            password,
+            verifiers,
+            combined_verifier: combinedVerifier,
+          });
+          if (!verifiedRes.verified || !verifiedRes.session) {
+            throw new Error("One or more security question answers did not match.");
+          }
+          const { error: setErr } = await supabase.auth.setSession(verifiedRes.session);
+          if (setErr) throw setErr;
+        }
       }
       router.navigate({ to: "/app", replace: true });
     } catch (err: unknown) {
@@ -235,13 +385,74 @@ function AuthPage() {
         </p>
         <h1 className="mt-1 text-center font-serif text-3xl text-primary">
           {mode === "signin"
-            ? "Open your journal"
+            ? signinStep === "security_questions"
+              ? "Verify your identity"
+              : "Open your journal"
             : mode === "signup"
               ? "Create your journal"
               : mode === "forgot"
                 ? "Reset your password"
                 : "Set new password"}
         </h1>
+
+        {mode === "signin" && authNotice && (
+          <div
+            className={`mt-5 rounded-lg border p-3.5 text-xs leading-relaxed ${
+              authNotice.notice === "vault_locked"
+                ? "border-destructive/40 bg-destructive/10 text-foreground"
+                : "border-amber-500/40 bg-amber-500/10 text-foreground"
+            }`}
+          >
+            <div className="flex items-start gap-2.5">
+              {authNotice.notice === "vault_locked" ? (
+                <ShieldAlert className="mt-0.5 size-4 shrink-0 text-destructive" />
+              ) : (
+                <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-400" />
+              )}
+              <div className="space-y-1">
+                {authNotice.notice === "vault_locked" ? (
+                  <>
+                    <p className="font-semibold text-destructive">
+                      Signed out & vault locked
+                      {authNotice.durationMs
+                        ? ` for ${formatLockoutDuration(authNotice.durationMs)}`
+                        : ""}
+                    </p>
+                    {authNotice.lockedUntil && authNotice.lockedUntil > nowMs ? (
+                      <p className="flex items-center gap-1.5 text-muted-foreground">
+                        <Clock className="size-3.5 shrink-0 text-destructive" />
+                        <span>
+                          Cooldown remaining:{" "}
+                          <strong className="font-mono text-foreground">
+                            {formatLockoutCountdown(authNotice.lockedUntil - nowMs)}
+                          </strong>
+                        </span>
+                      </p>
+                    ) : authNotice.lockedUntil ? (
+                      <p className="text-muted-foreground">Your vault cooldown period has ended.</p>
+                    ) : null}
+                    <p className="text-muted-foreground">
+                      {authNotice.emailSent
+                        ? "A security alert has been emailed to your account address. "
+                        : ""}
+                      Signing back in requires answering your 3 security questions.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <p className="font-semibold text-foreground">
+                      Signed out after repeated wrong passphrase attempts
+                    </p>
+                    <p className="text-muted-foreground">
+                      For your protection, signing back in will require answering your 3 security
+                      questions. Another wrong passphrase afterward will lock your vault for 1 hour.
+                    </p>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
 
         {mode === "forgot" && forgotStep === "email_sent" ? (
           <div className="mt-6 space-y-4">
@@ -261,7 +472,7 @@ function AuthPage() {
               onClick={() => {
                 setForgotStep("enter_email");
                 setChallenge(null);
-                setMode("signin");
+                switchMode("signin");
               }}
               className="flex w-full items-center justify-center gap-1.5 rounded-md border border-border bg-card px-4 py-2.5 text-sm text-primary hover:bg-secondary"
             >
@@ -334,18 +545,80 @@ function AuthPage() {
               />
             )}
 
-            {mode !== "reset" && !(mode === "forgot" && forgotStep === "answer_questions") && (
-              <Field
-                label="Email"
-                type="email"
-                required
-                value={email}
-                onChange={setEmail}
-                placeholder="you@example.com"
-              />
+            {mode === "signin" && signinStep === "security_questions" && signinChallenge && (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between rounded-lg border border-border bg-secondary/35 px-3 py-2 text-xs">
+                  <span className="flex items-center gap-1.5 font-medium text-primary">
+                    <ShieldCheck className="size-4 text-accent shrink-0" />
+                    <span>Security Questions Required</span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSigninStep("credentials");
+                      setSigninChallenge(null);
+                      setSigninSqAnswers(["", "", ""]);
+                      setSigninLockoutInfo(null);
+                    }}
+                    className="text-accent hover:underline"
+                  >
+                    Back
+                  </button>
+                </div>
+
+                {signinLockoutInfo?.isLocked && signinLockoutInfo.lockedUntil > nowMs && (
+                  <div className="flex items-start gap-2 rounded-lg border border-destructive/35 bg-destructive/10 p-2.5 text-xs text-muted-foreground">
+                    <Clock className="mt-0.5 size-3.5 shrink-0 text-destructive" />
+                    <span>
+                      Note: Your vault remains locked for{" "}
+                      <strong className="font-mono text-foreground">
+                        {formatLockoutCountdown(signinLockoutInfo.lockedUntil - nowMs)}
+                      </strong>{" "}
+                      even after signing in.
+                    </span>
+                  </div>
+                )}
+
+                {signinChallenge.questions.map((q, idx) => (
+                  <label
+                    key={q.id}
+                    className="block rounded-lg border border-border/80 bg-secondary/20 p-3 space-y-1.5"
+                  >
+                    <span className="block text-[11px] font-semibold uppercase tracking-wide text-accent">
+                      Question {idx + 1}
+                    </span>
+                    <span className="block text-xs font-medium text-primary">{q.question}</span>
+                    <input
+                      type="password"
+                      required
+                      value={signinSqAnswers[idx] ?? ""}
+                      onChange={(e) => {
+                        const next = [...signinSqAnswers] as [string, string, string];
+                        next[idx] = e.target.value;
+                        setSigninSqAnswers(next);
+                      }}
+                      placeholder="Your answer"
+                      className="w-full rounded-md border border-input bg-card px-3 py-1.5 text-sm text-foreground outline-none focus:border-ring focus:ring-1 focus:ring-ring"
+                    />
+                  </label>
+                ))}
+              </div>
             )}
 
-            {(mode === "signin" || mode === "signup") && (
+            {mode !== "reset" &&
+              !(mode === "forgot" && forgotStep === "answer_questions") &&
+              !(mode === "signin" && signinStep === "security_questions") && (
+                <Field
+                  label="Email"
+                  type="email"
+                  required
+                  value={email}
+                  onChange={setEmail}
+                  placeholder="you@example.com"
+                />
+              )}
+
+            {((mode === "signin" && signinStep === "credentials") || mode === "signup") && (
               <div>
                 <div className="mb-1 flex items-center justify-between">
                   <span className="text-sm font-medium text-foreground/80">Password</span>
@@ -355,7 +628,7 @@ function AuthPage() {
                       onClick={() => {
                         setForgotStep("enter_email");
                         setChallenge(null);
-                        setMode("forgot");
+                        switchMode("forgot");
                       }}
                       className="text-xs text-accent hover:text-primary hover:underline"
                     >
@@ -429,7 +702,9 @@ function AuthPage() {
                 {loading
                   ? "Please wait..."
                   : mode === "signin"
-                    ? "Sign in"
+                    ? signinStep === "security_questions"
+                      ? "Verify answers & sign in"
+                      : "Sign in"
                     : mode === "signup"
                       ? "Create account"
                       : mode === "forgot"
@@ -450,7 +725,7 @@ function AuthPage() {
               onClick={() => {
                 setForgotStep("enter_email");
                 setChallenge(null);
-                setMode("signin");
+                switchMode("signin");
               }}
               className="text-primary underline"
             >
@@ -464,7 +739,7 @@ function AuthPage() {
             {mode === "signin" ? "No account yet?" : "Already have one?"}{" "}
             <button
               type="button"
-              onClick={() => setMode(mode === "signin" ? "signup" : "signin")}
+              onClick={() => switchMode(mode === "signin" ? "signup" : "signin")}
               className="text-primary underline"
             >
               {mode === "signin" ? "Create one" : "Sign in"}
