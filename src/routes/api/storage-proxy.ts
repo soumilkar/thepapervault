@@ -930,79 +930,231 @@ export const Route = createFileRoute("/api/storage-proxy")({
             return hex;
           };
 
+          const extractSqRecordTs = (rec: Record<string, unknown> | null | undefined): number => {
+            if (!rec || typeof rec !== "object") return -1;
+            const raw =
+              typeof rec.updated_at === "string"
+                ? rec.updated_at
+                : typeof rec.deleted_at === "string"
+                  ? rec.deleted_at
+                  : typeof rec.created_at === "string"
+                    ? rec.created_at
+                    : "";
+            const ts = raw ? Date.parse(raw) : 0;
+            return Number.isNaN(ts) ? 0 : ts;
+          };
+
+          const collectSecurityQuestionsCandidatesAtPath = async (
+            objectPath: string,
+            userScopedClient?: ReturnType<typeof getUserScopedClient> | null,
+          ): Promise<Record<string, unknown>[]> => {
+            const candidates: Record<string, unknown>[] = [];
+            const mem = securityQuestionsMemStore.get(objectPath);
+            if (mem) candidates.push(mem);
+
+            const tasks: Promise<void>[] = [];
+
+            if (b2Config) {
+              for (const bucketName of ["media", "gallery"] as const) {
+                tasks.push(
+                  b2GetStorageObject(b2Config, bucketName, objectPath)
+                    .then((b2Obj) => {
+                      if (!b2Obj) return;
+                      const text = new TextDecoder().decode(b2Obj.buffer);
+                      const parsed = JSON.parse(text) as Record<string, unknown>;
+                      if (parsed && typeof parsed === "object") {
+                        candidates.push(parsed);
+                      }
+                    })
+                    .catch(() => {}),
+                );
+              }
+            }
+
+            const clients = userScopedClient ? [adminClient, userScopedClient] : [adminClient];
+            for (const client of clients) {
+              for (const bucketName of ["gallery", "media"] as const) {
+                tasks.push(
+                  client.storage
+                    .from(bucketName)
+                    .download(objectPath)
+                    .then(async ({ data: sbBlob, error: sbErr }) => {
+                      if (sbErr || !sbBlob) return;
+                      const text = await sbBlob.text();
+                      const parsed = JSON.parse(text) as Record<string, unknown>;
+                      if (parsed && typeof parsed === "object") {
+                        candidates.push(parsed);
+                      }
+                    })
+                    .catch(() => {}),
+                );
+              }
+            }
+
+            await Promise.allSettled(tasks);
+            return candidates;
+          };
+
           const readSecurityQuestionsBlob = async (
             objectPath: string,
             userScopedClient?: ReturnType<typeof getUserScopedClient> | null,
           ): Promise<Record<string, unknown> | null> => {
-            const mem = securityQuestionsMemStore.get(objectPath);
-            if (mem) return mem;
+            const candidates = await collectSecurityQuestionsCandidatesAtPath(
+              objectPath,
+              userScopedClient,
+            );
+            let best: Record<string, unknown> | null = null;
+            let bestTs = -1;
+            for (const cand of candidates) {
+              const ts = extractSqRecordTs(cand);
+              if (!best || ts > bestTs) {
+                best = cand;
+                bestTs = ts;
+              }
+            }
+            if (best) {
+              securityQuestionsMemStore.set(objectPath, best);
+            }
+            return best;
+          };
 
-            if (b2Config) {
-              try {
-                const b2Obj = await b2GetStorageObject(b2Config, "media", objectPath);
-                if (b2Obj) {
-                  const text = new TextDecoder().decode(b2Obj.buffer);
-                  const parsed = JSON.parse(text) as Record<string, unknown>;
-                  securityQuestionsMemStore.set(objectPath, parsed);
-                  return parsed;
+          const readLatestSecurityQuestionsRecord = async (params: {
+            userId?: string;
+            emailHash?: string;
+            userScopedClient?: ReturnType<typeof getUserScopedClient> | null;
+          }): Promise<{ record: Record<string, unknown> | null; isDeleted: boolean }> => {
+            const reads: Promise<Record<string, unknown>[]>[] = [];
+            if (params.userId) {
+              reads.push(
+                collectSecurityQuestionsCandidatesAtPath(
+                  `${params.userId}/security-questions.bin`,
+                  params.userScopedClient,
+                ),
+              );
+            }
+            if (params.emailHash) {
+              reads.push(
+                collectSecurityQuestionsCandidatesAtPath(
+                  `_security_questions/${params.emailHash}.bin`,
+                  params.userScopedClient,
+                ),
+              );
+            }
+
+            const groups = await Promise.all(reads);
+            let best: Record<string, unknown> | null = null;
+            let bestTs = -1;
+
+            for (const list of groups) {
+              for (const cand of list) {
+                if (
+                  params.userId &&
+                  typeof cand.user_id === "string" &&
+                  cand.user_id &&
+                  cand.user_id !== params.userId
+                ) {
+                  continue;
                 }
-              } catch {
-                // fallback
+                const ts = extractSqRecordTs(cand);
+                if (!best || ts > bestTs) {
+                  best = cand;
+                  bestTs = ts;
+                }
               }
             }
-            const clients = userScopedClient ? [adminClient, userScopedClient] : [adminClient];
-            for (const client of clients) {
-              for (const bucketName of ["gallery", "media"] as const) {
-                try {
-                  const { data: sbBlob, error: sbErr } = await client.storage
-                    .from(bucketName)
-                    .download(objectPath);
-                  if (!sbErr && sbBlob) {
-                    const text = await sbBlob.text();
-                    const parsed = JSON.parse(text) as Record<string, unknown>;
-                    securityQuestionsMemStore.set(objectPath, parsed);
-                    return parsed;
-                  }
-                } catch {
-                  // ignore
-                }
-              }
+
+            if (!best) {
+              return { record: null, isDeleted: false };
             }
-            return null;
+
+            if (params.userId) {
+              securityQuestionsMemStore.set(`${params.userId}/security-questions.bin`, best);
+            }
+            if (params.emailHash) {
+              securityQuestionsMemStore.set(`_security_questions/${params.emailHash}.bin`, best);
+            }
+
+            if (best.deleted === true) {
+              return { record: null, isDeleted: true };
+            }
+            return { record: best, isDeleted: false };
           };
 
           const writeSecurityQuestionsBlob = async (
             objectPath: string,
             payloadObj: Record<string, unknown>,
+            userScopedClient?: ReturnType<typeof getUserScopedClient> | null,
           ): Promise<void> => {
             securityQuestionsMemStore.set(objectPath, payloadObj);
             const serialized = JSON.stringify(payloadObj);
             const bytes = new TextEncoder().encode(serialized);
             const blob = new Blob([bytes], { type: "application/octet-stream" });
 
+            const writes: Promise<void>[] = [];
+
             if (b2Config) {
-              try {
-                await b2PutStorageObject(
+              writes.push(
+                b2PutStorageObject(
                   b2Config,
                   "media",
                   objectPath,
                   bytes,
                   "application/octet-stream",
-                );
-              } catch {
-                // fallback
-              }
+                ).catch(() => {}),
+              );
+              // Keep any legacy gallery copy in sync if present
+              writes.push(
+                b2HeadStorageObject(b2Config, "gallery", objectPath)
+                  .then((exists) => {
+                    if (exists) {
+                      return b2PutStorageObject(
+                        b2Config,
+                        "gallery",
+                        objectPath,
+                        bytes,
+                        "application/octet-stream",
+                      );
+                    }
+                  })
+                  .catch(() => {}),
+              );
             }
+
+            const clients = userScopedClient ? [adminClient, userScopedClient] : [adminClient];
             for (const bucketName of ["gallery", "media"] as const) {
-              try {
-                await adminClient.storage.from(bucketName).upload(objectPath, blob, {
-                  contentType: "application/octet-stream",
-                  upsert: true,
-                });
-              } catch {
-                // ignore
-              }
+              writes.push(
+                (async () => {
+                  for (const client of clients) {
+                    try {
+                      const { error: upErr } = await client.storage
+                        .from(bucketName)
+                        .upload(objectPath, blob, {
+                          contentType: "application/octet-stream",
+                          cacheControl: "0",
+                          upsert: true,
+                        });
+                      if (!upErr) return;
+                      await client.storage
+                        .from(bucketName)
+                        .remove([objectPath])
+                        .catch(() => {});
+                      const { error: retryErr } = await client.storage
+                        .from(bucketName)
+                        .upload(objectPath, blob, {
+                          contentType: "application/octet-stream",
+                          cacheControl: "0",
+                          upsert: true,
+                        });
+                      if (!retryErr) return;
+                    } catch {
+                      // try next client
+                    }
+                  }
+                })(),
+              );
             }
+
+            await Promise.allSettled(writes);
           };
 
           const constantTimeEq = (a: string, b: string): boolean => {
@@ -1064,7 +1216,7 @@ export const Route = createFileRoute("/api/storage-proxy")({
                 headers: JSON_SECURITY_HEADERS,
               });
             }
-            const record = await readSecurityQuestionsBlob(`_security_questions/${emailHash}.bin`);
+            const { record } = await readLatestSecurityQuestionsRecord({ emailHash });
             const questions = Array.isArray(record?.questions)
               ? (record.questions as { id?: string; question?: string; salt?: string }[])
               : [];
@@ -1118,7 +1270,7 @@ export const Route = createFileRoute("/api/storage-proxy")({
                 { status: 429, headers: JSON_SECURITY_HEADERS },
               );
             }
-            const record = await readSecurityQuestionsBlob(`_security_questions/${emailHash}.bin`);
+            const { record } = await readLatestSecurityQuestionsRecord({ emailHash });
             const allMatch = verifyRecordAgainstSubmitted(
               record,
               body.verifiers,
@@ -1211,16 +1363,11 @@ export const Route = createFileRoute("/api/storage-proxy")({
               userClient,
             });
 
-            let sqRecord = await readSecurityQuestionsBlob(
-              `${authedUser.id}/security-questions.bin`,
-              userClient,
-            );
-            if (!sqRecord) {
-              sqRecord = await readSecurityQuestionsBlob(
-                `_security_questions/${emailHash}.bin`,
-                userClient,
-              );
-            }
+            const { record: sqRecord } = await readLatestSecurityQuestionsRecord({
+              userId: authedUser.id,
+              emailHash,
+              userScopedClient: userClient,
+            });
 
             const rawQuestions = Array.isArray(sqRecord?.questions)
               ? (sqRecord.questions as {
@@ -1341,16 +1488,11 @@ export const Route = createFileRoute("/api/storage-proxy")({
 
             const authedUser = authData.user;
             const userClient = getUserScopedClient(request, authData.session.access_token);
-            let sqRecord = await readSecurityQuestionsBlob(
-              `${authedUser.id}/security-questions.bin`,
-              userClient,
-            );
-            if (!sqRecord) {
-              sqRecord = await readSecurityQuestionsBlob(
-                `_security_questions/${emailHash}.bin`,
-                userClient,
-              );
-            }
+            const { record: sqRecord } = await readLatestSecurityQuestionsRecord({
+              userId: authedUser.id,
+              emailHash,
+              userScopedClient: userClient,
+            });
 
             const allMatch = verifyRecordAgainstSubmitted(
               sqRecord,
@@ -1447,19 +1589,12 @@ export const Route = createFileRoute("/api/storage-proxy")({
               combined_verifier?: string;
             };
             const userClient = bearerToken ? getUserScopedClient(request, bearerToken) : null;
-            let record = await readSecurityQuestionsBlob(
-              `${user.id}/security-questions.bin`,
-              userClient,
-            );
-            if (!record && user.email) {
-              const emailHash = await hashEmailIdentifier(user.email);
-              if (emailHash) {
-                record = await readSecurityQuestionsBlob(
-                  `_security_questions/${emailHash}.bin`,
-                  userClient,
-                );
-              }
-            }
+            const emailHashForVerify = user.email ? await hashEmailIdentifier(user.email) : "";
+            const { record } = await readLatestSecurityQuestionsRecord({
+              userId: user.id,
+              emailHash: emailHashForVerify,
+              userScopedClient: userClient,
+            });
             const allMatch = verifyRecordAgainstSubmitted(
               record,
               body.verifiers,
@@ -1509,7 +1644,7 @@ export const Route = createFileRoute("/api/storage-proxy")({
           if (action === "vault-lockout-status") {
             const emailHash = user.email ? await hashEmailIdentifier(user.email) : "";
             const userClient = bearerToken ? getUserScopedClient(request, bearerToken) : null;
-            const [lockoutState, sqUserBlob, sqEmailBlob] = await Promise.all([
+            const [lockoutState, latestSq] = await Promise.all([
               readVaultLockoutState({
                 userId: user.id,
                 emailHash,
@@ -1518,12 +1653,13 @@ export const Route = createFileRoute("/api/storage-proxy")({
                 adminClient,
                 userClient,
               }),
-              readSecurityQuestionsBlob(`${user.id}/security-questions.bin`, userClient),
-              emailHash
-                ? readSecurityQuestionsBlob(`_security_questions/${emailHash}.bin`, userClient)
-                : Promise.resolve(null),
+              readLatestSecurityQuestionsRecord({
+                userId: user.id,
+                emailHash,
+                userScopedClient: userClient,
+              }),
             ]);
-            const sqRecord = sqUserBlob || sqEmailBlob;
+            const sqRecord = latestSq.record;
             const hasSq = Boolean(
               sqRecord &&
               Array.isArray(sqRecord.questions) &&
@@ -1547,7 +1683,7 @@ export const Route = createFileRoute("/api/storage-proxy")({
             const emailHash = user.email ? await hashEmailIdentifier(user.email) : "";
             const userClient = bearerToken ? getUserScopedClient(request, bearerToken) : null;
 
-            const [state, sqUserBlob, sqEmailBlob] = await Promise.all([
+            const [state, latestSq] = await Promise.all([
               readVaultLockoutState({
                 userId: user.id,
                 emailHash,
@@ -1556,12 +1692,13 @@ export const Route = createFileRoute("/api/storage-proxy")({
                 adminClient,
                 userClient,
               }),
-              readSecurityQuestionsBlob(`${user.id}/security-questions.bin`, userClient),
-              emailHash
-                ? readSecurityQuestionsBlob(`_security_questions/${emailHash}.bin`, userClient)
-                : Promise.resolve(null),
+              readLatestSecurityQuestionsRecord({
+                userId: user.id,
+                emailHash,
+                userScopedClient: userClient,
+              }),
             ]);
-            const sqRecord = sqUserBlob || sqEmailBlob;
+            const sqRecord = latestSq.record;
             const hasSq = Boolean(
               sqRecord &&
               Array.isArray(sqRecord.questions) &&
@@ -1818,6 +1955,10 @@ export const Route = createFileRoute("/api/storage-proxy")({
             const nowMs = Date.now();
             const sixMonthsMs = 180 * 24 * 60 * 60 * 1000;
             const emailHash = user.email ? await hashEmailIdentifier(user.email) : "";
+            const userClient = bearerToken ? getUserScopedClient(request, bearerToken) : null;
+            if (bearerToken) {
+              verifiedTokenCache.delete(bearerToken);
+            }
             const createdAtIso = new Date(nowMs).toISOString();
             const expiresAtIso = new Date(nowMs + sixMonthsMs).toISOString();
             const sanitizedPayload: Record<string, unknown> = {
@@ -1830,6 +1971,7 @@ export const Route = createFileRoute("/api/storage-proxy")({
               combined_verifier: payload.combined_verifier,
               questions_recovery_envelope: null,
               created_at: createdAtIso,
+              updated_at: createdAtIso,
               expires_at: expiresAtIso,
             };
 
@@ -1846,15 +1988,21 @@ export const Route = createFileRoute("/api/storage-proxy")({
               verifier_salt: payload.verifier_salt,
               combined_verifier: "",
               created_at: createdAtIso,
+              updated_at: createdAtIso,
               expires_at: expiresAtIso,
             };
 
             await Promise.all([
-              writeSecurityQuestionsBlob(`${user.id}/security-questions.bin`, sanitizedPayload),
+              writeSecurityQuestionsBlob(
+                `${user.id}/security-questions.bin`,
+                sanitizedPayload,
+                userClient,
+              ),
               emailHash
                 ? writeSecurityQuestionsBlob(
                     `_security_questions/${emailHash}.bin`,
                     sanitizedPayload,
+                    userClient,
                   )
                 : Promise.resolve(),
               updateLiveSupabaseAuthUserMetadata(request, bearerToken, {
@@ -1867,6 +2015,7 @@ export const Route = createFileRoute("/api/storage-proxy")({
               JSON.stringify({
                 ok: true,
                 created_at: sanitizedPayload.created_at,
+                updated_at: sanitizedPayload.updated_at,
                 expires_at: sanitizedPayload.expires_at,
               }),
               {
@@ -1876,30 +2025,64 @@ export const Route = createFileRoute("/api/storage-proxy")({
             );
           }
 
-          if (action === "security-questions-get") {
-            let record = await readSecurityQuestionsBlob(`${user.id}/security-questions.bin`);
-            if (!record && user.email) {
-              const emailHash = await hashEmailIdentifier(user.email);
-              if (emailHash) {
-                const byEmail = await readSecurityQuestionsBlob(
-                  `_security_questions/${emailHash}.bin`,
-                );
-                if (byEmail && (!byEmail.user_id || byEmail.user_id === user.id)) {
-                  record = byEmail;
-                }
-              }
+          if (action === "security-questions-delete") {
+            const nowIso = new Date().toISOString();
+            const emailHash = user.email ? await hashEmailIdentifier(user.email) : "";
+            const userClient = bearerToken ? getUserScopedClient(request, bearerToken) : null;
+            if (bearerToken) {
+              verifiedTokenCache.delete(bearerToken);
             }
-            if (!record) {
-              const metaSq = (user.user_metadata as Record<string, unknown> | undefined)
-                ?.papervault_sq_v1;
-              if (metaSq && typeof metaSq === "object") {
-                record = metaSq as Record<string, unknown>;
-              } else {
-                const liveUser = await fetchLiveSupabaseAuthUser(request, bearerToken);
-                const liveMetaSq = liveUser?.user_metadata?.papervault_sq_v1;
-                if (liveMetaSq && typeof liveMetaSq === "object") {
-                  record = liveMetaSq as Record<string, unknown>;
-                }
+
+            const tombstonePayload: Record<string, unknown> = {
+              version: 1,
+              user_id: user.id,
+              email_hash: emailHash,
+              deleted: true,
+              deleted_at: nowIso,
+              updated_at: nowIso,
+            };
+
+            await Promise.all([
+              writeSecurityQuestionsBlob(
+                `${user.id}/security-questions.bin`,
+                tombstonePayload,
+                userClient,
+              ),
+              emailHash
+                ? writeSecurityQuestionsBlob(
+                    `_security_questions/${emailHash}.bin`,
+                    tombstonePayload,
+                    userClient,
+                  )
+                : Promise.resolve(),
+              updateLiveSupabaseAuthUserMetadata(request, bearerToken, {
+                papervault_sq_onboarded: true,
+                papervault_sq_v1: null,
+              }),
+            ]);
+
+            return new Response(JSON.stringify({ ok: true, deleted_at: nowIso }), {
+              status: 200,
+              headers: JSON_SECURITY_HEADERS,
+            });
+          }
+
+          if (action === "security-questions-get") {
+            const emailHash = user.email ? await hashEmailIdentifier(user.email) : "";
+            const userClient = bearerToken ? getUserScopedClient(request, bearerToken) : null;
+            const { record: resolvedRecord, isDeleted } = await readLatestSecurityQuestionsRecord({
+              userId: user.id,
+              emailHash,
+              userScopedClient: userClient,
+            });
+            let record = resolvedRecord;
+            if (!record && !isDeleted) {
+              const liveUser = await fetchLiveSupabaseAuthUser(request, bearerToken);
+              const liveMetaSq =
+                liveUser?.user_metadata?.papervault_sq_v1 ??
+                (user.user_metadata as Record<string, unknown> | undefined)?.papervault_sq_v1;
+              if (liveMetaSq && typeof liveMetaSq === "object") {
+                record = liveMetaSq as Record<string, unknown>;
               }
             }
             const rawQuestions = Array.isArray(record?.questions)
@@ -1925,6 +2108,9 @@ export const Route = createFileRoute("/api/storage-proxy")({
               verifier_salt: String(record.verifier_salt || ""),
               combined_verifier: "",
               created_at: String(record.created_at || new Date().toISOString()),
+              updated_at: String(
+                record.updated_at || record.created_at || new Date().toISOString(),
+              ),
               expires_at: String(record.expires_at || new Date().toISOString()),
             };
             return new Response(JSON.stringify({ configured: true, record: safeClientRecord }), {

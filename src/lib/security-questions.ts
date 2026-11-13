@@ -140,6 +140,7 @@ export type SecurityQuestionsRecord = {
   combined_verifier: string;
   questions_recovery_envelope?: QuestionsRecoveryEnvelope | null;
   created_at: string;
+  updated_at?: string;
   expires_at: string;
 };
 
@@ -152,6 +153,8 @@ export type SecurityQuestionsChallenge = {
   expires_at: string;
   questions_recovery_envelope?: QuestionsRecoveryEnvelope | null;
 };
+
+export const SECURITY_QUESTIONS_UPDATED_EVENT = "papervault:security-questions-updated";
 
 const LOCAL_SQ_KEY_PREFIX = "papervault:security_questions:v1:";
 const ONBOARDED_SQ_KEY_PREFIX = "papervault:sq_onboarded:";
@@ -287,6 +290,7 @@ export async function buildSecurityQuestionsRecord(params: {
   }
 
   const now = Date.now();
+  const nowIso = new Date(now).toISOString();
   return {
     version: 1,
     user_id: params.userId,
@@ -295,7 +299,8 @@ export async function buildSecurityQuestionsRecord(params: {
     verifier_salt: verifierSalt,
     combined_verifier: combinedVerifier,
     questions_recovery_envelope: questionsRecoveryEnvelope,
-    created_at: new Date(now).toISOString(),
+    created_at: nowIso,
+    updated_at: nowIso,
     expires_at: new Date(now + SIX_MONTHS_MS).toISOString(),
   };
 }
@@ -412,6 +417,15 @@ export function cacheSecurityQuestions(userId: string, record: SecurityQuestions
   }
 }
 
+export function clearCachedSecurityQuestions(userId: string): void {
+  if (typeof window === "undefined" || !userId) return;
+  try {
+    window.localStorage.removeItem(`${LOCAL_SQ_KEY_PREFIX}${userId}`);
+  } catch {
+    // ignore
+  }
+}
+
 export function stashPendingSignupSecurityQuestions(record: SecurityQuestionsRecord): void {
   if (typeof window === "undefined") return;
   try {
@@ -461,7 +475,13 @@ function parseMetadataSecurityRecord(
     combined_salt: rec.combined_salt,
     verifier_salt: rec.verifier_salt,
     combined_verifier: "",
-    created_at: typeof rec.created_at === "string" ? rec.created_at : new Date().toISOString(),
+    created_at: typeof rec.created_at === "string" ? rec.created_at : new Date(0).toISOString(),
+    updated_at:
+      typeof rec.updated_at === "string"
+        ? rec.updated_at
+        : typeof rec.created_at === "string"
+          ? rec.created_at
+          : new Date(0).toISOString(),
     expires_at:
       typeof rec.expires_at === "string"
         ? rec.expires_at
@@ -469,40 +489,64 @@ function parseMetadataSecurityRecord(
   };
 }
 
+function getRecordTimestampMs(
+  rec: { updated_at?: string; created_at?: string } | null | undefined,
+): number {
+  if (!rec) return 0;
+  return Date.parse(rec.updated_at || rec.created_at || "") || 0;
+}
+
+function notifySecurityQuestionsUpdated(userId: string): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent(SECURITY_QUESTIONS_UPDATED_EVENT, { detail: { userId } }));
+}
+
 export async function saveSecurityQuestionsToServer(
   userId: string,
   record: SecurityQuestionsRecord,
 ): Promise<void> {
+  const nowIso = new Date().toISOString();
   const payload: SecurityQuestionsRecord = {
     ...record,
     user_id: userId,
+    updated_at: record.updated_at || record.created_at || nowIso,
   };
   cacheSecurityQuestions(userId, payload);
   markSecurityQuestionsOnboarded(userId);
 
-  if (typeof navigator !== "undefined" && !navigator.onLine) return;
-
-  // Also persist directly in Supabase Auth user_metadata so it survives logout/login on every device
-  void supabase.auth
-    .updateUser({
-      data: {
-        papervault_sq_onboarded: true,
-        papervault_sq_v1: {
-          version: 1,
-          user_id: userId,
-          questions: payload.questions,
-          combined_salt: payload.combined_salt,
-          verifier_salt: payload.verifier_salt,
-          combined_verifier: payload.combined_verifier,
-          created_at: payload.created_at,
-          expires_at: payload.expires_at,
-        },
-      },
-    })
-    .catch(() => {});
+  if (typeof navigator !== "undefined" && !navigator.onLine) {
+    notifySecurityQuestionsUpdated(userId);
+    return;
+  }
 
   const token = await getFreshAccessToken();
-  if (!token) return;
+  if (!token) {
+    await supabase.auth
+      .updateUser({
+        data: {
+          papervault_sq_onboarded: true,
+          papervault_sq_v1: {
+            version: 1,
+            user_id: userId,
+            questions: payload.questions.map((q) => ({
+              id: q.id,
+              question: q.question,
+              salt: q.salt,
+              verifier: "",
+            })),
+            combined_salt: payload.combined_salt,
+            verifier_salt: payload.verifier_salt,
+            combined_verifier: "",
+            created_at: payload.created_at,
+            updated_at: payload.updated_at,
+            expires_at: payload.expires_at,
+          },
+        },
+      })
+      .catch(() => {});
+    notifySecurityQuestionsUpdated(userId);
+    return;
+  }
 
   const res = await fetch(`/api/storage-proxy?action=security-questions-save`, {
     method: "POST",
@@ -518,15 +562,50 @@ export async function saveSecurityQuestionsToServer(
   }
   const saved = (await res.json().catch(() => ({}))) as {
     created_at?: string;
+    updated_at?: string;
     expires_at?: string;
   };
   if (saved.created_at && saved.expires_at) {
     cacheSecurityQuestions(userId, {
       ...payload,
       created_at: saved.created_at,
+      updated_at: saved.updated_at || saved.created_at,
       expires_at: saved.expires_at,
     });
   }
+
+  // Refresh the client session so user_metadata in local auth storage matches the server update immediately
+  await supabase.auth.refreshSession().catch(() => {});
+  notifySecurityQuestionsUpdated(userId);
+}
+
+export async function deleteSecurityQuestionsFromServer(userId: string): Promise<void> {
+  clearCachedSecurityQuestions(userId);
+
+  if (typeof navigator !== "undefined" && !navigator.onLine) {
+    notifySecurityQuestionsUpdated(userId);
+    return;
+  }
+
+  const token = await getFreshAccessToken();
+  if (token) {
+    const res = await fetch(`/api/storage-proxy?action=security-questions-delete`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({}),
+    });
+    if (!res.ok) {
+      const err = (await res.json().catch(() => ({}))) as { error?: string };
+      throw new Error(err.error || "Failed to remove old security questions");
+    }
+    await supabase.auth.refreshSession().catch(() => {});
+  }
+
+  clearCachedSecurityQuestions(userId);
+  notifySecurityQuestionsUpdated(userId);
 }
 
 export async function fetchUserSecurityQuestions(
@@ -534,17 +613,22 @@ export async function fetchUserSecurityQuestions(
 ): Promise<SecurityQuestionsRecord | null> {
   let local = getCachedSecurityQuestions(userId);
 
-  // Check active Supabase session user_metadata (available in 0ms right after login)
+  // Check active Supabase session user_metadata only if it is newer than local cache
   try {
     const { data: sessionData } = await supabase.auth.getSession();
     const meta = sessionData.session?.user?.user_metadata as Record<string, unknown> | undefined;
     if (meta?.papervault_sq_onboarded) {
       markSecurityQuestionsOnboarded(userId);
     }
-    const metaRecord = parseMetadataSecurityRecord(userId, meta?.papervault_sq_v1);
-    if (metaRecord) {
-      cacheSecurityQuestions(userId, metaRecord);
-      local = metaRecord;
+    if (meta && "papervault_sq_v1" in meta && meta.papervault_sq_v1 === null) {
+      // Metadata explicitly indicates removal when online server check isn't reached yet
+      local = null;
+    } else {
+      const metaRecord = parseMetadataSecurityRecord(userId, meta?.papervault_sq_v1);
+      if (metaRecord && getRecordTimestampMs(metaRecord) > getRecordTimestampMs(local)) {
+        cacheSecurityQuestions(userId, metaRecord);
+        local = metaRecord;
+      }
     }
   } catch {
     // ignore
@@ -563,6 +647,7 @@ export async function fetchUserSecurityQuestions(
           "Content-Type": "application/json",
         },
         body: JSON.stringify({}),
+        cache: "no-store",
       });
       if (res.ok) {
         const data = (await res.json()) as {
@@ -572,6 +657,10 @@ export async function fetchUserSecurityQuestions(
         if (data?.configured && data.record && Array.isArray(data.record.questions)) {
           cacheSecurityQuestions(userId, data.record);
           return data.record;
+        }
+        if (data?.configured === false) {
+          clearCachedSecurityQuestions(userId);
+          return null;
         }
       }
     }

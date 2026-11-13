@@ -11,6 +11,7 @@ import {
   ShieldAlert,
   ShieldCheck,
   Sparkles,
+  Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -23,6 +24,7 @@ import { getFreshAccessToken } from "@/lib/offline-supabase";
 import { useVault } from "@/lib/vault";
 import {
   buildSecurityQuestionsRecord,
+  deleteSecurityQuestionsFromServer,
   fetchUserSecurityQuestions,
   getDaysUntilDepreciation,
   isSecurityQuestionsExpired,
@@ -214,7 +216,7 @@ export function SecuritySettingsDialog({
   userId?: string;
   userEmail?: string;
   initialTab?: SecurityTab;
-  onSecurityQuestionsUpdated?: (record: SecurityQuestionsRecord) => void;
+  onSecurityQuestionsUpdated?: (record: SecurityQuestionsRecord | null) => void;
 }) {
   const { status, recoveryKey, changePassphrase, regenerateRecoveryKey } = useVault();
   const [tab, setTab] = useState<SecurityTab>(initialTab);
@@ -247,6 +249,8 @@ export function SecuritySettingsDialog({
     [QuestionDraftSlot, QuestionDraftSlot, QuestionDraftSlot]
   >(() => getDefaultQuestionSlots());
   const [sqBusy, setSqBusy] = useState(false);
+  const [confirmingRemoveSq, setConfirmingRemoveSq] = useState(false);
+  const [removingSq, setRemovingSq] = useState(false);
 
   // Recovery Key state
   const [copiedRecovery, setCopiedRecovery] = useState(false);
@@ -257,6 +261,7 @@ export function SecuritySettingsDialog({
   useEffect(() => {
     if (open) {
       setTab(initialTab);
+      setConfirmingRemoveSq(false);
       const localVerified = isSecurityPanelEmailVerified(userId);
       setEmailVerified(localVerified);
       if (!localVerified && userId) {
@@ -387,9 +392,10 @@ export function SecuritySettingsDialog({
   };
 
   useEffect(() => {
-    if (!open || !userId || !emailVerified) return;
+    if (!open || !userId || !emailVerified || tab !== "questions") return;
     let cancelled = false;
     setSqLoading(true);
+    setConfirmingRemoveSq(false);
     fetchUserSecurityQuestions(userId)
       .then((rec) => {
         if (cancelled) return;
@@ -409,7 +415,7 @@ export function SecuritySettingsDialog({
     return () => {
       cancelled = true;
     };
-  }, [open, userId, emailVerified]);
+  }, [open, userId, emailVerified, tab]);
 
   const handleAccountPasswordSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -494,14 +500,38 @@ export function SecuritySettingsDialog({
         selectedQuestions: questionSlots,
       });
       await saveSecurityQuestionsToServer(userId, record);
-      setSqRecord(record);
+      const refreshed = await fetchUserSecurityQuestions(userId).catch(() => null);
+      const nextRecord = refreshed ?? record;
+      setSqRecord(nextRecord);
+      setConfirmingRemoveSq(false);
       setEditingQuestions(false);
-      onSecurityQuestionsUpdated?.(record);
+      onSecurityQuestionsUpdated?.(nextRecord);
       toast.success("Security questions encrypted & updated for the next 6 months!");
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Could not save security questions");
     } finally {
       setSqBusy(false);
+    }
+  };
+
+  const handleRemoveSecurityQuestions = async () => {
+    if (!userId) {
+      toast.error("You must be signed in to remove security questions.");
+      return;
+    }
+    setRemovingSq(true);
+    try {
+      await deleteSecurityQuestionsFromServer(userId);
+      setSqRecord(null);
+      setConfirmingRemoveSq(false);
+      setQuestionSlots(getDefaultQuestionSlots());
+      setEditingQuestions(true);
+      onSecurityQuestionsUpdated?.(null);
+      toast.success("Old security questions removed. Choose 3 new security questions below.");
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Could not remove security questions");
+    } finally {
+      setRemovingSq(false);
     }
   };
 
@@ -941,18 +971,56 @@ export function SecuritySettingsDialog({
                       ))}
                     </div>
 
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const currentSet = new Set(sqRecord.questions.map((q) => q.id));
-                        setQuestionSlots(getDefaultQuestionSlots(currentSet));
-                        setEditingQuestions(true);
-                      }}
-                      className="flex w-full items-center justify-center gap-1.5 rounded-md bg-primary px-4 py-2 text-xs font-medium text-primary-foreground hover:opacity-90"
-                    >
-                      <RefreshCw className="size-3.5" />
-                      <span>Rotate / Choose New Security Questions</span>
-                    </button>
+                    <div className="space-y-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const currentSet = new Set(sqRecord.questions.map((q) => q.id));
+                          setQuestionSlots(getDefaultQuestionSlots(currentSet));
+                          setConfirmingRemoveSq(false);
+                          setEditingQuestions(true);
+                        }}
+                        className="flex w-full items-center justify-center gap-1.5 rounded-md bg-primary px-4 py-2 text-xs font-medium text-primary-foreground hover:opacity-90"
+                      >
+                        <RefreshCw className="size-3.5" />
+                        <span>Rotate / Choose New Security Questions</span>
+                      </button>
+
+                      {!confirmingRemoveSq ? (
+                        <button
+                          type="button"
+                          onClick={() => setConfirmingRemoveSq(true)}
+                          className="flex w-full items-center justify-center gap-1.5 rounded-md border border-destructive/40 bg-destructive/5 px-4 py-2 text-xs font-medium text-destructive transition hover:bg-destructive/10"
+                        >
+                          <Trash2 className="size-3.5" />
+                          <span>Remove Old Security Questions</span>
+                        </button>
+                      ) : (
+                        <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-3 space-y-2">
+                          <p className="text-xs leading-relaxed text-foreground">
+                            Remove your current 3 security questions so you can add new ones?
+                          </p>
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              disabled={removingSq}
+                              onClick={() => setConfirmingRemoveSq(false)}
+                              className="flex-1 rounded-md border border-border bg-card px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-primary disabled:opacity-60"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              disabled={removingSq}
+                              onClick={() => void handleRemoveSecurityQuestions()}
+                              className="flex-1 rounded-md bg-destructive px-3 py-1.5 text-xs font-medium text-destructive-foreground hover:opacity-90 disabled:opacity-60"
+                            >
+                              {removingSq ? "Removing..." : "Confirm Remove"}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 ) : (
                   <form onSubmit={handleSaveSecurityQuestions} className="space-y-3.5">

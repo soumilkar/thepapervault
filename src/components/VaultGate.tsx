@@ -19,6 +19,7 @@ import { runVaultMigration } from "@/lib/vault-migrate";
 import { markFirstTimeSignup } from "@/components/WelcomeTour";
 import {
   fetchUserSecurityQuestions,
+  SECURITY_QUESTIONS_UPDATED_EVENT,
   verifyAuthedSecurityQuestionsOnServer,
   type SecurityQuestionsRecord,
 } from "@/lib/security-questions";
@@ -93,6 +94,32 @@ export function VaultGate({
     }, 1000);
     return () => window.clearInterval(id);
   }, [status, lockedUntil, refreshLockoutStatus]);
+
+  useEffect(() => {
+    if (status !== "locked" || !lockoutStatus?.needsSecurityQuestionsInGate) {
+      setGateSqRecord(null);
+      setGateSqFailedLoad(false);
+      setGateSqAnswers(["", "", ""]);
+    }
+  }, [status, lockoutStatus?.needsSecurityQuestionsInGate]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onSqUpdated = (e: Event) => {
+      const detail = (e as CustomEvent<{ userId?: string }>).detail;
+      if (detail?.userId && detail.userId !== userId) return;
+      setGateSqRecord(null);
+      setGateSqFailedLoad(false);
+      setGateSqAnswers(["", "", ""]);
+      setSqRecord(null);
+      setSqVerified(false);
+      setSqAnswers(["", "", ""]);
+    };
+    window.addEventListener(SECURITY_QUESTIONS_UPDATED_EVENT, onSqUpdated);
+    return () => {
+      window.removeEventListener(SECURITY_QUESTIONS_UPDATED_EVENT, onSqUpdated);
+    };
+  }, [userId]);
 
   useEffect(() => {
     if (
