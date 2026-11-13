@@ -195,7 +195,13 @@ function RootComponent() {
     let docTimer: number | null = null;
     const elemTimers = new WeakMap<Element, number>();
 
+    const isMobileOrTablet = () =>
+      window.innerWidth < 1024 ||
+      (typeof window.matchMedia === "function" &&
+        window.matchMedia("(hover: none), (pointer: coarse)").matches);
+
     const handleScroll = (e: Event) => {
+      if (isMobileOrTablet()) return;
       const target = e.target;
       if (
         !target ||

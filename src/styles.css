@@ -294,6 +294,32 @@
     }
   }
 
+  /* Completely hide all scrollbars on mobile and tablets */
+  @media (max-width: 1023.98px), (hover: none), (pointer: coarse) {
+    html,
+    body,
+    * {
+      scrollbar-width: none !important;
+      -ms-overflow-style: none !important;
+    }
+
+    ::-webkit-scrollbar,
+    *::-webkit-scrollbar {
+      display: none !important;
+      width: 0 !important;
+      height: 0 !important;
+      background: transparent !important;
+    }
+
+    ::-webkit-scrollbar-thumb,
+    *::-webkit-scrollbar-thumb,
+    html[data-scrolling="true"]::-webkit-scrollbar-thumb,
+    body[data-scrolling="true"]::-webkit-scrollbar-thumb,
+    [data-scrolling="true"]::-webkit-scrollbar-thumb {
+      background-color: transparent !important;
+    }
+  }
+
   html,
   body {
     background-color: var(--color-background);
